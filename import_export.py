@@ -57,6 +57,7 @@ def handle_pull(input_hash):
     if strings_data is not None and len(strings_data) > 0:
         response = requests.post("https://plugin.ankicollab.com/pullChanges", json=strings_data)
         webresult = response.json()
+        counter = 0
         for entry in webresult:
             subscription = json.loads(entry)
             deck = deck_initializer.from_json(subscription['deck'])
@@ -71,13 +72,15 @@ def handle_pull(input_hash):
                 for field in protected_field['fields']:
                     field_name = field['name']
                     config.add_field(model_name, field_name)
-            
+            counter += len(deck.notes)
             deck.save_to_collection(aqt.mw.col, import_config=config)
             if input_hash:
                 for hash, details in strings_data.items():
                     if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
                         details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
                 mw.addonManager.writeConfig(__name__, strings_data)
+        
+        aqt.utils.tooltip(str(counter) + " Notes updated (AnkiCollab).", parent=mw)
         # i would like to show a tooltip of the total amount of new cards (simply var += len(deck.notes)), but I cannot print it since its in a different thread. maybe somebody reading this knows a cool way (signal? MetaObject.invoke?)
 
 def get_hash_from_local_id(deck_id):
@@ -143,10 +146,14 @@ def handle_export(did, email) -> str:
         
         if res["status"] == 1:
             return res["message"]
+    elif response.status_code == 413:
+        msg_box = QMessageBox()
+        msg_box.setText("Deck is too big! Please reach out via Discord")
+        msg_box.exec()        
     else:
         print(response.text)
         msg_box = QMessageBox()
-        msg_box.setText("Unexpected Server response.")
+        msg_box.setText("Unexpected Server response: " + str(response.status_code))
         msg_box.exec()
     
     return ""

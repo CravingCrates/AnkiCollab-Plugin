@@ -62,11 +62,11 @@ gui_hooks.add_cards_did_add_note.append(make_new_card)
 
 def delete_selected_rows(table):
     selected_rows = [index.row() for index in table.selectedIndexes()]
-    for row in reversed(selected_rows):
-        table.removeRow(row)
     for row in selected_rows:
         if table.item(row, 0) is not None:
             strings_data.pop(table.item(row, 0).text())
+    for row in reversed(selected_rows):
+        table.removeRow(row)
     mw.addonManager.writeConfig(__name__, strings_data)
 
 def add_to_table(line_edit, table):
@@ -83,9 +83,6 @@ def add_to_table(line_edit, table):
         table.setItem(num_rows, 0, QTableWidgetItem(string))
         handle_pull(string)
 
-def save_table_changes(item):
-    mw.addonManager.writeConfig(__name__, strings_data)
-    
 def on_edit_list():
     dialog = QDialog(mw)
     dialog.setWindowTitle('Edit list')
@@ -96,12 +93,13 @@ def on_edit_list():
     if strings_data is not None:
         table.setRowCount(len(strings_data))
     table.setColumnCount(1)
-    table.itemChanged.connect(lambda item: save_table_changes(item))
     table.setHorizontalHeaderLabels(['Deckname'])
     
     if strings_data is not None:
-        for row, (string, data) in enumerate(strings_data.items()):
-            table.setItem(row, 0, QTableWidgetItem(string))
+        for row, (string, data) in enumerate(strings_data.items()):        
+            item = QTableWidgetItem(string)
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row, 0, item)
     
     layout.addWidget(table)
     
