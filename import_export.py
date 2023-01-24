@@ -81,7 +81,6 @@ def handle_pull(input_hash):
                 mw.addonManager.writeConfig(__name__, strings_data)
         
         aqt.utils.tooltip(str(counter) + " Notes updated (AnkiCollab).", parent=mw)
-        # i would like to show a tooltip of the total amount of new cards (simply var += len(deck.notes)), but I cannot print it since its in a different thread. maybe somebody reading this knows a cool way (signal? MetaObject.invoke?)
 
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)
@@ -90,6 +89,36 @@ def get_hash_from_local_id(deck_id):
             if details["deckId"] == deck_id:
                 return hash
     return
+
+def suggest_subdeck(did):
+    deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
+    if deck.is_dynamic:
+        return
+    
+    disambiguate_note_model_uuids(aqt.mw.col)
+    deck = deck_initializer.from_collection(aqt.mw.col, deck.name)
+    note_sorter = NoteSorter(ConfigSettings.get_instance())
+    deck.notes = note_sorter.sort_notes(deck.notes)
+    #spaghetti name fix
+    deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
+    
+    deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
+    
+    parent = mw.col.decks.parents(did)
+    if parent:
+        deckHash = get_hash_from_local_id(parent[0]["id"])
+    else:
+        deckHash = get_hash_from_local_id(aqt.mw.col.decks.get(did, default=False)["id"])
+    deckPath =  mw.col.decks.name(did)
+    
+    if deckHash is None:
+        aqt.utils.tooltip("Config Error: No local deck id")
+    else:
+        data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res}
+        response = requests.post("https://plugin.ankicollab.com/submitCard", json=data)
+        if response:
+            aqt.utils.tooltip(response.text)
+
 
 def prep_suggest_card(note: anki.notes.Note):
         decks = mw.col.decks
@@ -105,7 +134,9 @@ def prep_suggest_card(note: anki.notes.Note):
         
         # TODO Remove compatibility shims for Anki 2.1.46 and lower.
         by_name = decks.by_name if hasattr(decks, 'by_name') else decks.byName
-        deckHash = get_hash_from_local_id(by_name(decks.current()['name'].split("::")[0])['id'])
+        s = decks.current()['name']
+        deckNameFixed = s.split("::")[0] if "::" in s else s
+        deckHash = get_hash_from_local_id(by_name(deckNameFixed)['id'])
         
         deckPath =  decks.current()['name']
         if deckHash is None:

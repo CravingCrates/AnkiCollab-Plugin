@@ -1,5 +1,7 @@
 
 from aqt import gui_hooks, mw
+from aqt.browser import SidebarTreeView, SidebarItem, SidebarItemType
+from anki.decks import DeckId
 from aqt.qt import *
 import json
 import configparser
@@ -23,6 +25,21 @@ if strings_data is not None:
     mw.addonManager.writeConfig(__name__, strings_data)
     strings_data = mw.addonManager.getConfig(__name__)
 
+
+def add_sidebar_context_menu(
+    sidebar: SidebarTreeView, menu: QMenu, item: SidebarItem, index: QModelIndex
+) -> None:
+    menu.addSeparator()
+    menu.addAction("Suggest on AnkiCollab", lambda: context_handler(item))
+
+def context_handler(item: SidebarItem):
+    if item.item_type == SidebarItemType.DECK:
+        selected_deck = DeckId(item.id)
+        suggest_subdeck(selected_deck)
+    else:
+        aqt.utils.tooltip("Please select a deck")
+
+gui_hooks.browser_sidebar_will_show_context_menu.append(add_sidebar_context_menu)
 
 def init_editor_card(buttons, editor):
     if isinstance(editor.parentWindow, aqt.addcards.AddCards): # avoid duplicates in the "Add" Window
