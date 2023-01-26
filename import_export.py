@@ -90,6 +90,24 @@ def get_hash_from_local_id(deck_id):
                 return hash
     return
 
+def submit_deck(deck, did):    
+    deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
+    parent = mw.col.decks.parents(did)
+    if parent:
+        deckHash = get_hash_from_local_id(parent[0]["id"])
+    else:
+        deckHash = get_hash_from_local_id(did)
+    deckPath =  mw.col.decks.name(did)
+    
+    if deckHash is None:
+        aqt.utils.tooltip("Config Error: No local deck id")
+    else:
+        data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res}
+        response = requests.post("https://plugin.ankicollab.com/submitCard", json=data)
+        if response:
+            print(response)
+            aqt.utils.tooltip(response.text, parent=mw)
+
 def suggest_subdeck(did):
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
     if deck.is_dynamic:
@@ -101,51 +119,27 @@ def suggest_subdeck(did):
     deck.notes = note_sorter.sort_notes(deck.notes)
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
-    
-    deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    
-    parent = mw.col.decks.parents(did)
-    if parent:
-        deckHash = get_hash_from_local_id(parent[0]["id"])
-    else:
-        deckHash = get_hash_from_local_id(aqt.mw.col.decks.get(did, default=False)["id"])
-    deckPath =  mw.col.decks.name(did)
-    
-    if deckHash is None:
-        aqt.utils.tooltip("Config Error: No local deck id")
-    else:
-        data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res}
-        response = requests.post("https://plugin.ankicollab.com/submitCard", json=data)
-        if response:
-            aqt.utils.tooltip(response.text)
+    submit_deck(deck, did)
 
 
 def prep_suggest_card(note: anki.notes.Note):
-        decks = mw.col.decks
-        deck = Deck(NoteModelFileProvider, decks.current())
-        deck.collection = mw.col
-        deck._update_fields()
-        deck.metadata = None
-        deck._load_metadata()
+    # i'm in the ghetto, help
+    cards = note.cards()
+    did = mw.col.decks.current()["id"] # lets hope this won't not be overwritten
+    if cards:
+        did = cards[0].current_deck_id()
+        
+    deck = Deck(NoteModelFileProvider, mw.col.decks.get(did))
+    deck.collection = mw.col
+    deck._update_fields()
+    deck.metadata = None
+    deck._load_metadata()
 
-        newNote = Note.from_collection(mw.col, note.id, deck.metadata.models);
-        deck.notes = [newNote]
-        deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-        
-        # TODO Remove compatibility shims for Anki 2.1.46 and lower.
-        by_name = decks.by_name if hasattr(decks, 'by_name') else decks.byName
-        s = decks.current()['name']
-        deckNameFixed = s.split("::")[0] if "::" in s else s
-        deckHash = get_hash_from_local_id(by_name(deckNameFixed)['id'])
-        
-        deckPath =  decks.current()['name']
-        if deckHash is None:
-            aqt.utils.tooltip("Config Error: No local deck id")
-        else:
-            data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res}
-            response = requests.post("https://plugin.ankicollab.com/submitCard", json=data)
-            if response:
-                aqt.utils.tooltip(response.text)
+    newNote = Note.from_collection(mw.col, note.id, deck.metadata.models);
+    deck.notes = [newNote]
+    #spaghetti name fix
+    deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
+    submit_deck(deck, did)
 
 def make_new_card(note: anki.notes.Note):
     if mw.form.invokeAfterAddCheckbox.isChecked():
