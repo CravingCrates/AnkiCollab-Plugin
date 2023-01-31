@@ -90,7 +90,7 @@ def get_hash_from_local_id(deck_id):
                 return hash
     return
 
-def submit_deck(deck, did):    
+def submit_deck(deck, did, rationale):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     parent = mw.col.decks.parents(did)
     if parent:
@@ -102,7 +102,7 @@ def submit_deck(deck, did):
     if deckHash is None:
         aqt.utils.tooltip("Config Error: No local deck id")
     else:
-        data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res}
+        data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res, "rationale": rationale}
         response = requests.post("https://plugin.ankicollab.com/submitCard", json=data)
         if response:
             print(response)
@@ -119,10 +119,9 @@ def suggest_subdeck(did):
     deck.notes = note_sorter.sort_notes(deck.notes)
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
-    submit_deck(deck, did)
-
-
-def prep_suggest_card(note: anki.notes.Note):
+    submit_deck(deck, did, 9) # 9: Bulk Suggestion rationale
+    
+def prep_suggest_card(note: anki.notes.Note, rationale):
     # i'm in the ghetto, help
     cards = note.cards()
     did = mw.col.decks.current()["id"] # lets hope this won't not be overwritten
@@ -139,11 +138,26 @@ def prep_suggest_card(note: anki.notes.Note):
     deck.notes = [newNote]
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
-    submit_deck(deck, did)
+    
+    if rationale is None: 
+        options = [
+            "None", "Deck Creation", "Updated content", "New content", "Content error",
+            "Spelling/Grammar", "New card", "Updated Tags",
+            "New Tags", "Bulk Suggestion", "Other"
+        ]
+
+        selected, ok = QInputDialog.getItem(None, "Rationale", "Select a rationale:", options, 0, False)
+
+        if ok:
+            rationale = options.index(selected)
+        else:
+            aqt.utils.tooltip("Aborting due to lack of rationale", parent=mw)
+            return
+    submit_deck(deck, did, rationale)
 
 def make_new_card(note: anki.notes.Note):
     if mw.form.invokeAfterAddCheckbox.isChecked():
-        prep_suggest_card(note)
+        prep_suggest_card(note, 6) # 6 New card to add rationale
         
 def handle_export(did, email) -> str:
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))

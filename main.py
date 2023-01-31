@@ -48,7 +48,7 @@ def init_editor_card(buttons, editor):
     b = editor.addButton(
         None,
         "AnkiCollab",
-        lambda editor: prep_suggest_card(editor.note),
+        lambda editor: prep_suggest_card(editor.note, None),
         tip="Suggest Changes (AnkiCollab)",
     )
 
