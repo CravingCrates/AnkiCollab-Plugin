@@ -80,7 +80,8 @@ def handle_pull(input_hash):
                         details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
                 mw.addonManager.writeConfig(__name__, strings_data)
         
-        aqt.utils.tooltip(str(counter) + " Notes updated (AnkiCollab).", parent=mw)
+        infot = str(counter) + " Notes updated (AnkiCollab)."
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
 
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)

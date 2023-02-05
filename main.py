@@ -110,7 +110,8 @@ def on_edit_list():
     if strings_data is not None:
         table.setRowCount(len(strings_data))
     table.setColumnCount(1)
-    table.setHorizontalHeaderLabels(['Deckname'])
+    table.setHorizontalHeaderLabels(['Deckname'])    
+    table.setColumnWidth(0, table.width() * 0.7)
     
     if strings_data is not None:
         for row, (string, data) in enumerate(strings_data.items()):        
