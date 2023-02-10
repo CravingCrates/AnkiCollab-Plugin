@@ -56,32 +56,36 @@ def handle_pull(input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None and len(strings_data) > 0:
         response = requests.post("https://plugin.ankicollab.com/pullChanges", json=strings_data)
-        webresult = response.json()
-        counter = 0
-        for entry in webresult:
-            subscription = json.loads(entry)
-            deck = deck_initializer.from_json(subscription['deck'])
-            config = ImportConfig(
-                    add_tag_to_cards= [],
-                    use_notes=True,
-                    use_media=False,
-                    ignore_deck_movement= True
-                )
-            for protected_field in subscription['protected_fields']:
-                model_name = protected_field['name']
-                for field in protected_field['fields']:
-                    field_name = field['name']
-                    config.add_field(model_name, field_name)
-            counter += len(deck.notes)
-            deck.save_to_collection(aqt.mw.col, import_config=config)
-            if input_hash:
-                for hash, details in strings_data.items():
-                    if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
-                        details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
-                mw.addonManager.writeConfig(__name__, strings_data)
-        
-        infot = str(counter) + " Notes updated (AnkiCollab)."
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
+        if response.status_code == 200:
+            webresult = response.json()
+            counter = 0
+            for entry in webresult:
+                subscription = json.loads(entry)
+                deck = deck_initializer.from_json(subscription['deck'])
+                config = ImportConfig(
+                        add_tag_to_cards= [],
+                        use_notes=True,
+                        use_media=False,
+                        ignore_deck_movement= True
+                    )
+                for protected_field in subscription['protected_fields']:
+                    model_name = protected_field['name']
+                    for field in protected_field['fields']:
+                        field_name = field['name']
+                        config.add_field(model_name, field_name)
+                counter += len(deck.notes)
+                deck.save_to_collection(aqt.mw.col, import_config=config)
+                if input_hash:
+                    for hash, details in strings_data.items():
+                        if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
+                            details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
+                    mw.addonManager.writeConfig(__name__, strings_data)
+            
+            infot = str(counter) + " Notes updated (AnkiCollab)."
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
+        else:            
+            infot = "A Server Error occurred. Please notify us!"
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
 
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)
