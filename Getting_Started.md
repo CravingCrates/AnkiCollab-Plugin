@@ -73,4 +73,4 @@ By publishing a deck, you will be the sole maintainer and it will be associated 
 - You are now ready to go into the AnkiCollab world and improve decks! 👍
 
 # Credits
-This guide was written by Andrew, and we would like to extend our sincere thanks for his contributions. With his expertise and commitment, this tutorial has become a valuable resource for all those who read it. Thank you, Andrew, for your hard work and dedication
+This guide was written by Andre, and we would like to extend our sincere thanks for his contributions. With his expertise and commitment, this tutorial has become a valuable resource for all those who read it. Thank you, Andrew, for your hard work and dedication
