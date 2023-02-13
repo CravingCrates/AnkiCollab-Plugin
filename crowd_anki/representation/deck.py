@@ -111,13 +111,20 @@ class Deck(JsonSerializableAnkiDict):
 
         return file_provider.get_files()
 
+    # This is a little gadget i wrote, because in ankicollab the note_models are in the deck that use it, not in the topmost deck. So in the "OG" Deck we aggregate all notetypes
+    def _add_models_from_children(self, json_dict, note_models_list):
+        note_models_list += [NoteModel.from_json(model) for model in json_dict.get("note_models", [])]
+        for child in json_dict.get("children", []):
+            self._add_models_from_children(child, note_models_list)
+
     def _load_metadata_from_json(self, json_dict):
         if not self.metadata:
             self.metadata = DeckMetadata({}, {})
 
-        note_models_list = [NoteModel.from_json(model) for model in json_dict.get("note_models", [])]
+        note_models_list = []
+        self._add_models_from_children(json_dict, note_models_list)
         new_models = utils.merge_dicts(self.metadata.models,
-                                       {model.get_uuid(): model for model in note_models_list})
+                                    {model.get_uuid(): model for model in note_models_list})
 
         deck_config_list = [DeckConfig.from_json(deck_config) for deck_config in
                             json_dict.get("deck_configurations", [])]

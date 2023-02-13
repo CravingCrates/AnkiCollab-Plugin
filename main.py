@@ -7,6 +7,7 @@ import json
 import configparser
 from datetime import datetime
 import requests
+import webbrowser
 
 from .thread import run_function_in_thread
 from .import_export import *
@@ -19,6 +20,16 @@ collab_menu.addAction(edit_list_action)
 
 push_deck_action = QAction('Publish new Deck', mw)
 collab_menu.addAction(push_deck_action)
+
+pull_changes_action = QAction('Check for Updates', mw)
+collab_menu.addAction(pull_changes_action)
+
+website_action = QAction('Website', mw)
+collab_menu.addAction(website_action)
+
+donation_action = QAction('Donate', mw)
+collab_menu.addAction(donation_action)
+
 
 strings_data = mw.addonManager.getConfig(__name__)
 if strings_data is not None:
@@ -68,7 +79,7 @@ def request_update():
         mw.addonManager.writeConfig(__name__, strings_data)
             
 def onProfileLoaded():
-    aqt.utils.tooltip("Fetching new data from AnkiCollab...")
+    aqt.utils.tooltip("Fetching data from AnkiCollab...")
     run_function_in_thread(request_update)
 
 gui_hooks.profile_did_open.append(onProfileLoaded)
@@ -121,14 +132,14 @@ def on_edit_list():
     
     layout.addWidget(table)
     
-    delete_button = QPushButton('Delete')
+    delete_button = QPushButton('Delete Subscription')
     delete_button.clicked.connect(lambda: delete_selected_rows(table))
     
     line_edit = QLineEdit()
-    add_button = QPushButton('Add')
+    add_button = QPushButton('Add Subscription')
     add_button.clicked.connect(lambda: add_to_table(line_edit, table))
     
-    disclaimer = QLabel("This may take a long time and Anki may seem unresponsive. Just be patient and do not close it.")
+    disclaimer = QLabel("The download may take a long time and Anki may seem unresponsive. Just be patient and do not close it.")
     
     add_layout = QHBoxLayout()
     add_layout.addWidget(line_edit)
@@ -157,8 +168,8 @@ def on_push_deck_action(self):
     email_label = QLabel("Email: (Make sure to create an account on the website first)")
     email_field = QLineEdit()
     
-    publish_button = QPushButton("Publish")    
-    disclaimer = QLabel("This may take a long time and Anki may seem unresponsive. Just be patient and do not close it.")
+    publish_button = QPushButton("Publish Deck")    
+    disclaimer = QLabel("Processing can take a few minutes on the website. Be patient, please.")
     
     def on_publish_button_clicked():
         selected_deck_name = deck_combo_box.currentText()
@@ -189,4 +200,14 @@ def on_push_deck_action(self):
 
     dialog.exec()
 
+
+def open_donation_site():
+    webbrowser.open('https://ko-fi.com/ankicollab')
+    
+def open_website():
+    webbrowser.open('https://www.ankicollab.com/')
+    
 push_deck_action.triggered.connect(on_push_deck_action)
+pull_changes_action.triggered.connect(onProfileLoaded)
+donation_action.triggered.connect(open_donation_site)
+website_action.triggered.connect(open_website)
