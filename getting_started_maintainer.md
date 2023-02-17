@@ -2,26 +2,6 @@
 
 *description*
 
-## Installing the Addon
-
-Before you start, make sure you are using the latest version of Anki found [here](https://apps.ankiweb.net/). If you've never used Anki before, there is a great [Getting Started](https://docs.ankiweb.net/getting-started.html) guide in the Anki manual.
-
-Every add-on in the Anki ecosystem is installed using an **add-on code**. AnkiCollab's code is `1957538407`.
-
-If you ever lose this code, you can always find it on [AnkiCollab add-on page](https://ankiweb.net/shared/info/1957538407). Scroll down a bit and you'll find it in a little box.
-
-![A blue arrow pointing to AnkiCollab's addon code on the Anki Addon page.](https://i.imgur.com/oTlWGHF.png)
-
-Inside of Anki, go Tools → Add-ons → Get Add-ons. From here, a box should pop up where you can enter the code.
-
-![Anki's install add-on window.](https://i.imgur.com/7X6fULn.png)
-
-Click OK and relaunch Anki to finish the installation.
-
-You can confirm that the installation was successful by checking the toolbar for AnkiCollab.
-
-![A blue arrow point at the toolbar of Anki showing an AnkiCollab tab.](https://i.imgur.com/IMHBCXx.png)
-
 ## Publishing a Deck
 
 By publishing a deck, you will be the sole maintainer and it will be associated with your email address.
