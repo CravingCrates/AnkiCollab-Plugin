@@ -1,6 +1,6 @@
-<h1 style="text-align: center;">AnkiCollab-Plugin</h1>
+<h1 align="center">AnkiCollab-Plugin</h1>
 
-<p style="text-align: center;"> 📚<i> A free, collaborative, deck creation platform for <a href="https://apps.ankiweb.net/">Anki</a>.</i> 📝</p>
+<p align="center"> 📚<i> A free, collaborative, deck creation platform for <a href="https://apps.ankiweb.net/">Anki</a>.</i> 📝</p>
 
 ## Introduction
 
