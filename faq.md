@@ -1,5 +1,10 @@
 # Frequently Asked Questions
 
+- [Frequently Asked Questions](#frequently-asked-questions)
+  * [General](#general)
+  * [Subscriber](#subscriber)
+  * [Maintainer](#maintainer)
+
 ## General
 
 <details close>

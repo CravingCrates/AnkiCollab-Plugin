@@ -1,5 +1,13 @@
 # Getting Started - Maintainer
 
+- [Getting Started - Maintainer](#getting-started---maintainer)
+  * [Publishing a Deck](#publishing-a-deck)
+    + [Signing Up for AnkiCollab](#signing-up-for-ankicollab)
+    + [Adding a Deck to AnkiCollab](#adding-a-deck-to-ankicollab)
+  * [Handling Suggestions](#handling-suggestions)
+    + [Content Changes — New Cards, Tags, Formatting, etc.](#content-changes---new-cards--tags--formatting--etc)
+  * [Credits](#credits)
+
 Maintainers are the one's keeping AnkiCollab decks healthy, accurate, and updated. When subscribers suggest changes, maintainers approve or reject them.
 
 ## Publishing a Deck

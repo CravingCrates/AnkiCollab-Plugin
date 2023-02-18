@@ -1,5 +1,13 @@
 # Getting Started - Subscriber
 
+- [Getting Started - Subscriber](#getting-started---subscriber)
+  * [Getting a Key](#getting-a-key)
+  * [Adding the Key to Anki](#adding-the-key-to-anki)
+  * [Suggesting Changes](#suggesting-changes)
+    + [Card Content and Tags](#card-content-and-tags)
+    + [New Cards](#new-cards)
+
+
 If you don't want to maintain or publish decks, you **do not** need an account. All you need is the deck's **subscription key**.
 
 The key will be a series of words separated by dashes. Example:
@@ -46,7 +54,7 @@ If you see the title of the deck pop up, you are ready to start reviewing! 👍
 
 ## Suggesting Changes
 
-### Editing Card Content and Tags
+### Card Content and Tags
 
 Not every Anki deck is perfect — typos, content errors, strange formatting, or other issues might crop up. There might even be some errors in this very document that will get changed in the future!
 
@@ -58,7 +66,7 @@ Let's say you subscribe to a deck and find this card:
 
 ![An Anki card in the editor. The front reads "Biggest Animal in the World" and the back reads "Elephant."](https://i.imgur.com/wbKuRPj.png)
 
-Sure, elephants are big, but you *know* the biggest animal in the world is *actually* a Blue Whale.
+Sure, elephants are big, but you *know* that the biggest animal in the world is *actually* a Blue Whale.
 
 After double-checking that you're correct, change the word Elephant to Blue Whale in the same manner you would edit a normal card.
 
@@ -80,7 +88,7 @@ From the maintainer's point of view, they'll see a window like this:
 
 This page tells the maintainer what exactly was changed and why.
 
-From here, they can approve or reject your suggestion. If approved, everyone subscribed to this deck will receive an update with your change.
+From here, they can approve or reject your suggestion. If approved, everyone who subscribed to this deck will receive an update with your change.
 
 You are now ready to go into the AnkiCollab world and improve decks! 👍
 
