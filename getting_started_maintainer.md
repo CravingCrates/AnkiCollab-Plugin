@@ -1,12 +1,12 @@
 # Getting Started - Maintainer
 
 - [Getting Started - Maintainer](#getting-started---maintainer)
-  * [Publishing a Deck](#publishing-a-deck)
-    + [Signing Up for AnkiCollab](#signing-up-for-ankicollab)
-    + [Adding a Deck to AnkiCollab](#adding-a-deck-to-ankicollab)
-  * [Handling Suggestions](#handling-suggestions)
-    + [Content Changes — New Cards, Tags, Formatting, etc.](#content-changes---new-cards--tags--formatting--etc)
-  * [Credits](#credits)
+  - [Publishing a Deck](#publishing-a-deck)
+    - [Signing Up for AnkiCollab](#signing-up-for-ankicollab)
+    - [Adding a Deck to AnkiCollab](#adding-a-deck-to-ankicollab)
+  - [Handling Suggestions](#handling-suggestions)
+    - [Content Changes](#content-changes)
+  - [Credits](#credits)
 
 Maintainers are the one's keeping AnkiCollab decks healthy, accurate, and updated. When subscribers suggest changes, maintainers approve or reject them.
 
@@ -44,7 +44,7 @@ Congratulations! The deck is ready to be shared. All they need is the subscripti
 
 As a maintainer, you are responsible for approving or denying changes. There are multiple types, and we'll cover them all here.
 
-### Content Changes — New Cards, Tags, Formatting, etc.
+### Content Changes
 
 All the different possible changes are handled the same way. Someone (or you) may submit a change — fixing typos, updating content, formatting, or something else. You'll go to the All Reviews page on AnkiCollab and approve or deny them.
 

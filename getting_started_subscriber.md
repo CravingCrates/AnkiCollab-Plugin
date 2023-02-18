@@ -1,12 +1,11 @@
 # Getting Started - Subscriber
 
 - [Getting Started - Subscriber](#getting-started---subscriber)
-  * [Getting a Key](#getting-a-key)
-  * [Adding the Key to Anki](#adding-the-key-to-anki)
-  * [Suggesting Changes](#suggesting-changes)
-    + [Card Content and Tags](#card-content-and-tags)
-    + [New Cards](#new-cards)
-
+  - [Getting a Key](#getting-a-key)
+  - [Adding the Key to Anki](#adding-the-key-to-anki)
+  - [Suggesting Changes](#suggesting-changes)
+    - [Card Content and Tags](#card-content-and-tags)
+    - [New Cards](#new-cards)
 
 If you don't want to maintain or publish decks, you **do not** need an account. All you need is the deck's **subscription key**.
 
