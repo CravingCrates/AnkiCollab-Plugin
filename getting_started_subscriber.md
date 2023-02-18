@@ -8,7 +8,7 @@ The key will be a series of words separated by dashes. Example:
 pip-item-hawaii-skylark-network-rugby
 ```
 
-### Getting a Key
+## Getting a Key
 
 If you know a deck's maintainer, they can give you the subscription key to paste into AnkiCollab.
 If you know the deck's name, but don't know the key, go to [AnkiCollab.com/Decks](https://www.ankicollab.com/decks).
@@ -20,7 +20,7 @@ Click on the deck and the subscription key will be on the top. Copy it.
 
 ![A blue arrow point to a subscription key on the AnkiCollab website.](https://i.imgur.com/wx50dDa.png)
 
-### Adding the Key to Anki
+## Adding the Key to Anki
 
 Open Anki.
 
@@ -44,13 +44,15 @@ The deck may not show up immediately! If you don't see the deck, click the Deck 
 
 If you see the title of the deck pop up, you are ready to start reviewing! 👍
 
-## Suggesting a Change
+## Suggesting Changes
 
-### Editing Card Content
+### Editing Card Content and Tags
 
-Not every Anki deck will be perfect — some might have typos, content errors, strange formatting, or other issues. There might even be some errors in this very document that will get changed in the future!
+Not every Anki deck is perfect — typos, content errors, strange formatting, or other issues might crop up. There might even be some errors in this very document that will get changed in the future!
 
 One huge strength of AnkiCollab is the ability to let the maintainer know that there might be an issue with a deck.
+
+⚠ In this section, we'll be showing how to change a card's content within the fields, but the process is **identical** for tags.
 
 Let's say you subscribe to a deck and find this card:
 
@@ -81,3 +83,15 @@ This page tells the maintainer what exactly was changed and why.
 From here, they can approve or reject your suggestion. If approved, everyone subscribed to this deck will receive an update with your change.
 
 You are now ready to go into the AnkiCollab world and improve decks! 👍
+
+### New Cards
+
+Some decks on AnkiCollab are unfinished, looking for people to contribute and finish them. In this case, you don't want to be *editing* cards, but *adding* new ones.
+
+⚠️ Before you start adding cards, make sure you are adding them to the correct deck!
+
+Let's say you subscribed to a Flower Identification deck, but they're missing the California Poppy. When adding the card, all you have to do is check the Suggest on AnkiCollab button toward the bottom.
+
+![Blue arrow pointing to the Suggest on AnkiCollab buttom at the bottom of the Add window.](https://i.imgur.com/HvJM2Fn.png)
+
+Now you just need to wait for the maintainer to approve your card!

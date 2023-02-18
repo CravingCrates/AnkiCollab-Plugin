@@ -17,6 +17,7 @@ AnkiCollab is an open-source, free, collaboration tool to create and share Anki 
 We have two separate Getting Started guides for [maintainers](https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/getting_started_maintainer.md) and [subscribers](https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/getting_started_subscriber.md). Check out our [FAQ](https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/faq.md) for extra help.
 
 ## Installing the Addon
+
 [AnkiCollab Add-on Page](https://ankiweb.net/shared/info/1957538407)
 
 Before you start, make sure you are using the latest version of Anki found [here](https://apps.ankiweb.net/). If you've never used Anki before, there is a great [Getting Started](https://docs.ankiweb.net/getting-started.html) guide in the Anki manual.
