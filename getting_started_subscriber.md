@@ -7,7 +7,7 @@
     - [Card Content and Tags](#card-content-and-tags)
     - [New Cards](#new-cards)
 
-If you don't want to maintain or publish decks, you **do not** need an account. All you need is the deck's **subscription key**.
+If you don't want to maintain or publish decks, you **do not** need an account. The **subscription key** 🔑 is all you need!
 
 The key will be a series of words separated by dashes. Example:
 
@@ -23,7 +23,7 @@ On the right, you'll find a search box to help locate the deck.
 
 ![A blue arrow pointing a search box on the AnkiCollab website.](https://i.imgur.com/RJnAdEU.png)
 
-Click on the deck and the subscription key will be on the top. Copy it.
+Click on the deck and the subscription key will be on the top in blue. Copy it.
 
 ![A blue arrow point to a subscription key on the AnkiCollab website.](https://i.imgur.com/wx50dDa.png)
 
@@ -31,7 +31,7 @@ Click on the deck and the subscription key will be on the top. Copy it.
 
 Open Anki.
 
-On the toolbar, click AnkiCollab → Edit Subscriptions.
+On the toolbar, click `AnkiCollab → Edit Subscriptions`.
 
 ![A cursor hovering over the Edit Subscriptions button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/vC4fI5n.png)
 
@@ -39,13 +39,13 @@ This window will show all your current subscriptions.
 
 ![AnkiCollab's subscription window showing currently subscribed decks.](https://i.imgur.com/srz5ENz.png)
 
-Add a new deck by pasting it into the box at the bottom and clicking Add Subscription.
+Add a new deck by pasting it into the box at the bottom and clicking **Add Subscription**.
 
 ![In the same window, with a new subscription key added.](https://i.imgur.com/gpBov9f.png)
 
 There will be a confirmation and you can now close this window.
 
-The deck may not show up immediately! If you don't see the deck, click the Deck button at the top of the main Anki page to refresh the view.
+The deck may not show up immediately! If you don't see the deck, click the Deck button at the top of the main Anki page to refresh 🔄 the view.
 
 ![An arrow pointing to the "deck" button on the main page of Anki.](https://i.imgur.com/c5S0VrZ.png)
 
@@ -55,7 +55,7 @@ If you see the title of the deck pop up, you are ready to start reviewing! 👍
 
 ### Card Content and Tags
 
-Not every Anki deck is perfect — typos, content errors, strange formatting, or other issues might crop up. There might even be some errors in this very document that will get changed in the future!
+Not every Anki deck is perfect — typos, content errors, strange formatting, or other issues might pop up. There might even be some errors in this very document that will get changed in the future!
 
 One huge strength of AnkiCollab is the ability to let the maintainer know that there might be an issue with a deck.
 
@@ -65,7 +65,7 @@ Let's say you subscribe to a deck and find this card:
 
 ![An Anki card in the editor. The front reads "Biggest Animal in the World" and the back reads "Elephant."](https://i.imgur.com/wbKuRPj.png)
 
-Sure, elephants are big, but you *know* that the biggest animal in the world is *actually* a Blue Whale.
+Sure, elephants 🐘 are big, but you *know* that the biggest animal in the world is *actually* a Blue Whale 🐳.
 
 After double-checking that you're correct, change the word Elephant to Blue Whale in the same manner you would edit a normal card.
 
@@ -77,7 +77,7 @@ A small window will pop up and ask you to choose a rationale for making this cha
 
 ![A small pop up window with a dropdown box of various reasons for suggesting a change.](https://i.imgur.com/OhLwRH4.png)
 
-In our case, let's choose Content Error. Next, click OK.
+In our case, let's choose **Content Error**. Next, click 🆗.
 
 You've now submitted your first change!
 

@@ -28,7 +28,7 @@ If you ever lose this code, you can always find it on [AnkiCollab add-on page](h
 
 ![A blue arrow pointing to AnkiCollab's addon code on the Anki Addon page.](https://i.imgur.com/oTlWGHF.png)
 
-Inside of Anki, go Tools → Add-ons → Get Add-ons. From here, a box should pop up where you can enter the code.
+Inside of Anki desktop app, go `Tools → Add-ons → Get Add-ons`. From here, a box should pop up where you can enter the code.
 
 ![Anki's install add-on window.](https://i.imgur.com/7X6fULn.png)
 
