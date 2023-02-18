@@ -77,7 +77,7 @@ A small window will pop up and ask you to choose a rationale for making this cha
 
 ![A small pop up window with a dropdown box of various reasons for suggesting a change.](https://i.imgur.com/OhLwRH4.png)
 
-In our case, let's choose **Content Error**. Next, click 🆗.
+In our case, let's choose **Content Error**. Next, click **OK**.
 
 You've now submitted your first change!
 

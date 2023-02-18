@@ -70,7 +70,7 @@ Here, the rest of the fields are shown.
 
 ![The full review page on AnkiCollab.com](https://i.imgur.com/Ij62zmY.png)
 
-From here, or the previous page, simply click the ✔️ for suggestions you want to keep or the ❌ to reject them. After that, you're good to go!
+From here, or the previous page, simply click the check mark for suggestions you want to keep or the red X to reject them. After that, you're good to go!
 
 ## Credits
 

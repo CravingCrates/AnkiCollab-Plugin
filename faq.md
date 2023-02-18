@@ -9,7 +9,7 @@
 
 <details close>
 <summary><b>Does AnkiCollab handle multiple profiles?</b></summary>
-AnkiCollab does not currently respect separate Anki profiles. If you subscribe to a deck on one profile, then switch to another, it will redownload the fresh deck. A workaround for this is to disable the addon. <code>Tools → Add-ons → Select AnkiCollab → Toggle Enabled</code>.
+AnkiCollab does not currently respect separate Anki profiles. If you subscribe to a deck on one profile, then switch to another, it will redownload the fresh deck. A workaround for this is to disable the addon. <code>Tools → Add-ons → Select AnkiCollab → Toggle Enabled</code>
 </details>
 
 <details close>
