@@ -1,7 +1,7 @@
 <h1 align="center">AnkiCollab-Plugin</h1>
 
 <p align="center"> 📚<i> A free, collaborative, deck creation platform for <a href="https://apps.ankiweb.net/">Anki</a>.</i> 📝</p>
-<p align="center"><a href="https://ankicollab.com/">AnkiCollab.com</a> | <a href="https://discord.com/invite/9x4DRxzqwM">Discord</a></p>
+<p align="center"><a href="https://ankicollab.com/">AnkiCollab.com</a> | <a href="https://discord.gg/9x4DRxzqwM">Discord</a></p>
 
 ## Introduction
 
