@@ -110,7 +110,7 @@ def delete_selected_rows(table):
         table.removeRow(row)
     mw.addonManager.writeConfig(__name__, strings_data)
 
-def add_to_table(line_edit, table):
+def add_to_table(line_edit, table, dialog):
     string = line_edit.text()
     if string:
         strings_data[string] = {
@@ -123,6 +123,27 @@ def add_to_table(line_edit, table):
         table.insertRow(num_rows)
         table.setItem(num_rows, 0, QTableWidgetItem(string))
         handle_pull(string)
+        dialog.accept()
+        on_edit_list() #reopen with updated data
+
+def get_local_deck_from_hash(input_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for hash, details in strings_data.items():
+            if hash == input_hash:
+                return mw.col.decks.name(details["deckId"])
+    return "None"
+
+def update_local_deck(input_hash, new_deck, popup_dialog, subs_dialog):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for hash, details in strings_data.items():
+            if hash == input_hash:
+                details["deckId"] = aqt.mw.col.decks.id(new_deck)
+    mw.addonManager.writeConfig(__name__, strings_data)
+    popup_dialog.accept()
+    subs_dialog.accept()
+    on_edit_list() #reopen with updated data
 
 def on_edit_list():
     dialog = QDialog(mw)
@@ -133,24 +154,35 @@ def on_edit_list():
     table = QTableWidget()
     if strings_data is not None:
         table.setRowCount(len(strings_data))
-    table.setColumnCount(1)
-    table.setHorizontalHeaderLabels(['Deckname'])    
-    table.setColumnWidth(0, table.width() * 0.7)
+    table.setColumnCount(2) # set number of columns to 2
+    table.setHorizontalHeaderLabels(['Deckname', 'Local Deck']) # add column headers   
+    table.setColumnWidth(0, table.width() * 0.4) # adjust column widths
+    table.setColumnWidth(1, table.width() * 0.4)
     
     if strings_data is not None:
         for row, (string, data) in enumerate(strings_data.items()):        
-            item = QTableWidgetItem(string)
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            table.setItem(row, 0, item)
+            item1 = QTableWidgetItem(string)
+            item1.setFlags(item1.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row, 0, item1)
+            
+            # add local deck name to column 2
+            input_hash = string
+            local_deck_name = get_local_deck_from_hash(input_hash)
+            item2 = QTableWidgetItem(local_deck_name)
+            item2.setFlags(item2.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row, 1, item2)
     
     layout.addWidget(table)
     
     delete_button = QPushButton('Delete Subscription')
     delete_button.clicked.connect(lambda: delete_selected_rows(table))
     
+    edit_button = QPushButton('Edit Local Deck')
+    edit_button.clicked.connect(lambda: edit_local_deck(table, dialog))
+    
     line_edit = QLineEdit()
     add_button = QPushButton('Add Subscription')
-    add_button.clicked.connect(lambda: add_to_table(line_edit, table))
+    add_button.clicked.connect(lambda: add_to_table(line_edit, table, dialog))
     
     disclaimer = QLabel("The download may take a long time and Anki may seem unresponsive. Just be patient and do not close it.")
     
@@ -161,8 +193,42 @@ def on_edit_list():
     layout.addLayout(add_layout)
     layout.addWidget(disclaimer)
     layout.addWidget(delete_button)
+    layout.addWidget(edit_button)
     
     dialog.exec()
+    
+    
+def edit_local_deck(table, parent_dialog):
+    selected_items = table.selectedItems()
+    if len(selected_items) > 0:
+        selected_row = selected_items[0].row()
+        input_hash = table.item(selected_row, 0).text()
+        local_deck_name = table.item(selected_row, 1).text()
+        
+        # create popup dialog
+        dialog = QDialog(mw)
+        dialog.setWindowTitle('Edit Local Deck')
+        layout = QVBoxLayout()
+        dialog.setLayout(layout)
+        
+        deck_label = QLabel("Deck:")
+        deck_combo_box = QComboBox()
+        
+        decks = mw.col.decks.all()
+        deck_names = [deck['name'] for deck in decks]
+        deck_names.sort()
+        deck_combo_box.addItems(deck_names)
+        deck_combo_box.setCurrentText(local_deck_name) # set current deck name in combo box
+        
+        layout.addWidget(deck_label)
+        layout.addWidget(deck_combo_box)
+        
+        save_button = QPushButton('Save')
+        save_button.clicked.connect(lambda: update_local_deck(input_hash, deck_combo_box.currentText(), dialog, parent_dialog))
+        layout.addWidget(save_button)
+        
+        dialog.exec()
+
 
 edit_list_action.triggered.connect(on_edit_list)
 
@@ -176,6 +242,7 @@ def on_push_deck_action(self):
     
     decks = mw.col.decks.all()
     deck_names = [deck['name'] for deck in decks]
+    deck_names.sort()
     deck_combo_box.addItems(deck_names)
     
     email_label = QLabel("Email: (Make sure to create an account on the website first)")
