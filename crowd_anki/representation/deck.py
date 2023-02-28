@@ -10,9 +10,25 @@ from ..utils import utils
 from ..utils.constants import UUID_FIELD_NAME
 from ..utils.uuid import UuidFetcher
 from ..utils.notifier import AnkiModalNotifier
+from ...mega_downloader import download_media_from_url
+from ...thread import run_function_in_thread
+
+import os
+import aqt
+from aqt import mw
 
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
 
+def handle_media_import(media_url, media_files):
+    # Get the directory path
+    dir_path = aqt.mw.col.media.dir()
+    missing_files = []
+    for file_name in media_files:
+        if not os.path.exists(os.path.join(dir_path, file_name)):
+            missing_files.append(file_name)
+    # Download the missing files
+    if len(missing_files) > 0:
+        download_media_from_url(media_url, missing_files, dir_path)
 
 class Deck(JsonSerializableAnkiDict):
     DECK_NAME_DELIMITER = "::"
@@ -134,13 +150,14 @@ class Deck(JsonSerializableAnkiDict):
 
         self.metadata = DeckMetadata(new_deck_configs, new_models)
 
-    def save_to_collection(self, collection, import_config: ImportConfig):
+    def save_to_collection(self, media_url, collection, import_config: ImportConfig):
         self.save_metadata(collection)
 
         self.save_decks_and_notes(collection=collection,
                                   parent_name="",
                                   model_map_cache=defaultdict(dict),
-                                  import_config=import_config)
+                                  import_config=import_config,
+                                  media_url=media_url)
 
     def save_metadata(self, collection):
         for config in self.metadata.deck_configs.values():
@@ -148,19 +165,26 @@ class Deck(JsonSerializableAnkiDict):
 
         for note_model in self.metadata.models.values():
             note_model.save_to_collection(collection)
-
-    def save_decks_and_notes(self, collection, parent_name, model_map_cache, import_config: ImportConfig):
+        
+    def save_decks_and_notes(self, collection, parent_name, model_map_cache, import_config: ImportConfig, media_url):
         full_name = self._save_deck(collection, parent_name)
 
         for child in self.children:
             child.save_decks_and_notes(collection=collection,
                                        parent_name=full_name,
                                        model_map_cache=model_map_cache,
-                                       import_config=import_config)
+                                       import_config=import_config,
+                                       media_url=media_url
+                                       )
 
+        # Import Media if the url is not an empty string
+        if media_url:
+            run_function_in_thread(handle_media_import, media_url, self.media_files)
+        
         if import_config.use_notes:
             for note in self.notes:
                 note.save_to_collection(collection, self, model_map_cache, import_config=import_config)
+        
 
     def _save_deck(self, collection, parent_name):
         full_name = (parent_name + self.DECK_NAME_DELIMITER if parent_name else "") + self.anki_dict["name"]

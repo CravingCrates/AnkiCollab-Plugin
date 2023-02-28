@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import json
 import requests
+from datetime import datetime
 
 from pprint import pp
 from typing import List
@@ -74,11 +75,12 @@ def handle_pull(input_hash):
                         field_name = field['name']
                         config.add_field(model_name, field_name)
                 counter += len(deck.notes)
-                deck.save_to_collection(aqt.mw.col, import_config=config)
+                deck.save_to_collection(subscription['media_url'], aqt.mw.col, import_config=config)
                 if input_hash:
                     for hash, details in strings_data.items():
                         if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
                             details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
+                            details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                     mw.addonManager.writeConfig(__name__, strings_data)
             
             infot = str(counter) + " Notes updated (AnkiCollab)."

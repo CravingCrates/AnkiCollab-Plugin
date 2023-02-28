@@ -1,4 +1,15 @@
 
+import os
+import sys
+
+from sys import platform
+if platform == "linux" or platform == "linux2":
+    sys.path.append(os.path.join(os.path.dirname(__file__), "dist/linux"))
+elif platform == "darwin":
+    sys.path.append(os.path.join(os.path.dirname(__file__), "dist/osx"))
+elif platform == "win32":
+    sys.path.append(os.path.join(os.path.dirname(__file__), "dist/win"))
+
 from aqt import gui_hooks, mw
 from aqt.browser import SidebarTreeView, SidebarItem, SidebarItemType
 from anki.decks import DeckId
@@ -80,7 +91,7 @@ def request_update():
             
 def onProfileLoaded():
     aqt.utils.tooltip("Fetching data from AnkiCollab...")
-    run_function_in_thread(request_update)
+    request_update()
 
 gui_hooks.profile_did_open.append(onProfileLoaded)
 gui_hooks.add_cards_did_init.append(init_add_card)
@@ -92,7 +103,9 @@ def delete_selected_rows(table):
     selected_rows = [index.row() for index in table.selectedIndexes()]
     for row in selected_rows:
         if table.item(row, 0) is not None:
-            strings_data.pop(table.item(row, 0).text())
+            deck_hash = table.item(row, 0).text()
+            requests.get("https://plugin.ankicollab.com/RemoveSubscription/" + deck_hash)      
+            strings_data.pop(deck_hash)
     for row in reversed(selected_rows):
         table.removeRow(row)
     mw.addonManager.writeConfig(__name__, strings_data)
