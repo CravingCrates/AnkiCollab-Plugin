@@ -216,10 +216,10 @@ class Deck(JsonSerializableAnkiDict):
         # This approach can be costly if we have a lot of decks with specific set of names.
         # And adding random appendix would've been faster, but less user-friendly
         number = 2
-        deck_id = collection.decks.id(initial_name, create=False)
-        new_name = ""
+        new_name = initial_name + " (AnkiCollab)"
+        deck_id = collection.decks.id(new_name, create=False)
         while deck_id:
-            new_name = initial_name + "_" + str(number)
+            new_name = new_name + "_" + str(number)
             number += 1
             deck_id = collection.decks.id(new_name, create=False)
 

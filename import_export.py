@@ -88,7 +88,8 @@ def handle_pull(input_hash):
         else:            
             infot = "A Server Error occurred. Please notify us!"
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
-
+    mw.reset()
+            
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
@@ -123,7 +124,7 @@ def suggest_subdeck(did):
     disambiguate_note_model_uuids(aqt.mw.col)
     deck = deck_initializer.from_collection(aqt.mw.col, deck.name)
     note_sorter = NoteSorter(ConfigSettings.get_instance())
-    deck.notes = note_sorter.sort_notes(deck.notes)
+    note_sorter.sort_deck(deck)
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
     submit_deck(deck, did, 9) # 9: Bulk Suggestion rationale
@@ -174,7 +175,7 @@ def handle_export(did, email) -> str:
     disambiguate_note_model_uuids(aqt.mw.col)
     deck = deck_initializer.from_collection(aqt.mw.col, deck.name)
     note_sorter = NoteSorter(ConfigSettings.get_instance())
-    deck.notes = note_sorter.sort_notes(deck.notes)
+    note_sorter.sort_deck(deck)
 
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     
