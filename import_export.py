@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pprint import pp
 from typing import List
@@ -25,6 +25,9 @@ from .crowd_anki.representation import *
 from .crowd_anki.representation import deck_initializer
 from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
+
+import base64
+import gzip
 
 @dataclass
 class ConfigEntry:
@@ -58,10 +61,11 @@ def handle_pull(input_hash):
     if strings_data is not None and len(strings_data) > 0:
         response = requests.post("https://plugin.ankicollab.com/pullChanges", json=strings_data)
         if response.status_code == 200:
-            webresult = response.json()
+            compressed_data = base64.b64decode(response.content)
+            decompressed_data = gzip.decompress(compressed_data)
+            webresult = json.loads(decompressed_data.decode('utf-8'))
             counter = 0
-            for entry in webresult:
-                subscription = json.loads(entry)
+            for subscription in webresult:
                 deck = deck_initializer.from_json(subscription['deck'])
                 config = ImportConfig(
                         add_tag_to_cards= [],
@@ -80,7 +84,9 @@ def handle_pull(input_hash):
                     for hash, details in strings_data.items():
                         if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
                             details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
-                            details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                            # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
+                            details["timestamp"] = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+
                     mw.addonManager.writeConfig(__name__, strings_data)
             
             infot = str(counter) + " Notes updated (AnkiCollab)."
@@ -111,7 +117,10 @@ def submit_deck(deck, did, rationale):
         aqt.utils.tooltip("Config Error: No local deck id")
     else:
         data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res, "rationale": rationale}
-        response = requests.post("https://plugin.ankicollab.com/submitCard", json=data)
+        compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
+        based_data = base64.b64encode(compressed_data)
+        headers = {"Content-Type": "application/json"}
+        response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
         if response:
             print(response)
             aqt.utils.tooltip(response.text, parent=mw)
@@ -180,8 +189,11 @@ def handle_export(did, email) -> str:
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     
     data = {"deck": deck_res, "email": email}
-    response = requests.post("https://plugin.ankicollab.com/createDeck", json=data)
-    
+    compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
+    based_data = base64.b64encode(compressed_data)
+    headers = {"Content-Type": "application/json"}
+    response = requests.post("https://plugin.ankicollab.com/createDeck", data=based_data, headers=headers)
+
     if response.status_code == 200:
         res = response.json()
         msg_box = QMessageBox()

@@ -32,13 +32,13 @@ collab_menu.addAction(edit_list_action)
 push_deck_action = QAction('Publish new Deck', mw)
 collab_menu.addAction(push_deck_action)
 
-pull_changes_action = QAction('Check for Updates', mw)
+pull_changes_action = QAction('Check for New Content', mw)
 collab_menu.addAction(pull_changes_action)
 
-website_action = QAction('Website', mw)
+website_action = QAction('Open Website', mw)
 collab_menu.addAction(website_action)
 
-donation_action = QAction('Donate', mw)
+donation_action = QAction('Support us', mw)
 collab_menu.addAction(donation_action)
 
 
@@ -90,10 +90,10 @@ def request_update():
         mw.addonManager.writeConfig(__name__, strings_data)
             
 def onProfileLoaded():
-    aqt.utils.tooltip("Fetching data from AnkiCollab...")
+    aqt.utils.tooltip("Retrieving latest data from AnkiCollab...")
     request_update()
 
-gui_hooks.profile_did_open.append(onProfileLoaded)
+#gui_hooks.profile_did_open.append(onProfileLoaded)
 gui_hooks.add_cards_did_init.append(init_add_card)
 gui_hooks.editor_did_init_buttons.append(init_editor_card)
 gui_hooks.add_cards_did_add_note.append(make_new_card)
@@ -112,6 +112,7 @@ def delete_selected_rows(table):
 
 def add_to_table(line_edit, table, dialog):
     string = line_edit.text()
+    string = string.replace(" ", "") # just to prevent issues for copy paste errors
     if string:
         strings_data[string] = {
             'timestamp': '2022-12-31 23:59:59',
