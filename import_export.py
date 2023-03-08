@@ -56,45 +56,43 @@ class ImportConfig(PersonalFieldsHolder):
 
     ignore_deck_movement: bool
 
+def import_webresult(webresult, input_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    for subscription in webresult:
+        deck = deck_initializer.from_json(subscription['deck'])
+        config = ImportConfig(
+                add_tag_to_cards= [],
+                use_notes=True,
+                use_media=False,
+                ignore_deck_movement= True
+            )
+        for protected_field in subscription['protected_fields']:
+            model_name = protected_field['name']
+            for field in protected_field['fields']:
+                field_name = field['name']
+                config.add_field(model_name, field_name)
+        deck.save_to_collection(subscription['media_url'], aqt.mw.col, import_config=config)
+        if input_hash:
+            for hash, details in strings_data.items():
+                if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
+                    details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
+                    # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
+                    details["timestamp"] = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+
+            mw.addonManager.writeConfig(__name__, strings_data)
+
 def handle_pull(input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None and len(strings_data) > 0:
-        response = requests.post("https://plugin.ankicollab.com/pullChanges", json=strings_data)
+        response = requests.post("https://plugin.ankicollab.com/pullChanges", json=strings_data if input_hash is None else {input_hash: strings_data[input_hash]})
         if response.status_code == 200:
             compressed_data = base64.b64decode(response.content)
             decompressed_data = gzip.decompress(compressed_data)
             webresult = json.loads(decompressed_data.decode('utf-8'))
-            counter = 0
-            for subscription in webresult:
-                deck = deck_initializer.from_json(subscription['deck'])
-                config = ImportConfig(
-                        add_tag_to_cards= [],
-                        use_notes=True,
-                        use_media=False,
-                        ignore_deck_movement= True
-                    )
-                for protected_field in subscription['protected_fields']:
-                    model_name = protected_field['name']
-                    for field in protected_field['fields']:
-                        field_name = field['name']
-                        config.add_field(model_name, field_name)
-                counter += len(deck.notes)
-                deck.save_to_collection(subscription['media_url'], aqt.mw.col, import_config=config)
-                if input_hash:
-                    for hash, details in strings_data.items():
-                        if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
-                            details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
-                            # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
-                            details["timestamp"] = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
-
-                    mw.addonManager.writeConfig(__name__, strings_data)
-            
-            infot = str(counter) + " Notes updated (AnkiCollab)."
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
+            import_webresult(webresult, input_hash)
         else:            
             infot = "A Server Error occurred. Please notify us!"
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
-    mw.reset()
             
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)

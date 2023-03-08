@@ -15,6 +15,9 @@ from ...thread import run_function_in_thread
 
 import os
 import aqt
+from anki.collection import Collection
+from aqt.operations import QueryOp
+from aqt.utils import showInfo
 from aqt import mw
 
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
@@ -149,15 +152,23 @@ class Deck(JsonSerializableAnkiDict):
                                              {deck_config.get_uuid(): deck_config for deck_config in deck_config_list})
 
         self.metadata = DeckMetadata(new_deck_configs, new_models)
-
+        
+    def on_success(self, count: int) -> None:
+        showInfo(f"AnkiCollab: {count} Notes updated.")
+        mw.reset()
+        
     def save_to_collection(self, media_url, collection, import_config: ImportConfig):
         self.save_metadata(collection)
-
-        self.save_decks_and_notes(collection=collection,
-                                  parent_name="",
-                                  model_map_cache=defaultdict(dict),
+        op = QueryOp(
+            parent=mw,
+            op=lambda collection=collection, parent_name="", model_map_cache=defaultdict(dict), import_config=import_config, media_url=media_url: self.save_decks_and_notes(collection=collection,
+                                  parent_name=parent_name,
+                                  model_map_cache=model_map_cache,
                                   import_config=import_config,
-                                  media_url=media_url)
+                                  media_url=media_url),
+            success=self.on_success,
+        )
+        op.with_progress("Synchronizing...").run_in_background()
 
     def save_metadata(self, collection):
         for config in self.metadata.deck_configs.values():
@@ -165,10 +176,15 @@ class Deck(JsonSerializableAnkiDict):
 
         for note_model in self.metadata.models.values():
             note_model.save_to_collection(collection)
+            
+        self._save_deck(collection, "") # We store the root deck in this thread to avoid concurrency issues
         
     def save_decks_and_notes(self, collection, parent_name, model_map_cache, import_config: ImportConfig, media_url):
-        full_name = self._save_deck(collection, parent_name)
-
+        full_name = self._save_deck(collection, parent_name) # duplicated call for root deck, but thats fine
+        
+        for note in self.notes:
+            note.save_to_collection(collection, self, model_map_cache, import_config=import_config)
+                
         for child in self.children:
             child.save_decks_and_notes(collection=collection,
                                        parent_name=full_name,
@@ -181,14 +197,10 @@ class Deck(JsonSerializableAnkiDict):
         if media_url:
             run_function_in_thread(handle_media_import, media_url, self.media_files)
         
-        if import_config.use_notes:
-            for note in self.notes:
-                note.save_to_collection(collection, self, model_map_cache, import_config=import_config)
-        
+        return self.get_note_count()
 
-    def _save_deck(self, collection, parent_name):
+    def _save_deck(self, collection, parent_name):        
         full_name = (parent_name + self.DECK_NAME_DELIMITER if parent_name else "") + self.anki_dict["name"]
-
         deck_dict = UuidFetcher(collection).get_deck(self.get_uuid())
 
         deck_id = collection.decks.id(full_name, create=False)
@@ -205,7 +217,6 @@ class Deck(JsonSerializableAnkiDict):
         self.anki_dict["name"] = full_name
         
         collection.decks.save(deck_dict)
-
         return full_name
 
     @staticmethod
@@ -222,5 +233,4 @@ class Deck(JsonSerializableAnkiDict):
             new_name = new_name + "_" + str(number)
             number += 1
             deck_id = collection.decks.id(new_name, create=False)
-
         return new_name

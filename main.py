@@ -19,6 +19,7 @@ import configparser
 from datetime import datetime
 import requests
 import webbrowser
+from concurrent.futures import Future
 
 from .thread import run_function_in_thread
 from .import_export import *
@@ -56,7 +57,7 @@ def add_sidebar_context_menu(
 
 def context_handler(item: SidebarItem):
     if item.item_type == SidebarItemType.DECK:
-        selected_deck = DeckId(item.id)
+        selected_deck = DeckId(item.id)      
         suggest_subdeck(selected_deck)
     else:
         aqt.utils.tooltip("Please select a deck")
@@ -84,6 +85,7 @@ def init_add_card(addCardsDialog):
 
 def request_update():
     handle_pull(None)
+    strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
         for sub, details in strings_data.items():
             details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
@@ -91,8 +93,13 @@ def request_update():
             
 def onProfileLoaded():
     aqt.utils.tooltip("Retrieving latest data from AnkiCollab...")
-    request_update()
+    run_function_in_thread(request_update)
 
+def on_syncing_done(future: Future):
+        if exc := future.exception():
+            raise exc
+        aqt.utils.tooltip("AnkiCollab: Done.")
+        
 #gui_hooks.profile_did_open.append(onProfileLoaded)
 gui_hooks.add_cards_did_init.append(init_add_card)
 gui_hooks.editor_did_init_buttons.append(init_editor_card)
@@ -100,6 +107,7 @@ gui_hooks.add_cards_did_add_note.append(make_new_card)
 
 
 def delete_selected_rows(table):
+    strings_data = mw.addonManager.getConfig(__name__)
     selected_rows = [index.row() for index in table.selectedIndexes()]
     for row in selected_rows:
         if table.item(row, 0) is not None:
@@ -111,8 +119,8 @@ def delete_selected_rows(table):
     mw.addonManager.writeConfig(__name__, strings_data)
 
 def add_to_table(line_edit, table, dialog):
-    string = line_edit.text()
-    string = string.replace(" ", "") # just to prevent issues for copy paste errors
+    strings_data = mw.addonManager.getConfig(__name__)
+    string = line_edit.text().replace(" ", "") # just to prevent issues for copy paste errors
     if string:
         strings_data[string] = {
             'timestamp': '2022-12-31 23:59:59',
@@ -125,7 +133,7 @@ def add_to_table(line_edit, table, dialog):
         table.setItem(num_rows, 0, QTableWidgetItem(string))
         handle_pull(string)
         dialog.accept()
-        on_edit_list() #reopen with updated data
+        #on_edit_list() # we could reopen the dialog with updated data
 
 def get_local_deck_from_hash(input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
@@ -153,6 +161,7 @@ def on_edit_list():
     dialog.setLayout(layout)
     
     table = QTableWidget()
+    strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None:
         table.setRowCount(len(strings_data))
     table.setColumnCount(2) # set number of columns to 2
@@ -163,14 +172,14 @@ def on_edit_list():
     if strings_data is not None:
         for row, (string, data) in enumerate(strings_data.items()):        
             item1 = QTableWidgetItem(string)
-            item1.setFlags(item1.flags() & ~Qt.ItemIsEditable)
+            item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 0, item1)
             
             # add local deck name to column 2
             input_hash = string
             local_deck_name = get_local_deck_from_hash(input_hash)
             item2 = QTableWidgetItem(local_deck_name)
-            item2.setFlags(item2.flags() & ~Qt.ItemIsEditable)
+            item2.setFlags(item2.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 1, item2)
     
     layout.addWidget(table)
