@@ -56,30 +56,115 @@ class ImportConfig(PersonalFieldsHolder):
 
     ignore_deck_movement: bool
 
+def get_local_deck_from_hash(input_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for hash, details in strings_data.items():
+            if hash == input_hash:
+                return mw.col.decks.name(details["deckId"])
+    return "None"
+
+def update_timestamp(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:        
+        for sub, details in strings_data.items():
+            if sub == deck_hash:
+                details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        mw.addonManager.writeConfig(__name__, strings_data)        
+
+def install_update(subscription):    
+    media_url = subscription['media_url']
+    deck = deck_initializer.from_json(subscription['deck'])
+    config = prep_config(subscription['protected_fields'])
+    deck.save_to_collection(media_url, aqt.mw.col, import_config=config)
+    return deck.anki_dict["name"]
+    
+def abort_update(deck_hash):
+    update_timestamp(deck_hash)
+
+def postpone_update():
+    pass
+        
+class ChangelogDialog(QDialog):
+    def __init__(self, changelog, deck_hash):
+        super().__init__()
+        local_name = get_local_deck_from_hash(deck_hash)
+        self.setWindowTitle(f"Changelog for Deck {local_name}")
+        self.setModal(True)
+
+        layout = QVBoxLayout()
+
+        label = QLabel("The following changes are available:")
+        layout.addWidget(label)
+
+        changelog_text = QTextBrowser()
+        changelog_text.setPlainText(changelog)
+        layout.addWidget(changelog_text)
+
+        button_box = QDialogButtonBox()
+        install_button = button_box.addButton("Install", QDialogButtonBox.ButtonRole.AcceptRole)
+        later_button = button_box.addButton("Later", QDialogButtonBox.ButtonRole.RejectRole)
+        skip_button = QPushButton("Skip")
+        button_box.addButton(skip_button, QDialogButtonBox.ButtonRole.ActionRole)
+
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+        install_button.clicked.connect(self.accept)
+        later_button.clicked.connect(self.reject)
+        skip_button.clicked.connect(self.skip_update)
+
+        self.adjustSize()
+
+    def skip_update(self):
+        self.done(2)
+
+def prep_config(protected_fields):
+    config = ImportConfig(
+            add_tag_to_cards= [],
+            use_notes=True,
+            use_media=False,
+            ignore_deck_movement= True
+        )
+    for protected_field in protected_fields:
+        model_name = protected_field['name']
+        for field in protected_field['fields']:
+            field_name = field['name']
+            config.add_field(model_name, field_name)
+
+    return config
+
+def show_changelog_popup(subscription):
+    changelog = subscription['changelog']
+    deck_hash = subscription['deck_hash']
+      
+    dialog = ChangelogDialog(changelog, deck_hash)
+    choice = dialog.exec()
+
+    if choice == QDialog.DialogCode.Accepted:
+        install_update(subscription)
+        update_timestamp(deck_hash)
+    elif choice == QDialog.DialogCode.Rejected:
+        postpone_update()
+    else:
+        abort_update(deck_hash)
+
+        
 def import_webresult(webresult, input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
-    for subscription in webresult:
-        deck = deck_initializer.from_json(subscription['deck'])
-        config = ImportConfig(
-                add_tag_to_cards= [],
-                use_notes=True,
-                use_media=False,
-                ignore_deck_movement= True
-            )
-        for protected_field in subscription['protected_fields']:
-            model_name = protected_field['name']
-            for field in protected_field['fields']:
-                field_name = field['name']
-                config.add_field(model_name, field_name)
-        deck.save_to_collection(subscription['media_url'], aqt.mw.col, import_config=config)
-        if input_hash:
+    for subscription in webresult:     
+        if input_hash: # New deck
+            deck_name = install_update(subscription)
             for hash, details in strings_data.items():
                 if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
-                    details["deckId"] = aqt.mw.col.decks.id(deck.anki_dict["name"])
+                    details["deckId"] = aqt.mw.col.decks.id(deck_name)
                     # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
                     details["timestamp"] = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
 
             mw.addonManager.writeConfig(__name__, strings_data)
+        else: # Update deck
+            show_changelog_popup(subscription)
 
 def handle_pull(input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
@@ -89,7 +174,7 @@ def handle_pull(input_hash):
             compressed_data = base64.b64decode(response.content)
             decompressed_data = gzip.decompress(compressed_data)
             webresult = json.loads(decompressed_data.decode('utf-8'))
-            import_webresult(webresult, input_hash)
+            aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash))
         else:            
             infot = "A Server Error occurred. Please notify us!"
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))

@@ -85,11 +85,6 @@ def init_add_card(addCardsDialog):
 
 def request_update():
     handle_pull(None)
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        for sub, details in strings_data.items():
-            details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        mw.addonManager.writeConfig(__name__, strings_data)
             
 def onProfileLoaded():
     aqt.utils.tooltip("Retrieving latest data from AnkiCollab...")
