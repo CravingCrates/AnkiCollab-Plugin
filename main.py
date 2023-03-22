@@ -160,7 +160,7 @@ def on_edit_list():
     if strings_data is not None:
         table.setRowCount(len(strings_data))
     table.setColumnCount(2) # set number of columns to 2
-    table.setHorizontalHeaderLabels(['Deckname', 'Local Deck']) # add column headers   
+    table.setHorizontalHeaderLabels(['Subscription Key', 'Local Deck']) # add column headers   
     table.setColumnWidth(0, table.width() * 0.4) # adjust column widths
     table.setColumnWidth(1, table.width() * 0.4)
     

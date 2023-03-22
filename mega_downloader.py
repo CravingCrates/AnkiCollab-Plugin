@@ -13,12 +13,21 @@ import time
 
 def get_nodes_in_shared_folder(root_folder: str) -> dict:
     data = [{"a": "f", "c": 1, "ca": 1, "r": 1}]
-    response = requests.post(
-        "https://g.api.mega.co.nz/cs",
-        params={'id': 0,  # self.sequence_num
-                'n': root_folder},
-        data=json.dumps(data)
-    )
+    try:
+        response = requests.post(
+            "https://g.api.mega.co.nz/cs",
+            params={'id': 0,  # self.sequence_num
+                    'n': root_folder},
+            data=json.dumps(data)
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print("An error occurred:", e)
+        return None
+    
+    if not response.ok:
+        return None
+    
     try:
         json_resp = response.json()
         return json_resp[0]["f"]
@@ -26,15 +35,40 @@ def get_nodes_in_shared_folder(root_folder: str) -> dict:
         print("Error:", e)
         return None
 
-def download_file_json(root_folder, file_id) -> dict:
+def download_file_json(root_folder, file_id):
     data = [{ 'a': 'g', 'g': 1, 'n': file_id }]
-    response = requests.post(
-        "https://g.api.mega.co.nz/cs",
-        params={'id': 0,  # self.sequence_num
-                'n': root_folder},
-        data=json.dumps(data)
-    )
-    return response.json()
+    try:
+        response = requests.post(
+            "https://g.api.mega.co.nz/cs",
+            params={'id': 0,  # self.sequence_num
+                    'n': root_folder},
+            data=json.dumps(data)
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print("An error occurred:", e)
+        return None
+    
+    if not response.ok:
+        return None
+
+    try:
+        json_resp = json.loads(response.text)
+    except json.JSONDecodeError:
+        return None
+
+    try:
+        if isinstance(json_resp, list):
+            int_resp = json_resp[0] if isinstance(json_resp[0], int) else None
+        elif isinstance(json_resp, int):
+            int_resp = json_resp
+    except IndexError:
+        int_resp = None
+        
+    if int_resp is not None:
+        return None
+    
+    return json_resp[0]
 
 def parse_folder_url(url: str) -> Tuple[str, str]:
     "Returns (public_handle, key) if valid. If not returns None."
@@ -58,7 +92,9 @@ def decrypt_node_key(key_str: str, shared_key: str) -> Tuple[int, ...]:
 
 
 def _download_file(root_folder, file_id, file_key, dest_path=None, dest_filename=None):
-    file_data = download_file_json(root_folder, file_id)[0]
+    file_data = download_file_json(root_folder, file_id)
+    if file_data is None:
+        return None
     k = (file_key[0] ^ file_key[4], file_key[1] ^ file_key[5],
             file_key[2] ^ file_key[6], file_key[3] ^ file_key[7])
     iv = file_key[4:6] + (0, 0)
@@ -74,8 +110,12 @@ def _download_file(root_folder, file_id, file_key, dest_path=None, dest_filename
     else:
         file_name = attribs['n']
 
-    input_file = requests.get(file_url, stream=True).raw
-
+    try:
+        input_file = requests.get(file_url, stream=True).raw
+    except requests.exceptions.RequestException as e:
+        print("An error occurred while trying to retrieve the file: ", e)
+        return None
+    
     if dest_path is None:
         dest_path = ''
     else:
@@ -126,7 +166,12 @@ def _download_file(root_folder, file_id, file_key, dest_path=None, dest_filename
 
 
 def download_media_from_url(url, files, path):
-    (root_folder, shared_enc_key) = parse_folder_url(url)
+    result = parse_folder_url(url)
+    if result is None:
+        print("Invalid URL")
+        return
+    (root_folder, shared_enc_key) = result
+    
     shared_key = base64_to_a32(shared_enc_key)
     
     if not root_folder or not shared_key:

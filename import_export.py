@@ -125,7 +125,7 @@ def prep_config(protected_fields):
             add_tag_to_cards= [],
             use_notes=True,
             use_media=False,
-            ignore_deck_movement= True
+            ignore_deck_movement= False
         )
     for protected_field in protected_fields:
         model_name = protected_field['name']
