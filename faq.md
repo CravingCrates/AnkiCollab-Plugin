@@ -33,15 +33,16 @@ Currently, there is no way to delete individual cards from a deck uploaded to <a
 
 <details close>
 <summary><b>How do I delete a deck?</b></summary>
-There is currently no way to delete decks published to <a href="https://ankicollab.com/decks">AnkiCollab.com/Decks</a>. If you'd like a deck removed, please join our <a href="https://discord.gg/9x4DRxzqwM">Discord</a> and let us know! This feature is high on the priority list!
+You can delete a deck by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> at the bottom of the page you will have the option to delete the deck
 </details>
 
 <details close>
 <summary><b>How do I make a deck private?</b></summary>
-There is currently no way to upload a deck privately, but you can expect this soon!
+You can make a deck private by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have a checkbox to make the deck private (unlisted) by simply clicking that checkbox the deck will be made private
 </details>
 
 <details close>
 <summary><b>How do I put a description on the Deck Browser page on AnkiCollab?</b></summary>
-When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, please let us know in our <a href="https://discord.gg/9x4DRxzqwM">Discord</a> as this is currently a manual process.
+When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have the option to Update deck description. keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly
+
 </details>
