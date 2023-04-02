@@ -98,6 +98,10 @@ class ChangelogDialog(QDialog):
         layout.addWidget(label)
 
         changelog_text = QTextBrowser()
+        
+        if not changelog:
+            changelog = "The authors left no changelog message."
+            
         changelog_text.setPlainText(changelog)
         layout.addWidget(changelog_text)
 
