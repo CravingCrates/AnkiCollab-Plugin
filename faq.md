@@ -46,3 +46,10 @@ You can make a deck private by going to the Manage Decks option on the side-bar 
 When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have the option to Update deck description. keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly
 
 </details>
+
+<details close>
+  <summary><b> I messed up something in my deck. How do I let my subscribers know while I work on fixing it? </b></summary>
+  This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> there will be an option to add a changelog message as well as view your previous changelog messages (if you published any).
+ 
+
+  </details>
