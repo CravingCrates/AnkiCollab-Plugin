@@ -22,6 +22,11 @@ AnkiCollab does not upload media (images, audio, etc.) when publishing a deck or
 Deck settings — learning steps, new card limits, maximum interval, etc. — are not uploaded when publishing a deck. When a subscriber downloads a deck, their default deck options are assigned. If you want a subscriber to use specific settings, make a note of them in the deck description.
 </details>
 
+<details close>
+<summary><b>I changed the name of my deck/subdeck locally and now I get the error "No local deck ID"</b></summary>
+Deck names should correlate exactly to the name that is on AnkiCollab. Currently there is no way to change your local deck name and continue publishing/receiving changes. Watch out for future changes though ;)
+</details>
+
 ## Subscriber
 
 <details close>
@@ -46,3 +51,9 @@ You can make a deck private by going to the Manage Decks option on the side-bar 
 When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have the option to Update deck description. keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly
 
 </details>
+  
+<details close>
+  <summary><b>How do I change the deck name on Ankicollab?</b></summary>
+  The only way to do that currently is by messaging the Discord group with your request here: https://discord.com/invite/9x4DRxzqwM 
+  Keep in mind that when you change the deck name on AnkiCollab, you will also have to change your deck name locally. All your subscribers must also change their deck name locally to recieve changes.
+  </details>
