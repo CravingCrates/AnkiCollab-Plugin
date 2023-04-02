@@ -54,9 +54,13 @@ When you initially publish a deck, the deck description is also uploaded and can
 
 <details close>
 <summary><b> How can I inform my Subscribers about changes?</b></summary>
-This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the website side-bar -> select your deck in the page for the deck you are maintaining -> Add a changelog message as well as view your previous changelog messages (if you published any). 
+This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the website side-bar -> select your deck in the page for the deck you are maintaining -> Add a changelog message as well as view your previous changelog messages (if you published any).
+<br>
+<img src="https://i.imgur.com/T4kiBYI.png" width="50%">
   
-![Screenshot of AnkiCollab.com](https://i.imgur.com/T4kiBYI.png)
+  <br/><br/>
+  And subscribers will see a popup that lists all changes since they last updated:
+<img src="https://i.imgur.com/mpzDCEB.png" width="50%">
 
 <details close>
 <summary><b>How do I change the deck name on AnkiCollab?</b></summary>
