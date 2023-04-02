@@ -48,8 +48,10 @@ When you initially publish a deck, the deck description is also uploaded and can
 </details>
 
 <details close>
-  <summary><b> I messed up something in my deck. How do I let my subscribers know while I work on fixing it? </b></summary>
+  <summary><b> I messed something up in my deck. How do I let my subscribers know while I work on fixing it? </b></summary>
   This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> there will be an option to add a changelog message as well as view your previous changelog messages (if you published any).
- 
+ ![2023-04-02 13 33 26 ankicollab com 7e0c19e9c5ae](https://user-images.githubusercontent.com/70135155/229348427-0cc1b8c7-b84b-4575-930a-4f55aa0206eb.png)
+
+
 
   </details>
