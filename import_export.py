@@ -157,6 +157,15 @@ def show_changelog_popup(subscription):
         
 def import_webresult(webresult, input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
+    
+    #if webresult is empty, make popup to tell user that there are no updates
+    if not webresult:
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle("AnkiCollab")
+        msg_box.setText("You're already up-to-date!")
+        msg_box.exec()
+        return
+        
     for subscription in webresult:     
         if input_hash: # New deck
             deck_name = install_update(subscription)
