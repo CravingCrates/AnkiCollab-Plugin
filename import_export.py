@@ -264,7 +264,7 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
         if ok:
             rationale = options.index(selected)
         else:
-            aqt.utils.tooltip("Aborting due to lack of rationale", parent=mw)
+            aqt.utils.tooltip("Aborting due to lack of rationale", parent=QApplication.focusWidget())
             return
     submit_deck(deck, did, rationale)
 
