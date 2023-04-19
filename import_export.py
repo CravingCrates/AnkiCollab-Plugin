@@ -204,20 +204,18 @@ def submit_deck(deck, did, rationale):
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     parent = mw.col.decks.parents(did)
     if parent:
-        no_of_parents = len(parent)
-        iterator_standin = 0 #This int will count upwards with the iterator (least ugly solution I could find)
-        for i in parent: #Iterate through parent decks until you find the one that is on AnkiCollab
-            deckHash = get_hash_from_local_id(did) #This will return the hash if the lowest Subdeck is on AnkiCollab
+        parent_len = len(parent)
+        found = False
+        i = 0
+        while i < parent_len and not found:
+            deck_id = parent[parent_len - i - 1]["id"]
+            deckHash = get_hash_from_local_id(deck_id)
             if deckHash:
-                break
+                found = True
             else:
-                check_parent_id = parent[no_of_parents - iterator_standin - 1]["id"]
-                deckHash = get_hash_from_local_id(check_parent_id)
-                if deckHash:
-                    break
-                else:
-                    iterator_standin = iterator_standin + 1
-                    continue
+                i += 1
+        if not found:
+            deckHash = get_hash_from_local_id(did)
     else:
         deckHash = get_hash_from_local_id(did)
     deckPath =  mw.col.decks.name(did)
