@@ -191,7 +191,7 @@ def handle_pull(input_hash):
         else:            
             infot = "A Server Error occurred. Please notify us!"
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
-            
+
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
@@ -219,7 +219,7 @@ def submit_deck(deck, did, rationale):
         response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
         if response:
             print(response)
-            aqt.utils.tooltip(response.text, parent=mw)
+            aqt.utils.tooltip(response.text, parent=QApplication.focusWidget())
 
 def suggest_subdeck(did):
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
@@ -264,7 +264,7 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
         if ok:
             rationale = options.index(selected)
         else:
-            aqt.utils.tooltip("Aborting due to lack of rationale", parent=mw)
+            aqt.utils.tooltip("Aborting due to lack of rationale", parent=QApplication.focusWidget())
             return
     submit_deck(deck, did, rationale)
 
