@@ -211,7 +211,6 @@ def submit_deck(deck, did, rationale):
             if deckHash:
                 break
             else:
-                print('Checking parent ' + str(iterator_standin))
                 check_parent_id = parent[no_of_parents - iterator_standin - 1]["id"]
                 deckHash = get_hash_from_local_id(check_parent_id)
                 if deckHash:
