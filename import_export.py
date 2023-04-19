@@ -205,17 +205,12 @@ def submit_deck(deck, did, rationale):
     parent = mw.col.decks.parents(did)
     if parent:
         parent_len = len(parent)
-        found = False
         i = 0
-        while i < parent_len and not found:
+        deckHash = get_hash_from_local_id(did)
+        while i < parent_len and not deckHash:
             deck_id = parent[parent_len - i - 1]["id"]
             deckHash = get_hash_from_local_id(deck_id)
-            if deckHash:
-                found = True
-            else:
-                i += 1
-        if not found:
-            deckHash = get_hash_from_local_id(did)
+            i += 1
     else:
         deckHash = get_hash_from_local_id(did)
     deckPath =  mw.col.decks.name(did)
