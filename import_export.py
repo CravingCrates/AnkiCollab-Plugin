@@ -204,7 +204,13 @@ def submit_deck(deck, did, rationale):
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     parent = mw.col.decks.parents(did)
     if parent:
-        deckHash = get_hash_from_local_id(parent[0]["id"])
+        parent_len = len(parent)
+        i = 0
+        deckHash = get_hash_from_local_id(did)
+        while i < parent_len and not deckHash:
+            deck_id = parent[parent_len - i - 1]["id"]
+            deckHash = get_hash_from_local_id(deck_id)
+            i += 1
     else:
         deckHash = get_hash_from_local_id(did)
     deckPath =  mw.col.decks.name(did)
