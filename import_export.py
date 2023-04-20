@@ -200,10 +200,10 @@ def get_hash_from_local_id(deck_id):
                 return hash
     return
 
-def submit_deck(deck, did, rationale):    
-    deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
+def get_deck_hash_from_did(did):
+    deckHash = get_hash_from_local_id(did)
     parent = mw.col.decks.parents(did)
-    if parent:
+    if not deckHash and parent:
         parent_len = len(parent)
         i = 0
         deckHash = get_hash_from_local_id(did)
@@ -211,8 +211,11 @@ def submit_deck(deck, did, rationale):
             deck_id = parent[parent_len - i - 1]["id"]
             deckHash = get_hash_from_local_id(deck_id)
             i += 1
-    else:
-        deckHash = get_hash_from_local_id(did)
+    return deckHash
+
+def submit_deck(deck, did, rationale):    
+    deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
+    deckHash = get_deck_hash_from_did(did)
     deckPath =  mw.col.decks.name(did)
     
     if deckHash is None:
@@ -234,8 +237,14 @@ def suggest_subdeck(did):
     
     disambiguate_note_model_uuids(aqt.mw.col)
     deck = deck_initializer.from_collection(aqt.mw.col, deck.name)
-    note_sorter = NoteSorter(ConfigSettings.get_instance())
-    note_sorter.sort_deck(deck)
+    
+    deckHash = get_deck_hash_from_did(did)
+    response = requests.get("https://plugin.ankicollab.com/GetDeckTimestamp/" + deckHash)
+    
+    if response and response.status_code == 200:
+        last_updated = float(response.text)
+        deck_initializer.remove_unchanged_notes(deck, last_updated)
+    
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
     submit_deck(deck, did, 9) # 9: Bulk Suggestion rationale

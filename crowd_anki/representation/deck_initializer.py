@@ -33,6 +33,15 @@ def from_collection(collection, name, deck_metadata=None, is_child=False) -> Dec
 
     return deck
 
+def remove_unchanged_notes(deck, timestamp) -> None:
+    if deck is None:
+        return
+    
+    deck.notes = [note for note in deck.notes if note.anki_object.mod > timestamp]
+    
+    for child in deck.children:
+        remove_unchanged_notes(child, timestamp)
+    
 
 def from_json(json_dict, deck_metadata=None) -> Deck:
     """load metadata, load notes, load children"""
