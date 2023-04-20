@@ -72,6 +72,17 @@ def update_timestamp(deck_hash):
                 details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         mw.addonManager.writeConfig(__name__, strings_data)        
 
+def get_timestamp(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:        
+        for sub, details in strings_data.items():
+            if sub == deck_hash:
+                date_string = details["timestamp"]
+                datetime_obj = datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
+                unix_timestamp = datetime_obj.timestamp()
+                return unix_timestamp
+    return None
+
 def install_update(subscription):    
     media_url = subscription['media_url']
     deck = deck_initializer.from_json(subscription['deck'])
@@ -243,7 +254,10 @@ def suggest_subdeck(did):
     
     if response and response.status_code == 200:
         last_updated = float(response.text)
-        deck_initializer.remove_unchanged_notes(deck, last_updated)
+        last_pulled = get_timestamp(deckHash)
+        if last_pulled is None:
+            last_pulled = 0.0
+        deck_initializer.remove_unchanged_notes(deck, last_updated, last_pulled)
     
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
