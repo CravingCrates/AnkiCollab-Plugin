@@ -3,6 +3,7 @@ import os
 import sys
 
 from sys import platform
+
 if platform == "linux" or platform == "linux2":
     sys.path.append(os.path.join(os.path.dirname(__file__), "dist/linux"))
 elif platform == "darwin":
@@ -24,6 +25,9 @@ from concurrent.futures import Future
 from .thread import run_function_in_thread
 from .import_export import *
 
+from .media_import import on_media_btn
+from .media_export import add_browser_menu_item, on_deck_browser_will_show_options_menu
+
 collab_menu = QMenu('AnkiCollab', mw)
 mw.form.menubar.addMenu(collab_menu)
 
@@ -38,6 +42,10 @@ collab_menu.addAction(pull_changes_action)
 
 website_action = QAction('Open Website', mw)
 collab_menu.addAction(website_action)
+
+media_import_action = QAction('Import Media from Folder', mw)
+collab_menu.addAction(media_import_action)
+media_import_action.triggered.connect(on_media_btn)
 
 donation_action = QAction('Support us', mw)
 collab_menu.addAction(donation_action)
@@ -90,16 +98,15 @@ def onProfileLoaded():
     aqt.utils.tooltip("Retrieving latest data from AnkiCollab...")
     run_function_in_thread(request_update)
 
-def on_syncing_done(future: Future):
-        if exc := future.exception():
-            raise exc
-        aqt.utils.tooltip("AnkiCollab: Done.")
-        
 #gui_hooks.profile_did_open.append(onProfileLoaded)
 gui_hooks.add_cards_did_init.append(init_add_card)
 gui_hooks.editor_did_init_buttons.append(init_editor_card)
 gui_hooks.add_cards_did_add_note.append(make_new_card)
 
+gui_hooks.deck_browser_will_show_options_menu.append(
+    on_deck_browser_will_show_options_menu
+)
+gui_hooks.browser_menus_did_init.append(add_browser_menu_item)
 
 def delete_selected_rows(table):
     strings_data = mw.addonManager.getConfig(__name__)
