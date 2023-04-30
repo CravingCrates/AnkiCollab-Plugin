@@ -70,22 +70,23 @@ Keep in mind that when you change the deck name on AnkiCollab, you will also hav
 
 <details close>
 <summary><b>How can I use Optional Tags on AnkiCollab?</b></summary>
-Optional Tags are a cool way to make your Deck Tagstructure less crowded. Imagine your deck is used by 3 different schools and each school has the cards tagged according to their school curriculum. Not all subscribers want to have all these curriculums in their local collection because it makes it a lot less readable. 
+Optional Tags are a cool way to make your Deck Tag Structure less crowded. Imagine your deck is used by 3 different schools and each school has the cards tagged according to their school curriculum. Not all subscribers want to have all these curriculums in their local collection because it makes it a lot less readable. 
 To solve that issue, you can use Optional Tags! These tags are only synchronized to the users that subscribed to them.
 <br /><br />
-To create a new Optional Tag group, navigate to the AnkiCollab.com Website > Manage Decks > Select your Deck > Optional Tags: Show All.
+To create a new Optional Tag group, navigate to the AnkiCollab Website > Manage Decks > Select your Deck > Optional Tags: Show All.
 
 <br />
 This will bring you to a page like this:
+<br />
 <img src="https://cdn.discordapp.com/attachments/1066468817351483502/1102317974511177858/RynkViW.png" width="50%">
 
-Here you can add the new Tag Groups you want to use.
+Here you can add the new Tag Groups you want to use (For example, one for each school).
 
-After you've added it, go ahead and open Anki!
+After you've added these, go ahead and open Anki!
 
-To classify a tag as a "optional tag" it needs the prefix <code>AnkiCollab_Optional::</code> followed by the tag group you just specified on the website.
+To classify a tag as an "optional tag" it needs the prefix <code>AnkiCollab_Optional::</code> followed by the tag group you just specified on the website.
 
-A example tag could look like this:
+An example tag could look like this:
 <br />
 <img src="https://i.imgur.com/aRknj1g.png" width="50%">
 
@@ -93,7 +94,7 @@ Now you can go ahead and tag your notes to your liking and the subscribers will 
 <br />
 <img src="https://cdn.discordapp.com/attachments/1066468817351483502/1102317974846718072/ZGS1WNr.png" width="50%">
 
-and if they choose to subscribe to the ASU Tag, they will find all the tagged cards according to your structure in their collection, but none of the tags they haven't subscribed to!
+and if they choose to subscribe to the ASU Tag, they will find all the tagged cards in their collection, but none of the tags they haven't subscribed to!
 <br />
 <img src="https://i.imgur.com/L0vmXlP.png" width="50%"> 
 
