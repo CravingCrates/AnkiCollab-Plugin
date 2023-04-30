@@ -40,7 +40,7 @@ def remove_unchanged_notes(deck, timestamp, timestamp2) -> None:
     deck.notes = [note for note in deck.notes if note.anki_object.mod > timestamp or note.anki_object.mod > timestamp2]
     
     for child in deck.children:
-        remove_unchanged_notes(child, timestamp)
+        remove_unchanged_notes(child, timestamp, timestamp2)
     
 
 def from_json(json_dict, deck_metadata=None) -> Deck:

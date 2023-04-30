@@ -1,3 +1,4 @@
+import re
 import anki
 import anki.utils
 from anki.notes import Note as AnkiNote
@@ -139,3 +140,13 @@ class Note(JsonSerializableAnkiObject):
 
         # Tag Cards on Import
         self.anki_object_dict["tags"] += import_config.add_tag_to_cards
+        
+        # Remove unused optional tags
+        if import_config.has_optional_tags:
+            for tag in self.anki_object_dict["tags"]:
+                if tag.startswith('AnkiCollab_Optional::'):
+                    if tag.split('::')[1] not in import_config.optional_tags:
+                        self.anki_object_dict["tags"].remove(tag)
+                    
+
+        

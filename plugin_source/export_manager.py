@@ -1,12 +1,6 @@
-from collections import defaultdict
-from dataclasses import dataclass, field
-from enum import Enum
 import json
 import requests
-from datetime import datetime, timedelta
 
-from pprint import pp
-from typing import List
 
 import aqt
 import aqt.utils
@@ -14,6 +8,11 @@ import anki
 
 from aqt.qt import *
 from aqt import mw
+
+from datetime import datetime, timedelta
+import base64
+import gzip
+
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
 from .crowd_anki.representation.note import Note
@@ -26,52 +25,6 @@ from .crowd_anki.representation import deck_initializer
 from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
 
-import base64
-import gzip
-
-@dataclass
-class ConfigEntry:
-    config_name: str
-    default_value: any
-
-@dataclass
-class PersonalFieldsHolder:
-    personal_fields: defaultdict = field(init=False, default_factory=lambda: defaultdict(list))
-
-    def is_personal_field(self, model_name, field_name):
-        if model_name in self.personal_fields:
-            if field_name in self.personal_fields[model_name]:
-                return True
-        return False
-
-    def add_field(self, model_name, field_name):
-        self.personal_fields[model_name].append(field_name)
-
-@dataclass
-class ImportConfig(PersonalFieldsHolder):
-    add_tag_to_cards: List[str]
-
-    use_notes: bool
-    use_media: bool
-
-    ignore_deck_movement: bool
-
-def get_local_deck_from_hash(input_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        for hash, details in strings_data.items():
-            if hash == input_hash:
-                return mw.col.decks.name(details["deckId"])
-    return "None"
-
-def update_timestamp(deck_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:        
-        for sub, details in strings_data.items():
-            if sub == deck_hash:
-                details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        mw.addonManager.writeConfig(__name__, strings_data)        
-
 def get_timestamp(deck_hash):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:        
@@ -82,126 +35,6 @@ def get_timestamp(deck_hash):
                 unix_timestamp = datetime_obj.timestamp()
                 return unix_timestamp
     return None
-
-def install_update(subscription):    
-    media_url = subscription['media_url']
-    deck = deck_initializer.from_json(subscription['deck'])
-    config = prep_config(subscription['protected_fields'])
-    deck.save_to_collection(media_url, aqt.mw.col, import_config=config)
-    return deck.anki_dict["name"]
-    
-def abort_update(deck_hash):
-    update_timestamp(deck_hash)
-
-def postpone_update():
-    pass
-        
-class ChangelogDialog(QDialog):
-    def __init__(self, changelog, deck_hash):
-        super().__init__()
-        local_name = get_local_deck_from_hash(deck_hash)
-        self.setWindowTitle(f"Changelog for Deck {local_name}")
-        self.setModal(True)
-
-        layout = QVBoxLayout()
-
-        label = QLabel("The following changes are available:")
-        layout.addWidget(label)
-
-        changelog_text = QTextBrowser()
-        
-        if not changelog:
-            changelog = "The authors left no changelog message."
-            
-        changelog_text.setPlainText(changelog)
-        layout.addWidget(changelog_text)
-
-        button_box = QDialogButtonBox()
-        install_button = button_box.addButton("Install", QDialogButtonBox.ButtonRole.AcceptRole)
-        later_button = button_box.addButton("Later", QDialogButtonBox.ButtonRole.RejectRole)
-        skip_button = QPushButton("Skip")
-        button_box.addButton(skip_button, QDialogButtonBox.ButtonRole.ActionRole)
-
-        layout.addWidget(button_box)
-
-        self.setLayout(layout)
-
-        install_button.clicked.connect(self.accept)
-        later_button.clicked.connect(self.reject)
-        skip_button.clicked.connect(self.skip_update)
-
-        self.adjustSize()
-
-    def skip_update(self):
-        self.done(2)
-
-def prep_config(protected_fields):
-    config = ImportConfig(
-            add_tag_to_cards= [],
-            use_notes=True,
-            use_media=False,
-            ignore_deck_movement= False
-        )
-    for protected_field in protected_fields:
-        model_name = protected_field['name']
-        for field in protected_field['fields']:
-            field_name = field['name']
-            config.add_field(model_name, field_name)
-
-    return config
-
-def show_changelog_popup(subscription):
-    changelog = subscription['changelog']
-    deck_hash = subscription['deck_hash']
-      
-    dialog = ChangelogDialog(changelog, deck_hash)
-    choice = dialog.exec()
-
-    if choice == QDialog.DialogCode.Accepted:
-        install_update(subscription)
-        update_timestamp(deck_hash)
-    elif choice == QDialog.DialogCode.Rejected:
-        postpone_update()
-    else:
-        abort_update(deck_hash)
-
-        
-def import_webresult(webresult, input_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    
-    #if webresult is empty, make popup to tell user that there are no updates
-    if not webresult:
-        msg_box = QMessageBox()
-        msg_box.setWindowTitle("AnkiCollab")
-        msg_box.setText("You're already up-to-date!")
-        msg_box.exec()
-        return
-        
-    for subscription in webresult:     
-        if input_hash: # New deck
-            deck_name = install_update(subscription)
-            for hash, details in strings_data.items():
-                if details["deckId"] == 0 and hash == input_hash: # should only be the case once when they add a new subscription and never ambiguous
-                    details["deckId"] = aqt.mw.col.decks.id(deck_name)
-                    # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
-                    details["timestamp"] = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
-
-            mw.addonManager.writeConfig(__name__, strings_data)
-        else: # Update deck
-            show_changelog_popup(subscription)
-
-def handle_pull(input_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data is not None and len(strings_data) > 0:
-        response = requests.post("https://plugin.ankicollab.com/pullChanges", json=strings_data if input_hash is None else {input_hash: strings_data[input_hash]})
-        if response.status_code == 200:
-            compressed_data = base64.b64decode(response.content)
-            decompressed_data = gzip.decompress(compressed_data)
-            webresult = json.loads(decompressed_data.decode('utf-8'))
-            aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash))
-        else:            
-            infot = "A Server Error occurred. Please notify us!"
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
 
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)
@@ -238,7 +71,6 @@ def submit_deck(deck, did, rationale):
         headers = {"Content-Type": "application/json"}
         response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
         if response:
-            print(response)
             aqt.utils.tooltip(response.text, parent=QApplication.focusWidget())
 
 def suggest_subdeck(did):
@@ -335,7 +167,6 @@ def handle_export(did, email) -> str:
         msg_box.setText("Deck is too big! Please reach out via Discord")
         msg_box.exec()        
     else:
-        print(response.text)
         msg_box = QMessageBox()
         msg_box.setText("Unexpected Server response: " + str(response.status_code))
         msg_box.exec()

@@ -23,7 +23,9 @@ import webbrowser
 from concurrent.futures import Future
 
 from .thread import run_function_in_thread
-from .import_export import *
+
+from .export_manager import *
+from .import_manager import *
 
 from .media_import import on_media_btn
 from .media_export import add_browser_menu_item, on_deck_browser_will_show_options_menu
@@ -126,15 +128,16 @@ def add_to_table(line_edit, table, dialog):
     if string:
         strings_data[string] = {
             'timestamp': '2022-12-31 23:59:59',
-            'deckId': 0
+            'deckId': 0,
+            'optional_tags': {}
         }
         mw.addonManager.writeConfig(__name__, strings_data)
         line_edit.setText('')
         num_rows = table.rowCount()
         table.insertRow(num_rows)
         table.setItem(num_rows, 0, QTableWidgetItem(string))
-        handle_pull(string)
         dialog.accept()
+        handle_pull(string)
         #on_edit_list() # we could reopen the dialog with updated data
 
 def get_local_deck_from_hash(input_hash):
