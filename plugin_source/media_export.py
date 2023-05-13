@@ -43,6 +43,8 @@ def export_with_progress(
     parent: QWidget, exporter: MediaExporter, note_count: int
 ) -> None:
     folder = get_export_folder(parent)
+    if not folder:
+        return
     want_cancel = False
 
     def export_task() -> int:
@@ -79,33 +81,3 @@ def export_with_progress(
     mw.progress.start(label="Exporting media...", parent=parent)
     mw.progress.set_title("AnkiCollab")
     mw.taskman.run_in_background(export_task, on_done=on_done)
-
-
-def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
-    """Adds a menu item under the gears icon to export a deck's media files."""
-
-    def export_media() -> None:
-        config = mw.addonManager.getConfig(__name__)
-        field = get_configured_search_field(config)
-        exts = get_configured_exts(config)
-        exporter = DeckMediaExporter(mw.col, DeckId(did), field, exts)
-        note_count = mw.col.decks.card_count([DeckId(did)], include_subdecks=True)
-        export_with_progress(mw, exporter, note_count)
-
-    action = menu.addAction("Export Media")
-    qconnect(action.triggered, export_media)
-    
-
-def add_browser_menu_item(browser: Browser) -> None:
-    def export_selected() -> None:
-        config = mw.addonManager.getConfig(__name__)
-        field = get_configured_search_field(config)
-        exts = get_configured_exts(config)
-        selected_notes = [mw.col.get_note(nid) for nid in browser.selected_notes()]
-        exporter = NoteMediaExporter(mw.col, selected_notes, field, exts)
-        note_count = len(selected_notes)
-        export_with_progress(browser, exporter, note_count)
-
-    action = QAction("Export Media", browser)
-    qconnect(action.triggered, export_selected)
-    browser.form.menu_Notes.addAction(action)

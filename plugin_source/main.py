@@ -1,15 +1,26 @@
 
 import os
 import sys
+import importlib
 
 from sys import platform
 
-if platform == "linux" or platform == "linux2":
-    sys.path.append(os.path.join(os.path.dirname(__file__), "dist/linux"))
-elif platform == "darwin":
-    sys.path.append(os.path.join(os.path.dirname(__file__), "dist/osx"))
-elif platform == "win32":
-    sys.path.append(os.path.join(os.path.dirname(__file__), "dist/win"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
+google_path = os.path.join(os.path.dirname(__file__), "dist", "google")
+source = os.path.join(google_path, "__init__.py")
+spec = importlib.util.spec_from_file_location(
+    "google", source, submodule_search_locations=[]
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules["google"] = module
+spec.loader.exec_module(module)
+
+# if platform == "linux" or platform == "linux2":
+#     sys.path.append(os.path.join(os.path.dirname(__file__), "dist/linux"))
+# elif platform == "darwin":
+#     sys.path.append(os.path.join(os.path.dirname(__file__), "dist/osx"))
+# elif platform == "win32":
+#     sys.path.append(os.path.join(os.path.dirname(__file__), "dist/win"))
 
 from aqt import gui_hooks, mw
 from aqt.browser import SidebarTreeView, SidebarItem, SidebarItemType
@@ -28,7 +39,7 @@ from .export_manager import *
 from .import_manager import *
 
 from .media_import import on_media_btn
-from .media_export import add_browser_menu_item, on_deck_browser_will_show_options_menu
+from .gear_menu_setup import add_browser_menu_item, on_deck_browser_will_show_options_menu
 
 collab_menu = QMenu('AnkiCollab', mw)
 mw.form.menubar.addMenu(collab_menu)
@@ -129,7 +140,8 @@ def add_to_table(line_edit, table, dialog):
         strings_data[string] = {
             'timestamp': '2022-12-31 23:59:59',
             'deckId': 0,
-            'optional_tags': {}
+            'optional_tags': {},
+            'gdrive': {},
         }
         mw.addonManager.writeConfig(__name__, strings_data)
         line_edit.setText('')

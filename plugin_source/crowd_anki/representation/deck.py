@@ -10,7 +10,6 @@ from ..utils import utils
 from ..utils.constants import UUID_FIELD_NAME
 from ..utils.uuid import UuidFetcher
 from ..utils.notifier import AnkiModalNotifier
-from ...mega_downloader import download_media_from_url
 from ...thread import run_function_in_thread
 
 import os
@@ -21,17 +20,6 @@ from aqt.utils import showInfo
 from aqt import mw
 
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
-
-def handle_media_import(media_url, media_files):
-    # Get the directory path
-    dir_path = aqt.mw.col.media.dir()
-    missing_files = []
-    for file_name in media_files:
-        if not os.path.exists(os.path.join(dir_path, file_name)):
-            missing_files.append(file_name)
-    # Download the missing files
-    if len(missing_files) > 0:
-        download_media_from_url(media_url, missing_files, dir_path)
 
 class Deck(JsonSerializableAnkiDict):
     DECK_NAME_DELIMITER = "::"
@@ -154,18 +142,19 @@ class Deck(JsonSerializableAnkiDict):
         self.metadata = DeckMetadata(new_deck_configs, new_models)
         
     def on_success(self, count: int) -> None:
-        showInfo(f"AnkiCollab: {count} Notes updated.")
+        mw.progress.finish()
         mw.reset()
+        showInfo(f"AnkiCollab: {count} Notes updated.")
         
-    def save_to_collection(self, media_url, collection, import_config: ImportConfig):
+    def save_to_collection(self, collection, import_config: ImportConfig):
         self.save_metadata(collection)
         op = QueryOp(
             parent=mw,
-            op=lambda collection=collection, parent_name="", model_map_cache=defaultdict(dict), import_config=import_config, media_url=media_url: self.save_decks_and_notes(collection=collection,
+            op=lambda collection=collection, parent_name="", model_map_cache=defaultdict(dict), import_config=import_config: self.save_decks_and_notes(collection=collection,
                                   parent_name=parent_name,
                                   model_map_cache=model_map_cache,
-                                  import_config=import_config,
-                                  media_url=media_url),
+                                  import_config=import_config
+                                  ),
             success=self.on_success,
         )
         op.with_progress("Synchronizing...").run_in_background()
@@ -179,7 +168,7 @@ class Deck(JsonSerializableAnkiDict):
             
         self._save_deck(collection, "") # We store the root deck in this thread to avoid concurrency issues
         
-    def save_decks_and_notes(self, collection, parent_name, model_map_cache, import_config: ImportConfig, media_url):
+    def save_decks_and_notes(self, collection, parent_name, model_map_cache, import_config: ImportConfig):
         full_name = self._save_deck(collection, parent_name) # duplicated call for root deck, but thats fine
         
         for note in self.notes:
@@ -189,14 +178,8 @@ class Deck(JsonSerializableAnkiDict):
             child.save_decks_and_notes(collection=collection,
                                        parent_name=full_name,
                                        model_map_cache=model_map_cache,
-                                       import_config=import_config,
-                                       media_url=media_url
-                                       )
-
-        # Import Media if the url is not an empty string
-        if media_url:
-            run_function_in_thread(handle_media_import, media_url, self.media_files)
-        
+                                       import_config=import_config
+                                       )        
         return self.get_note_count()
 
     def _save_deck(self, collection, parent_name):        

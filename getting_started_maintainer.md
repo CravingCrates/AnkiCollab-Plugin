@@ -40,6 +40,8 @@ Click on the deck and you can see all the cards as well as the **subscription ke
 
 Congratulations! The deck is ready to be shared. All they need is the subscription key — no account required! 👍
 
+Next, if you want to have media supported in your deck, check out the ![Google Drive Guide](https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/google_drive_guide.md) we wrote!
+
 ## Handling Suggestions
 
 As a maintainer, you are responsible for approving or denying changes. There are multiple types, and we'll cover them all here.

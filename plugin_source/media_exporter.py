@@ -65,6 +65,19 @@ class MediaExporter(ABC):
                 shutil.copyfile(src_path, dest_path)
                 exported.add(filename)
             yield len(exported), filenames
+            
+    def get_list_of_media(self):
+        """
+        Return a list of media files used by the deck.
+        """
+        seen = set()
+        for filenames in self.file_lists():
+            for filename in filenames:
+                if filename in seen:
+                    continue
+                seen.add(filename)
+        return seen
+        
 
 
 class NoteMediaExporter(MediaExporter):

@@ -29,8 +29,9 @@ def copy_content(input_path: str) -> None:
                 
 
 def on_success(count: int) -> None:
-    aqt.utils.showInfo(f"AnkiCollab: {count} Media Files imported.")
     mw.col.media.check()
+    mw.progress.finish()
+    aqt.utils.showInfo(f"AnkiCollab: {count} Media Files imported.")
         
 def import_media(path: str):
     op = QueryOp(

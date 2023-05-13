@@ -1,4 +1,5 @@
 import json
+import os
 import requests
 
 
@@ -8,10 +9,15 @@ import anki
 
 from aqt.qt import *
 from aqt import mw
+import aqt.utils
+from aqt.operations import QueryOp
 
 from datetime import datetime, timedelta
 import base64
 import gzip
+
+from .google_drive_api import GoogleDriveAPI
+from .thread import run_function_in_thread
 
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
@@ -36,6 +42,16 @@ def get_timestamp(deck_hash):
                 return unix_timestamp
     return None
 
+def get_gdrive_data(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:        
+        for sub, details in strings_data.items():
+            if sub == deck_hash:                
+                if "gdrive" not in details or len(details["gdrive"]) == 0:
+                    return None
+                return details["gdrive"]
+    return None
+
 def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
@@ -57,21 +73,58 @@ def get_deck_hash_from_did(did):
             i += 1
     return deckHash
 
-def submit_deck(deck, did, rationale):    
+def do_nothing(count: int):
+    pass
+
+def submit_with_progress(deck, did, rationale):
+    op = QueryOp(
+        parent=mw,
+        op=lambda _: submit_deck(deck, did, rationale, False),
+        success=do_nothing,
+    )
+    op.with_progress("Uploading to AnkiCollab...").run_in_background()
+
+def upload_media_to_gdrive(deck_hash, media_files):
+    gdrive_data = get_gdrive_data(deck_hash)
+    if gdrive_data is not None:
+        api = GoogleDriveAPI(
+            service_account=gdrive_data['service_account'],
+            folder_id=gdrive_data['folder_id'],
+        )
+        existing_media = api.list_media_files_in_folder()
+        
+        # only upload media that is not already on the drive and that we have locally
+        dir_path = aqt.mw.col.media.dir()
+        missing_media = [media for media in media_files if not any(media_name['name'] == media for media_name in existing_media) and os.path.exists(os.path.join(dir_path, media))]
+        
+        api.upload_files_to_folder(dir_path, missing_media)
+    else:
+        if len(media_files) > 0:
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck."))
+            
+def submit_deck(deck, did, rationale, media_async = True):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     deckHash = get_deck_hash_from_did(did)
     deckPath =  mw.col.decks.name(did)
     
     if deckHash is None:
-        aqt.utils.tooltip("Config Error: No local deck id")
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Config Error: No local deck id"))
     else:
         data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res, "rationale": rationale}
         compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
         based_data = base64.b64encode(compressed_data)
         headers = {"Content-Type": "application/json"}
         response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
+        
+        # Hacky, but for bulk suggestions we want the progress bar to include media files, 
+        # but for single suggestions we can run it in the background to make it a smoother experience    
+        if media_async: 
+            run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list())
+        else:
+            upload_media_to_gdrive(deckHash, deck.get_media_file_list())
+            
         if response:
-            aqt.utils.tooltip(response.text, parent=QApplication.focusWidget())
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
 
 def suggest_subdeck(did):
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
@@ -93,7 +146,7 @@ def suggest_subdeck(did):
     
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
-    submit_deck(deck, did, 9) # 9: Bulk Suggestion rationale
+    submit_with_progress(deck, did, 9) # 9: Bulk Suggestion rationale
     
 def prep_suggest_card(note: anki.notes.Note, rationale):
     # i'm in the ghetto, help
@@ -125,13 +178,18 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
         if ok:
             rationale = options.index(selected)
         else:
-            aqt.utils.tooltip("Aborting due to lack of rationale", parent=QApplication.focusWidget())
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Aborting due to lack of rationale", parent=QApplication.focusWidget()))
             return
     submit_deck(deck, did, rationale)
 
 def make_new_card(note: anki.notes.Note):
     if mw.form.invokeAfterAddCheckbox.isChecked():
-        prep_suggest_card(note, 6) # 6 New card to add rationale
+        op = QueryOp(
+            parent=mw,
+            op=lambda _: prep_suggest_card(note, 6), # 6 New card rationale
+            success=do_nothing,
+        )
+        op.run_in_background()
         
 def handle_export(did, email) -> str:
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
@@ -157,7 +215,7 @@ def handle_export(did, email) -> str:
         if res["status"] == 0:
             msg_box.setText(res["message"])
         else:
-            msg_box.setText("Deck published! Thanks for sharing!")
+            msg_box.setText("Deck published! Thanks for sharing! Please upload the media manually to Google Drive")
         msg_box.exec()
         
         if res["status"] == 1:
@@ -172,6 +230,3 @@ def handle_export(did, email) -> str:
         msg_box.exec()
     
     return ""
-
-def onAddCard():
-    deck = aqt.mw.col.decks.current()['name']
