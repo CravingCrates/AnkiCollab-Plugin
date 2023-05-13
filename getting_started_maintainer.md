@@ -4,6 +4,7 @@
   - [Publishing a Deck](#publishing-a-deck)
     - [Signing Up for AnkiCollab](#signing-up-for-ankicollab)
     - [Adding a Deck to AnkiCollab](#adding-a-deck-to-ankicollab)
+    - [Add Media Support](#media-support)
   - [Handling Suggestions](#handling-suggestions)
     - [Content Changes](#content-changes)
   - [Credits](#credits)
@@ -40,7 +41,9 @@ Click on the deck and you can see all the cards as well as the **subscription ke
 
 Congratulations! The deck is ready to be shared. All they need is the subscription key — no account required! 👍
 
-Next, if you want to have media supported in your deck, check out the ![Google Drive Guide](https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/google_drive_guide.md) we wrote!
+## Media Support
+
+Next, if you want to have media supported in your deck, check out the ![Google Drive Guide](https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/google_drive_guide.md#how-to-set-up-google-drive-with-ankicollab) we wrote!
 
 ## Handling Suggestions
 

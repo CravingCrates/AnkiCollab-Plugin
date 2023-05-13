@@ -2,6 +2,7 @@
 
 AnkiCollab is a collaborative tool for sharing Anki decks. It allows you to share your decks with your subscribers and create a collaborative community of users who can contribute and learn together. However, one of the limitations of AnkiCollab is that it doesn't support media files directly, and this can be a problem if your decks rely heavily on images or audio. Fortunately, you can use Google Drive to store and share your media files with your subscribers. In this guide, we'll walk you through the steps to set up Google Drive with AnkiCollab.
 
+If you follow this guide, it will take you roughly 5-10 minutes to set up full media support for your deck and you won't have to spend another second thinking about it afterwards.
 ## Step 1: Create a Google Account
 
 If you don't have a Google account, you'll need to create one. You can use your existing Google account, but we recommend creating a new one so that your subscribers will have limited access to it.
