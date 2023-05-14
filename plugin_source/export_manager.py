@@ -47,7 +47,7 @@ def get_gdrive_data(deck_hash):
     if strings_data:        
         for sub, details in strings_data.items():
             if sub == deck_hash:                
-                if "gdrive" not in details or len(details["gdrive"]) == 0:
+                if "gdrive" not in details or len(details["gdrive"]) == 0 or details["gdrive"]["folder_id"] == "":
                     return None
                 return details["gdrive"]
     return None

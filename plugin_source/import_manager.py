@@ -160,7 +160,7 @@ def install_update(subscription):
     deck.save_to_collection(aqt.mw.col, import_config=config)
     
     # Handle Media
-    if subscription['gdrive']['service_account'] != "":
+    if gdrive_folder != "":
         update_gdrive_data(subscription['deck_hash'], subscription['gdrive'])
         api = GoogleDriveAPI(
             service_account=service_account,

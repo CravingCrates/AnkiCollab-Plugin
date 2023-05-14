@@ -27,28 +27,40 @@ class GoogleDriveAPI:
             self.SERVICE_ACCOUNT,
             scopes=self.SCOPES
         )
-    
-    def _handle_http_error(self, error):
-        data = error.read()
-        error = json.loads(data.decode('utf-8'))
-        print(error['error']['message'])
         
+    def _handle_http_error(self, error):
+        if isinstance(error, HttpError):
+            error_message = error._get_reason()
+        else:
+            error_message = str(error)
+        print(f"An error occurred: {error_message}")
+
     def _set_up_service(self):
         self.service = build('drive', 'v3', credentials=self.creds)
-           
+          
+    def chunks(self, lst, chunk_size):
+        """Yield successive chunk_size-sized chunks from lst."""
+        for i in range(0, len(lst), chunk_size):
+            yield lst[i:i + chunk_size]
+             
     def download_selected_files_as_zip(self, file_names, local_folder_path, download_progress_cb=None):
-        query = f"("
-        query += " or ".join([f"name='{file_name}'" for file_name in file_names])
-        query += ")"
-        return self._download_files_by_query(query, local_folder_path, download_progress_cb)
-    
+        files = []
+        for chunk in self.chunks(file_names, 100):  # break up file_names into chunks of 100
+            query = f"("
+            query += " or ".join([f"name='{file_name}'" for file_name in chunk])
+            query += ")"
+            files.extend(self.query_files(query))
+        return self._download_files(files, local_folder_path, download_progress_cb)
+
+            
     def query_files(self, query):
         files = []
         try:            
             page_token = None
             while True:
                 response = self.service.files().list(q=query,
-                                                spaces='drive',
+                                                supportsAllDrives=True,
+                                                includeItemsFromAllDrives=True,
                                                 fields='nextPageToken, '
                                                     'files(id, name)',
                                                 pageToken=page_token).execute()
@@ -66,11 +78,9 @@ class GoogleDriveAPI:
         query = f"mimeType contains 'image/' or mimeType contains 'video/' or mimeType contains 'audio/'"
         return self.query_files(query)
     
-    def _download_files_by_query(self, query, local_folder_path, download_progress_cb) -> int:
+    def _download_files(self, items, local_folder_path, download_progress_cb) -> int:
         try:                
-            items = self.query_files(query)
-
-            if items is None:
+            if items is None or len(items) == 0:
                 print('No media files found.')
                 return -1
     

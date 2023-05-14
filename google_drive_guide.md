@@ -106,9 +106,12 @@ Finally, hit "Save" and you're done!
 
 Note that you and your subscribers need to sync on Anki with Ankicollab, and the next time somebody creates a new card with a media file, it will automatically be uploaded to the Google Drive folder.
 
-If you don't start from scratch with your deck, you can export the existing media from your deck and upload it to the Google Drive folder manually. This way, all media files will be downloaded automatically the next time a subscriber syncs.
+If you don't start from scratch with your deck, you can simply "bulk suggest" the entire deck and it will upload all media files from your local collection to the google drive folder.
+To do that, open the Browser in Anki and Right-click on your deck and click "Suggest on AnkiCollab". This will both upload any changes to AnkiCollab.com and all media files to Google Drive.
+![bulk upload media](https://i.imgur.com/vmV4YLU.png)
 
-Your existing subscribers who had to live without media so far can quickly download all media files with one button.
+
+Your existing subscribers can quickly download all media files with one button.
 
 ![download media](https://i.imgur.com/mQ2fc7t.png)
 
