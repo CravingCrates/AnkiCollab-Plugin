@@ -71,13 +71,13 @@ The folder should now have two people with access: you and your service account.
 ![folder access](https://i.imgur.com/rAzqXVe.png)
 
 Bonus Step:
-If you want to enable everyone on the Ankicollab website to view the media files, you can allow "General access" to "Anyone with the link" by clicking "Manage access" again.
+If you want to enable everyone on the AnkiCollab website to view the media files, you can allow "General access" to "Anyone with the link" by clicking "Manage access" again.
 
 ![general access](https://i.imgur.com/BTM5uJM.png)
 
 This will enable everyone on the website to view the media files (but not edit them, of course).
 
-Congratulations! You are now 99% done. The final step is to set up your Google media in Ankicollab.
+Congratulations! You are now 99% done. The final step is to set up your Google media in AnkiCollab.
 
 Step 12:
 Navigate to https://www.ankicollab.com/ManageDecks/ and select your deck.
@@ -104,15 +104,16 @@ Finally, hit "Save" and you're done!
 
 ![save](https://i.imgur.com/U19pSVV.png)
 
-Note that you and your subscribers need to sync on Anki with Ankicollab, and the next time somebody creates a new card with a media file, it will automatically be uploaded to the Google Drive folder.
+Note that you and your subscribers need to sync on Anki with AnkiCollab, and the next time somebody creates a new card with a media file, it will automatically be uploaded to the Google Drive folder.
 
-If you don't start from scratch with your deck, you can simply "bulk suggest" the entire deck and it will upload all media files from your local collection to the google drive folder.
-To do that, open the Browser in Anki and Right-click on your deck and click "Suggest on AnkiCollab". This will both upload any changes to AnkiCollab.com and all media files to Google Drive.
-![bulk upload media](https://i.imgur.com/vmV4YLU.png)
+If you don't start from scratch with your deck, you can upload all media files from your deck to the google drive folder with one button.
+To do that, open the Deck Overview in Anki, click on the gearwheel next to your deck and click "Upload new Media". This will upload all media files to Google Drive (and skip existing files).
+
+![bulk upload media](https://i.imgur.com/n6ve0DH.png)
 
 
-Your existing subscribers can quickly download all media files with one button.
+Your existing subscribers can also quickly download all media files with just one button.
 
 ![download media](https://i.imgur.com/mQ2fc7t.png)
 
-Congratulations again, and enjoy using Ankicollab with your Google Drive storage solution!
+Congratulations again, and enjoy using AnkiCollab with your Google Drive storage solution!
