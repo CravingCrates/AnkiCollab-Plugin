@@ -76,6 +76,40 @@ def get_deck_hash_from_did(did):
 def do_nothing(count: int):
     pass
 
+
+def media_upload_progress_cb(progress: int):
+    aqt.mw.taskman.run_on_main(
+        lambda: aqt.mw.progress.update(
+            label="Uploading missing media...",
+            value=progress + 1,
+            max=101,
+        )
+    )
+
+def on_media_upload_done(count: int) -> None:
+    mw.progress.finish()
+    if count == 0:
+        aqt.utils.showWarning("No new media uploaded.")
+    else:
+        aqt.utils.showInfo("Upload done!")
+
+def upload_media_with_progress(deck_hash, media_files):
+    gdrive_data = get_gdrive_data(deck_hash)
+    if gdrive_data is not None:
+        api = GoogleDriveAPI(
+            service_account=gdrive_data['service_account'],
+            folder_id=gdrive_data['folder_id'],
+        )
+        dir_path = aqt.mw.col.media.dir()
+        op = QueryOp(
+            parent=mw,
+            op=lambda _: api.upload_files_to_folder(dir_path, media_files, media_upload_progress_cb),
+            success=on_media_upload_done,
+        )
+        op.with_progress(f"Checking {len(media_files)} media files...").run_in_background()
+    else:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck. Please set one in the AnkiCollab settings."))
+
 def submit_with_progress(deck, did, rationale):
     op = QueryOp(
         parent=mw,
@@ -91,13 +125,8 @@ def upload_media_to_gdrive(deck_hash, media_files):
             service_account=gdrive_data['service_account'],
             folder_id=gdrive_data['folder_id'],
         )
-        existing_media = api.list_media_files_in_folder()
-        
-        # only upload media that is not already on the drive and that we have locally
         dir_path = aqt.mw.col.media.dir()
-        missing_media = [media for media in media_files if not any(media_name['name'] == media for media_name in existing_media) and os.path.exists(os.path.join(dir_path, media))]
-        
-        api.upload_files_to_folder(dir_path, missing_media)
+        api.upload_files_to_folder(dir_path, media_files)
     else:
         if len(media_files) > 0:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck."))

@@ -75,11 +75,11 @@ class GoogleDriveAPI:
         return files       
 
     def list_media_files_in_folder(self):
-        query = f"mimeType contains 'image/' or mimeType contains 'video/' or mimeType contains 'audio/'"
+        query = f"mimeType contains 'image/' or mimeType contains 'video/' or mimeType contains 'audio/' or mimeType = 'text/javascript' or mimeType = 'text/css'"
         return self.query_files(query)
     
     def _download_files(self, items, local_folder_path, download_progress_cb) -> int:
-        try:                
+        try:
             if items is None or len(items) == 0:
                 print('No media files found.')
                 return -1
@@ -117,11 +117,14 @@ class GoogleDriveAPI:
             return -2
 
     def upload_files_to_folder(self, base_path, file_names, upload_progress_cb=None):
-        try:           
+        try:            
+            existing_media = self.list_media_files_in_folder()
+            missing_media = [media for media in file_names if not any(media_name['name'] == media for media_name in existing_media) and os.path.exists(os.path.join(base_path, media))]
+                
             file_ids = []
-            total_files = len(file_names)
+            total_files = len(missing_media)
             
-            for file_name in file_names:
+            for file_name in missing_media:
                 file_path = os.path.join(base_path, file_name) 
                 file_metadata = {
                     'name': file_name,

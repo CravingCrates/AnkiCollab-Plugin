@@ -12,9 +12,9 @@ except ImportError:
 
 from aqt.qt import *
 
-from .media_export import DeckMediaExporter, MediaExporter, NoteMediaExporter, get_configured_search_field, get_configured_exts, export_with_progress
+from .media_export import DeckMediaExporter, NoteMediaExporter, get_configured_search_field, get_configured_exts, export_with_progress
 
-from .export_manager import get_deck_hash_from_did, get_gdrive_data
+from .export_manager import get_deck_hash_from_did, get_gdrive_data, upload_media_with_progress
 from .import_manager import handle_media_import
 
 from .google_drive_api import GoogleDriveAPI
@@ -29,6 +29,19 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
         exporter = DeckMediaExporter(mw.col, DeckId(did), field, exts)
         note_count = mw.col.decks.card_count([DeckId(did)], include_subdecks=True)
         export_with_progress(mw, exporter, note_count)
+        
+    def gdrive_upload_missing() -> None:
+        deckHash = get_deck_hash_from_did(did)        
+        if deckHash is None:
+            aqt.utils.tooltip("AnkiCollab: Deck not found.")
+            return
+        gdrive_data = get_gdrive_data(deckHash)
+        if gdrive_data is not None:
+            exporter = DeckMediaExporter(mw.col, DeckId(did))
+            all_media = exporter.get_list_of_media() # this is filtered later
+            upload_media_with_progress(deckHash, all_media)
+        else:
+            aqt.utils.tooltip("No Google Drive folder set for this deck.")     
         
     def gdrive_download_missing() -> None:
         deckHash = get_deck_hash_from_did(did)        
@@ -47,10 +60,12 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
         else:
             aqt.utils.tooltip("No Google Drive folder set for this deck.")
 
-    action = menu.addAction("Export Media")
+    action = menu.addAction("AnkiCollab: Export Media to Disk")
     action2 = menu.addAction("AnkiCollab: Download Missing Media")
+    action3 = menu.addAction("AnkiCollab: Upload New Media")
     qconnect(action.triggered, export_media)
     qconnect(action2.triggered, gdrive_download_missing)
+    qconnect(action3.triggered, gdrive_upload_missing)
     
 
 def add_browser_menu_item(browser: Browser) -> None:
@@ -63,6 +78,6 @@ def add_browser_menu_item(browser: Browser) -> None:
         note_count = len(selected_notes)
         export_with_progress(browser, exporter, note_count)
 
-    action = QAction("Export Media", browser)
+    action = QAction("AnkiCollab: Export Media to Disk", browser)
     qconnect(action.triggered, export_selected)
     browser.form.menu_Notes.addAction(action)
