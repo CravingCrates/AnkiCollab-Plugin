@@ -103,7 +103,18 @@ Note that this only affects tags. Notes and Cards are unaffected by this. All su
 
 <details close>
 <summary><b>How do I add my friends as maintainers for my deck on AnkiCollab?</b></summary>
-You can add maintainers by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> on the left you should see a title that says "Mainters" underneath which there is a button that says "Show All"; click the "Show All" button -> a list of current maintainers for the deck will be displayed as well as an input box to add the email of new maintainers -> add the email of your friend in the input box and click the green "Add" button. Now when your friend logs in to the AnkiCollab website using their email they will be able to see your deck in "Manage Decks"
+  
+Go to the AnkiCollab website.
+Click on the "Manage Decks" option in the side-bar.
+Select the deck you are maintaining from the deck page.
+On the left side, you will find a title that says "Maintainers" with a button that says "Show All". Click the "Show All" button.
+A list of current maintainers for the deck will be displayed, along with an input box to add the email of new maintainers.
+Ask your friend to create an account on AnkiCollab.com using the email they want to use as a maintainer.
+Add their email in the input box and click the green "Add" button.
+Once your friend logs in to the AnkiCollab website using their email, they will be able to see your deck and review changes.
+  
+  
+Please note that maintainers do not have full access to your deck. There are certain actions, such as deleting the deck or adding more maintainers, that only you can perform.
   
 ![Screenshot from 2023-06-04 18-49-41](https://github.com/CravingCrates/AnkiCollab-Plugin/assets/70135155/2777a855-f387-4731-a443-264070d96312)
 ![Screenshot from 2023-06-04 19-04-49](https://github.com/CravingCrates/AnkiCollab-Plugin/assets/70135155/723a7182-308f-4ab1-9efa-debe7672936d)
