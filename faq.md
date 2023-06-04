@@ -101,5 +101,15 @@ and if they choose to subscribe to the ASU Tag, they will find all the tagged ca
 Note that this only affects tags. Notes and Cards are unaffected by this. All subscribers will always get all cards no matter what tag they have.
 </details>
 
+<details close>
+<summary><b>How do I add my friends as maintainers for my deck on AnkiCollab?</b></summary>
+You can add maintainers by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> on the left you should see a title that says "Mainters" underneath which there is a button that says "Show All"; click the "Show All" button -> a list of current maintainers for the deck will be displayed as well as an input box to add the email of new maintainers -> add the email of your friend in the input box and click the green "Add" button. Now when your friend logs in to the AnkiCollab website using their email they will be able to see your deck in "Manage Decks"
+  
+![Screenshot from 2023-06-04 18-49-41](https://github.com/CravingCrates/AnkiCollab-Plugin/assets/70135155/2777a855-f387-4731-a443-264070d96312)
+![Screenshot from 2023-06-04 19-04-49](https://github.com/CravingCrates/AnkiCollab-Plugin/assets/70135155/723a7182-308f-4ab1-9efa-debe7672936d)
+
+  
+</details>
+
 If you have a question that hasn't been answered in this FAQ, please reach out to us on Discord and we will try our best to help you :)
 
