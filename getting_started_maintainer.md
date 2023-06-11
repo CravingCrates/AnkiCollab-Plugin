@@ -5,6 +5,7 @@
     - [Signing Up for AnkiCollab](#signing-up-for-ankicollab)
     - [Adding a Deck to AnkiCollab](#adding-a-deck-to-ankicollab)
     - [Add Media Support](#media-support)
+    - [Auto Approve Changes](#auto-approve-changes)
   - [Handling Suggestions](#handling-suggestions)
     - [Content Changes](#content-changes)
   - [Credits](#credits)
@@ -48,6 +49,16 @@ Next, if you want to have media supported in your deck, check out the ![Google D
 ## Handling Suggestions
 
 As a maintainer, you are responsible for approving or denying changes. There are multiple types, and we'll cover them all here.
+
+## Auto Approve Changes
+
+For convenience purposes, you can let the system auto approve all changes you (or other maintainers) make. In order to enable this feature, Login to AnkiCollab from within the Anki Desktop App
+
+![Login Button](https://i.imgur.com/Prl6Pqo.png)
+
+Once you're logged in, check the box. That's all you need to do!
+
+![Auto Approve Checkbox](https://i.imgur.com/IkRpkgi.png)
 
 ### Content Changes
 
