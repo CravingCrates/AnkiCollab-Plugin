@@ -56,9 +56,9 @@ def get_hash_from_local_id(deck_id):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
         for hash, details in strings_data.items():
-            if details["deckId"] == deck_id:
+            if "deckId" in details and details["deckId"] == deck_id:
                 return hash
-    return
+    return None
 
 def get_deck_hash_from_did(did):
     deckHash = get_hash_from_local_id(did)
@@ -118,9 +118,12 @@ def submit_with_progress(deck, did, rationale):
     )
     op.with_progress("Uploading to AnkiCollab...").run_in_background()
 
-def upload_media_to_gdrive(deck_hash, media_files):
+def upload_media_to_gdrive(deck_hash, media_files, ask):
     gdrive_data = get_gdrive_data(deck_hash)
     if gdrive_data is not None:
+        if ask and not aqt.utils.askUser("Do you want to upload the media to Google Drive?"):
+            return
+                
         api = GoogleDriveAPI(
             service_account=gdrive_data['service_account'],
             folder_id=gdrive_data['folder_id'],
@@ -130,6 +133,13 @@ def upload_media_to_gdrive(deck_hash, media_files):
     else:
         if len(media_files) > 0:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck."))
+
+def get_maintainer_data():    
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None:
+        if "settings" in strings_data and strings_data["settings"]["token"] != "":
+            return strings_data["settings"]["token"], strings_data["settings"]["auto_approve"]
+    return "", False
             
 def submit_deck(deck, did, rationale, media_async = True):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
@@ -139,7 +149,15 @@ def submit_deck(deck, did, rationale, media_async = True):
     if deckHash is None:
         aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Config Error: No local deck id"))
     else:
-        data = {"remoteDeck": deckHash, "deckPath": deckPath, "deck": deck_res, "rationale": rationale}
+        token, auto_approve = get_maintainer_data()
+        data = {
+            "remoteDeck": deckHash, 
+            "deckPath": deckPath, 
+            "deck": deck_res, 
+            "rationale": rationale,
+            "token": token,
+            "force_overwrite": auto_approve,
+            }
         compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
         based_data = base64.b64encode(compressed_data)
         headers = {"Content-Type": "application/json"}
@@ -148,9 +166,9 @@ def submit_deck(deck, did, rationale, media_async = True):
         # Hacky, but for bulk suggestions we want the progress bar to include media files, 
         # but for single suggestions we can run it in the background to make it a smoother experience    
         if media_async: 
-            run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list())
+            run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list(), False)
         else:
-            upload_media_to_gdrive(deckHash, deck.get_media_file_list())
+            upload_media_to_gdrive(deckHash, deck.get_media_file_list(), True)
             
         if response:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))

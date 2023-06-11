@@ -40,7 +40,32 @@ from .import_manager import *
 
 from .media_import import on_media_btn
 from .gear_menu_setup import add_browser_menu_item, on_deck_browser_will_show_options_menu
+from .dialogs import LoginDialog
 
+strings_data = mw.addonManager.getConfig(__name__)
+if strings_data is not None:
+    mw.addonManager.writeConfig(__name__, strings_data)
+    strings_data = mw.addonManager.getConfig(__name__)
+
+
+auto_approve_action = QAction('Auto Approve (Maintainer only)', mw)
+
+def add_maintainer_checkbox():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None:
+        if "settings" in strings_data and strings_data["settings"]["token"] != "":
+            auto_approve_action.setCheckable(True)            
+            auto_approve_action.setChecked(bool(strings_data["settings"]["auto_approve"]))
+            
+            def toggle_auto_approve(checked):
+                strings_data["settings"]["auto_approve"] = checked
+                mw.addonManager.writeConfig(__name__, strings_data)
+
+            auto_approve_action.triggered.connect(toggle_auto_approve)
+            
+            if auto_approve_action not in collab_menu.actions():
+                collab_menu.addAction(auto_approve_action)
+                
 collab_menu = QMenu('AnkiCollab', mw)
 mw.form.menubar.addMenu(collab_menu)
 
@@ -53,22 +78,23 @@ collab_menu.addAction(push_deck_action)
 pull_changes_action = QAction('Check for New Content', mw)
 collab_menu.addAction(pull_changes_action)
 
-website_action = QAction('Open Website', mw)
-collab_menu.addAction(website_action)
+if strings_data is not None:
+    if "settings" in strings_data and strings_data["settings"]["token"] != "":
+        login_manager_action = QAction('Logout', mw)
+        add_maintainer_checkbox()
+    else:
+        login_manager_action = QAction('Login', mw)
+
+collab_menu.addAction(login_manager_action)
 
 media_import_action = QAction('Import Media from Folder', mw)
 collab_menu.addAction(media_import_action)
-media_import_action.triggered.connect(on_media_btn)
+
+website_action = QAction('Open Website', mw)
+collab_menu.addAction(website_action)
 
 donation_action = QAction('Support us', mw)
 collab_menu.addAction(donation_action)
-
-
-strings_data = mw.addonManager.getConfig(__name__)
-if strings_data is not None:
-    mw.addonManager.writeConfig(__name__, strings_data)
-    strings_data = mw.addonManager.getConfig(__name__)
-
 
 def add_sidebar_context_menu(
     sidebar: SidebarTreeView, menu: QMenu, item: SidebarItem, index: QModelIndex
@@ -187,17 +213,23 @@ def on_edit_list():
     table.setColumnWidth(1, table.width() * 0.4)
     
     if strings_data is not None:
-        for row, (string, data) in enumerate(strings_data.items()):        
+        row = 0
+        for string, data in strings_data.items():
+            if string == "settings":
+                continue
+            
             item1 = QTableWidgetItem(string)
             item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 0, item1)
             
-            # add local deck name to column 2
             input_hash = string
             local_deck_name = get_local_deck_from_hash(input_hash)
             item2 = QTableWidgetItem(local_deck_name)
             item2.setFlags(item2.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 1, item2)
+            
+            row += 1
+
     
     layout.addWidget(table)
     
@@ -314,7 +346,32 @@ def open_donation_site():
 def open_website():
     webbrowser.open('https://www.ankicollab.com/')
     
+def on_login_manager_btn():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None:
+        if "settings" in strings_data and strings_data["settings"]["token"] != "":
+            # Logout
+            strings_data["settings"]["token"] = ""
+            login_manager_action.setText("Login")
+            if auto_approve_action in collab_menu.actions():
+                collab_menu.removeAction(auto_approve_action)
+            mw.addonManager.writeConfig(__name__, strings_data)
+            aqt.utils.showInfo("You have been logged out.")
+        else:
+            # Popup login dialog
+            dialog = LoginDialog(mw)
+            dialog.exec()
+            strings_data = mw.addonManager.getConfig(__name__)
+            if "settings" in strings_data and strings_data["settings"]["token"] != "": # Login was Successful                
+                login_manager_action.setText("Logout")
+                add_maintainer_checkbox()
+            
+            
+            
+    
 push_deck_action.triggered.connect(on_push_deck_action)
 pull_changes_action.triggered.connect(onProfileLoaded)
-donation_action.triggered.connect(open_donation_site)
+media_import_action.triggered.connect(on_media_btn)
 website_action.triggered.connect(open_website)
+donation_action.triggered.connect(open_donation_site)
+login_manager_action.triggered.connect(on_login_manager_btn)
