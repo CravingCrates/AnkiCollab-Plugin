@@ -111,19 +111,18 @@ def upload_media_with_progress(deck_hash, media_files):
         aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck. Please set one in the AnkiCollab settings."))
 
 def submit_with_progress(deck, did, rationale):
+    upload_media = aqt.utils.askUser("Do you want to upload the media to Google Drive?")
+    
     op = QueryOp(
         parent=mw,
-        op=lambda _: submit_deck(deck, did, rationale, False),
+        op=lambda _: submit_deck(deck, did, rationale, False, upload_media),
         success=do_nothing,
     )
     op.with_progress("Uploading to AnkiCollab...").run_in_background()
 
-def upload_media_to_gdrive(deck_hash, media_files, ask):
+def upload_media_to_gdrive(deck_hash, media_files):
     gdrive_data = get_gdrive_data(deck_hash)
-    if gdrive_data is not None:
-        if ask and not aqt.utils.askUser("Do you want to upload the media to Google Drive?"):
-            return
-                
+    if gdrive_data is not None:                
         api = GoogleDriveAPI(
             service_account=gdrive_data['service_account'],
             folder_id=gdrive_data['folder_id'],
@@ -141,7 +140,7 @@ def get_maintainer_data():
             return strings_data["settings"]["token"], strings_data["settings"]["auto_approve"]
     return "", False
             
-def submit_deck(deck, did, rationale, media_async = True):    
+def submit_deck(deck, did, rationale, media_async, upload_media):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     deckHash = get_deck_hash_from_did(did)
     deckPath =  mw.col.decks.name(did)
@@ -165,10 +164,11 @@ def submit_deck(deck, did, rationale, media_async = True):
         
         # Hacky, but for bulk suggestions we want the progress bar to include media files, 
         # but for single suggestions we can run it in the background to make it a smoother experience    
-        if media_async: 
-            run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list(), False)
-        else:
-            upload_media_to_gdrive(deckHash, deck.get_media_file_list(), True)
+        if upload_media:
+            if media_async: 
+                run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list())
+            else:
+                upload_media_to_gdrive(deckHash, deck.get_media_file_list())
             
         if response:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
@@ -227,7 +227,7 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
         else:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Aborting due to lack of rationale", parent=QApplication.focusWidget()))
             return
-    submit_deck(deck, did, rationale)
+    submit_deck(deck, did, rationale, True, True)
 
 def make_new_card(note: anki.notes.Note):
     if mw.form.invokeAfterAddCheckbox.isChecked():
