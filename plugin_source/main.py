@@ -206,7 +206,10 @@ def on_edit_list():
     table = QTableWidget()
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None:
-        table.setRowCount(len(strings_data))
+        if "settings" in strings_data:
+            table.setRowCount(len(strings_data) - 1)
+        else:
+            table.setRowCount(len(strings_data))
     table.setColumnCount(2) # set number of columns to 2
     table.setHorizontalHeaderLabels(['Subscription Key', 'Local Deck']) # add column headers   
     table.setColumnWidth(0, table.width() * 0.4) # adjust column widths
