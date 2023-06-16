@@ -75,7 +75,7 @@ class GoogleDriveAPI:
         return files       
 
     def list_media_files_in_folder(self):
-        query = f"mimeType contains 'image/' or mimeType contains 'video/' or mimeType contains 'audio/' or mimeType = 'text/javascript' or mimeType = 'text/css'"
+        query = f"mimeType != 'application/vnd.google-apps.folder' and trashed=false"
         return self.query_files(query)
     
     def _download_files(self, items, local_folder_path, download_progress_cb) -> int:

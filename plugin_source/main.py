@@ -58,6 +58,7 @@ def add_maintainer_checkbox():
             auto_approve_action.setChecked(bool(strings_data["settings"]["auto_approve"]))
             
             def toggle_auto_approve(checked):
+                strings_data = mw.addonManager.getConfig(__name__)
                 strings_data["settings"]["auto_approve"] = checked
                 mw.addonManager.writeConfig(__name__, strings_data)
 
