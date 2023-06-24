@@ -4,6 +4,10 @@ import json
 import zipfile
 import sys
 
+import aqt
+from aqt import mw
+from aqt.qt import *
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
 
 from googleapiclient.http import MediaFileUpload
@@ -45,12 +49,15 @@ class GoogleDriveAPI:
              
     def download_selected_files_as_zip(self, file_names, local_folder_path, download_progress_cb=None):
         files = []
-        for chunk in self.chunks(file_names, 100):  # break up file_names into chunks of 100
+        counter = 0
+        for chunk in self.chunks(file_names, 50):  # break up file_names into chunks of 100
+            if mw.progress.want_cancel():
+                break
             query = f"("
             query += " or ".join([f"name='{file_name}'" for file_name in chunk])
             query += ")"
             files.extend(self.query_files(query))
-        return self._download_files(files, local_folder_path, download_progress_cb)
+            counter += self._download_files(files, local_folder_path, len(file_names), counter, download_progress_cb)
 
             
     def query_files(self, query):
@@ -78,7 +85,7 @@ class GoogleDriveAPI:
         query = f"mimeType != 'application/vnd.google-apps.folder' and trashed=false"
         return self.query_files(query)
     
-    def _download_files(self, items, local_folder_path, download_progress_cb) -> int:
+    def _download_files(self, items, local_folder_path, total_files, curr_amount, download_progress_cb) -> int:
         try:
             if items is None or len(items) == 0:
                 print('No media files found.')
@@ -86,9 +93,6 @@ class GoogleDriveAPI:
     
             added_file_names = set()
             zip_path = os.path.join(local_folder_path, 'media_files.zip')
-            total_files = len(items)
-            downloaded_files = 0
-
             with zipfile.ZipFile(zip_path, 'w') as zip_file:
                 for item in items:
                     # Download each file and add it to the zip file if its not a duplicate
@@ -98,19 +102,18 @@ class GoogleDriveAPI:
                         request = self.service.files().get_media(fileId=item['id'])
                         file_bytes = io.BytesIO(request.execute())
                         zip_file.writestr(file_name, file_bytes.getvalue())
+                        curr_amount += 1
 
                     # Update the download progress
-                    downloaded_files += 1
-                    progress = downloaded_files / total_files * 100
                     if download_progress_cb:
-                        download_progress_cb(int(progress))
+                        download_progress_cb(int(curr_amount), int(total_files))
 
             with zipfile.ZipFile(zip_path, 'r') as zip_file:
                 zip_file.extractall(local_folder_path)
 
             os.remove(zip_path)
-
-            return downloaded_files
+            
+            return curr_amount
 
         except HttpError as error:
             self._handle_http_error(error)
@@ -134,9 +137,11 @@ class GoogleDriveAPI:
                 file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
                 file_ids.append(file.get('id'))
             
-                progress = len(file_ids) / total_files * 100
                 if upload_progress_cb:
-                    upload_progress_cb(int(progress))
+                    upload_progress_cb(int(len(file_ids)), int(total_files))
+                    
+                if mw.progress.want_cancel():
+                    break
 
             return file_ids
 

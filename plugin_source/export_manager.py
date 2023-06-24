@@ -77,12 +77,14 @@ def do_nothing(count: int):
     pass
 
 
-def media_upload_progress_cb(progress: int):
+def media_upload_progress_cb(curr: int, max_i: int):
     aqt.mw.taskman.run_on_main(
         lambda: aqt.mw.progress.update(
-            label="Uploading missing media...",
-            value=progress + 1,
-            max=101,
+            label=
+             "Uploading missing media...\n"
+            f"{curr} / {max_i}",
+            value=curr,
+            max=max_i,
         )
     )
 
