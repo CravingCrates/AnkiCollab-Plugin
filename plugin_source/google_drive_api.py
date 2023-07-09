@@ -37,7 +37,7 @@ class GoogleDriveAPI:
             error_message = error._get_reason()
         else:
             error_message = str(error)
-        print(f"An error occurred: {error_message}")
+        print(f"[GDrive] An error occurred: {error_message}")
 
     def _set_up_service(self):
         self.service = build('drive', 'v3', credentials=self.creds)
@@ -107,6 +107,9 @@ class GoogleDriveAPI:
                     # Update the download progress
                     if download_progress_cb:
                         download_progress_cb(int(curr_amount), int(total_files))
+                        
+                    if mw.progress.want_cancel():
+                        break
 
             with zipfile.ZipFile(zip_path, 'r') as zip_file:
                 zip_file.extractall(local_folder_path)

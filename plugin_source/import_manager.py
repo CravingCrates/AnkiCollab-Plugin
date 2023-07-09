@@ -221,7 +221,10 @@ def import_webresult(webresult, input_hash):
         msg_box.setText("You're already up-to-date!")
         msg_box.exec()
         return
-        
+    
+    # Create a backup for the user before updating!
+    aqt.mw.create_backup_now()    
+    
     for subscription in webresult:     
         if input_hash: # New deck
             deck_name = install_update(subscription)

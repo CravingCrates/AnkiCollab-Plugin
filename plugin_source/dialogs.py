@@ -42,15 +42,15 @@ class ChangelogDialog(QDialog):
         changelog_text = QTextBrowser()
         
         if not changelog:
-            changelog = "The authors left no changelog message for these changes."
+            changelog = "The maintainer left no changelog message for this update."
             
         changelog_text.setPlainText(changelog)
         layout.addWidget(changelog_text)
 
         button_box = QDialogButtonBox()
-        install_button = button_box.addButton("Install", QDialogButtonBox.ButtonRole.AcceptRole)
-        later_button = button_box.addButton("Later", QDialogButtonBox.ButtonRole.RejectRole)
-        skip_button = QPushButton("Skip")
+        install_button = button_box.addButton("Install Now", QDialogButtonBox.ButtonRole.AcceptRole)
+        later_button = button_box.addButton("Decide Later", QDialogButtonBox.ButtonRole.RejectRole)
+        skip_button = QPushButton("Skip this Update")
         button_box.addButton(skip_button, QDialogButtonBox.ButtonRole.ActionRole)
 
         layout.addWidget(button_box)

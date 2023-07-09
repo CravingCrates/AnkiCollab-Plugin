@@ -16,6 +16,8 @@ import os
 import aqt
 from anki.collection import Collection
 from aqt.operations import QueryOp
+from aqt.emptycards import show_empty_cards
+from aqt.operations.tag import clear_unused_tags
 from aqt.utils import showInfo
 from aqt import mw
 
@@ -143,8 +145,10 @@ class Deck(JsonSerializableAnkiDict):
         
     def on_success(self, count: int) -> None:
         mw.progress.finish()
-        mw.reset()
-        showInfo(f"AnkiCollab: {count} Notes updated.")
+        if aqt.utils.askUser(f"{count} Notes got updated.\n\nDo you want to clear unused tags and empty cards from your collection?"):
+            clear_unused_tags(parent=mw).run_in_background()
+            show_empty_cards(mw) 
+        mw.reset()         
         
     def save_to_collection(self, collection, import_config: ImportConfig):
         self.save_metadata(collection)
