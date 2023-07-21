@@ -179,14 +179,6 @@ def add_to_table(line_edit, table, dialog):
         handle_pull(string)
         #on_edit_list() # we could reopen the dialog with updated data
 
-def get_local_deck_from_hash(input_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        for hash, details in strings_data.items():
-            if hash == input_hash:
-                return mw.col.decks.name(details["deckId"])
-    return "None"
-
 def update_local_deck(input_hash, new_deck, popup_dialog, subs_dialog):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:

@@ -73,6 +73,14 @@ def get_deck_hash_from_did(did):
             i += 1
     return deckHash
 
+def get_local_deck_from_hash(input_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for hash, details in strings_data.items():
+            if hash == input_hash:
+                return mw.col.decks.name(details["deckId"])
+    return "None"
+
 def do_nothing(count: int):
     pass
 
@@ -144,7 +152,8 @@ def get_maintainer_data():
             
 def submit_deck(deck, did, rationale, media_async, upload_media):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    deckHash = get_deck_hash_from_did(did)
+    deckHash = get_deck_hash_from_did(did)#
+    newName = get_local_deck_from_hash(deckHash)
     deckPath =  mw.col.decks.name(did)
     
     if deckHash is None:
@@ -152,8 +161,9 @@ def submit_deck(deck, did, rationale, media_async, upload_media):
     else:
         token, auto_approve = get_maintainer_data()
         data = {
-            "remoteDeck": deckHash, 
-            "deckPath": deckPath, 
+            "remote_deck": deckHash, 
+            "deck_path": deckPath, 
+            "new_name": newName, 
             "deck": deck_res, 
             "rationale": rationale,
             "token": token,
