@@ -23,8 +23,9 @@ Deck settings — learning steps, new card limits, maximum interval, etc. — ar
 </details>
 
 <details close>
-<summary><b>I changed the name of my deck/subdeck locally and now I get the error "No local deck ID"</b></summary>
-Deck names should correlate exactly to the name that is on AnkiCollab. Currently there is no way to change your local deck name and continue publishing/receiving changes. Watch out for future changes though ;)
+<summary><b>Can I change the name of the deck in my collection?</b></summary>
+  Yes, you can rename the uploaded deck and move it around as much as you want. 
+  Please note that this does not apply to subdecks of your uploaded deck. Subdecks are required to follow the exact layout from the server. This is necessary for the system to understand where changes are supposed to go and make subdecks possible in the first place. Sorry for the inconvenience.
 </details>
 
 ## Subscriber
