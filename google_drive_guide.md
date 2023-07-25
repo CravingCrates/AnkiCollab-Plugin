@@ -104,9 +104,14 @@ Finally, hit "Save" and you're done!
 
 ![save](https://i.imgur.com/U19pSVV.png)
 
-Note that you and your subscribers need to sync on Anki with AnkiCollab, and the next time somebody creates a new card with a media file, it will automatically be uploaded to the Google Drive folder.
+### Sync the changes with your Anki Desktop App
 
-If you don't start from scratch with your deck, you can upload all media files from your deck to the google drive folder with one button.
+You're now done with the hard part! Well done! All you need to do now is sync in your Desktop Anki Application by clicking "Check for new content" in the AnkiCollab Toolbar. This retrieves the latest changes you made on the website and you will be able to upload or download media files.
+The same applies to your subscribers. They need to sync to get the updated media information.
+
+Next time somebody creates a new card with a media file, it will automatically be uploaded to the Google Drive folder.
+
+If you don't start from scratch with your deck, you can also upload all media files from your deck to the google drive folder with just one button.
 To do that, open the Deck Overview in Anki, click on the gearwheel next to your deck and click "Upload new Media". This will upload all media files to Google Drive (and skip existing files).
 
 ![bulk upload media](https://i.imgur.com/n6ve0DH.png)
