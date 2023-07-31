@@ -64,6 +64,23 @@ And subscribers will see a popup that lists all changes that occurred since they
 </details>
 
 <details close>
+  <summary><b>How can I add new changelog messages from within the Anki Desktop App?"</b></summary>
+Here's how it works:
+
+1. **Log In and Open the Deck Browser**: Ensure that you are logged in to your AnkiCollab account from within the Anki Desktop app.
+
+2. **Deck Selection**: To access this feature, you must be a maintainer of the deck. Right-click on the deck of your choice to open the context menu from the Deck Browser.
+
+3. **"Add Changelog" Option**: After right-clicking on the deck, you'll notice a new option: "Add Changelog." Click on it to proceed.
+
+4. **Update Your Changelog**: A user-friendly interface will appear, allowing you to enter your changelog details quickly and efficiently. Describe the changes, updates, and improvements you've made to the deck.
+
+5. **Save and Share**: Once you're satisfied with the changelog, hit the "Publish" button to store your changes. Your changelog will be updated instantly on the website and synced with other users.
+
+This new capability eliminates the need to navigate to the Anki website separately to manage your deck changelogs. Simplify your workflow and focus on creating outstanding study materials!
+</details>
+
+<details close>
 <summary><b>How do I change the deck name on AnkiCollab?</b></summary>
 The only way to do that currently is by messaging the Discord group with your request here: https://discord.com/invite/9x4DRxzqwM 
 Keep in mind that when you change the deck name on AnkiCollab, you will also have to change your deck name locally. All your subscribers must also change their deck name locally to receive changes.
