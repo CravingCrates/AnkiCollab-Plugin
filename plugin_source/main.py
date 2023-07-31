@@ -40,7 +40,7 @@ from .import_manager import *
 
 from .media_import import on_media_btn
 from .gear_menu_setup import add_browser_menu_item, on_deck_browser_will_show_options_menu
-from .dialogs import LoginDialog
+from .dialogs import LoginDialog, ChangelogDialog
 
 strings_data = mw.addonManager.getConfig(__name__)
 if strings_data is not None:
@@ -91,22 +91,46 @@ collab_menu.addAction(login_manager_action)
 media_import_action = QAction('Import Media from Folder', mw)
 collab_menu.addAction(media_import_action)
 
+links_menu = QMenu('Links', mw)
+collab_menu.addMenu(links_menu)
+
+community_action = QAction('Join the Community', mw)
+links_menu.addAction(community_action)
+
 website_action = QAction('Open Website', mw)
-collab_menu.addAction(website_action)
+links_menu.addAction(website_action)
 
 donation_action = QAction('Support us', mw)
-collab_menu.addAction(donation_action)
+links_menu.addAction(donation_action)
+
+
+def is_logged_in():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None and "settings" in strings_data and strings_data["settings"]["token"] != "":
+        return True
+    return False
 
 def add_sidebar_context_menu(
     sidebar: SidebarTreeView, menu: QMenu, item: SidebarItem, index: QModelIndex
 ) -> None:
     menu.addSeparator()
-    menu.addAction("Suggest on AnkiCollab", lambda: context_handler(item))
+    menu.addAction("Suggest on AnkiCollab", lambda: suggest_context_handler(item))
+    if is_logged_in():
+        menu.addAction("Add new Changelog", lambda: changelog_context_handler(item))
 
-def context_handler(item: SidebarItem):
+def suggest_context_handler(item: SidebarItem):
     if item.item_type == SidebarItemType.DECK:
         selected_deck = DeckId(item.id)      
         suggest_subdeck(selected_deck)
+    else:
+        aqt.utils.tooltip("Please select a deck")
+        
+def changelog_context_handler(item: SidebarItem):
+    if item.item_type == SidebarItemType.DECK:
+        selected_did = DeckId(item.id)      
+        hash = get_deck_hash_from_did(selected_did)
+        dialog = ChangelogDialog(hash, mw)
+        dialog.exec()
     else:
         aqt.utils.tooltip("Please select a deck")
 
@@ -335,13 +359,15 @@ def on_push_deck_action(self):
 
     dialog.exec()
 
+def open_community_site():
+    webbrowser.open('https://discord.gg/9x4DRxzqwM')
 
 def open_donation_site():
     webbrowser.open('https://ko-fi.com/ankicollab')
     
 def open_website():
     webbrowser.open('https://www.ankicollab.com/')
-    
+        
 def on_login_manager_btn():
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None:
@@ -361,13 +387,11 @@ def on_login_manager_btn():
             if "settings" in strings_data and strings_data["settings"]["token"] != "": # Login was Successful                
                 login_manager_action.setText("Logout")
                 add_maintainer_checkbox()
-            
-            
-            
-    
+                
 push_deck_action.triggered.connect(on_push_deck_action)
 pull_changes_action.triggered.connect(onProfileLoaded)
 media_import_action.triggered.connect(on_media_btn)
 website_action.triggered.connect(open_website)
 donation_action.triggered.connect(open_donation_site)
+community_action.triggered.connect(open_community_site)
 login_manager_action.triggered.connect(on_login_manager_btn)

@@ -25,7 +25,14 @@ def store_login_token(token):
         strings_data["settings"]["token"] = token
         strings_data["settings"]["auto_approve"] = False
     mw.addonManager.writeConfig(__name__, strings_data)
-    
+
+def get_login_token():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        if "settings" in strings_data:
+            if "token" in strings_data["settings"]:
+                return strings_data["settings"]["token"]
+    return None    
 
 class ChangelogDialog(QDialog):
     def __init__(self, changelog, deck_hash):
@@ -161,5 +168,51 @@ class LoginDialog(QDialog):
         else:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo("An error occurred while logging in. Please try again."))
             return
-            
+  
+class ChangelogDialog(QDialog):
+    def __init__(self, deck_hash, parent=None):
+        super(ChangelogDialog, self).__init__(parent)
+        self.setWindowTitle("AnkiCollab - Add Changelog")
+        self.setModal(True)
+        self.resize(400, 200)
+
+        self.deck_hash = deck_hash
+
+        layout = QVBoxLayout()
+
+        label = QLabel("Please enter the changelog message:")
+        layout.addWidget(label)
+
+        self.changelog_input = QTextEdit()
+        layout.addWidget(self.changelog_input)
+
+        button_box = QDialogButtonBox()
+        publish_button = button_box.addButton("Publish", QDialogButtonBox.ButtonRole.AcceptRole)
+        button_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+        publish_button.clicked.connect(self.publish)
+
+    def publish(self):
+        changelog_text = self.changelog_input.toPlainText()
+        if not changelog_text:
+            QMessageBox.warning(self, "Error", "Please enter a changelog message.")
+            return
+
+        payload = {
+            'deck_hash': self.deck_hash,
+            'changelog': changelog_text,
+            'token': get_login_token()
+        }
+
+        response = requests.post("https://plugin.ankicollab.com/submitChangelog", json=payload)
+        if response.status_code == 200:
+            QMessageBox.information(self, "Information", response.text)
+        else:
+            QMessageBox.warning(self, "Error", "An unknown error occurred while publishing the changelog.")
+
+        self.accept()
             
