@@ -32,7 +32,7 @@ def get_login_token():
         if "settings" in strings_data:
             if "token" in strings_data["settings"]:
                 return strings_data["settings"]["token"]
-    return None    
+    return None   
 
 class ChangelogDialog(QDialog):
     def __init__(self, changelog, deck_hash):
@@ -169,9 +169,9 @@ class LoginDialog(QDialog):
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo("An error occurred while logging in. Please try again."))
             return
   
-class ChangelogDialog(QDialog):
+class AddChangelogDialog(QDialog):
     def __init__(self, deck_hash, parent=None):
-        super(ChangelogDialog, self).__init__(parent)
+        super().__init__()
         self.setWindowTitle("AnkiCollab - Add Changelog")
         self.setModal(True)
         self.resize(400, 200)

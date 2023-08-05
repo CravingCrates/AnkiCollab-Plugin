@@ -147,8 +147,8 @@ class Deck(JsonSerializableAnkiDict):
         mw.progress.finish()
         if aqt.utils.askUser(f"{count} Notes got updated.\n\nDo you want to clear unused tags and empty cards from your collection?"):
             clear_unused_tags(parent=mw).run_in_background()
-            show_empty_cards(mw) 
-        mw.reset()         
+            show_empty_cards(mw)
+        mw.reset()
         
     def save_to_collection(self, collection, import_config: ImportConfig):
         self.save_metadata(collection)

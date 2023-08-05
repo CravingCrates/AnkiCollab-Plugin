@@ -73,6 +73,14 @@ def get_deck_hash_from_did(did):
             i += 1
     return deckHash
 
+def get_did_from_hash(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for hash, details in strings_data.items():
+            if hash == deck_hash:
+                return details["deckId"]
+    return None
+
 def get_local_deck_from_hash(input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
@@ -207,6 +215,33 @@ def suggest_subdeck(did):
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
     submit_with_progress(deck, did, 9) # 9: Bulk Suggestion rationale
     
+def bulk_suggest_notes(nids):
+    notes = [aqt.mw.col.get_note(nid) for nid in nids]
+    # Find top level deck and make sure it's the same for all notes
+    deckHash = get_deck_hash_from_did(notes[0].cards()[0].did)
+    
+    for note in notes:
+        if get_deck_hash_from_did(note.cards()[0].did) != deckHash:
+            aqt.utils.showInfo("Please only select cards from the same deck")
+            return
+        
+    did = get_did_from_hash(deckHash)
+    if did is None:
+        aqt.utils.showInfo("This deck is not published")
+        return
+    
+    deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
+    if deck.is_dynamic:
+        aqt.utils.showInfo("Filtered decks are not supported. Sorry!")
+        return
+    
+    disambiguate_note_model_uuids(aqt.mw.col)
+    deck = deck_initializer.from_collection(aqt.mw.col, deck.name, note_ids=nids)
+    note_sorter = NoteSorter(ConfigSettings.get_instance())
+    note_sorter.sort_deck(deck)
+
+    submit_with_progress(deck, did, 9) # 9: Bulk Suggestion rationale
+
 def prep_suggest_card(note: anki.notes.Note, rationale):
     # i'm in the ghetto, help
     cards = note.cards()
@@ -220,7 +255,7 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
     deck.metadata = None
     deck._load_metadata()
 
-    newNote = Note.from_collection(mw.col, note.id, deck.metadata.models);
+    newNote = Note.from_collection(mw.col, note.id, deck.metadata.models)
     deck.notes = [newNote]
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
@@ -253,6 +288,7 @@ def make_new_card(note: anki.notes.Note):
 def handle_export(did, email) -> str:
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
     if deck.is_dynamic:
+        aqt.utils.showInfo("Filtered decks are not supported. Sorry!")
         return
     
     disambiguate_note_model_uuids(aqt.mw.col)

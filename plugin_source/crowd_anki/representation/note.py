@@ -28,9 +28,13 @@ class Note(JsonSerializableAnkiObject):
         self.config = config or ConfigSettings.get_instance()
 
     @staticmethod
+    def get_notes_from_nids(collection, note_models, note_ids):
+        return [Note.from_collection(collection, note_id, note_models) for note_id in note_ids]
+    
+    @staticmethod
     def get_notes_from_collection(collection, deck_id, note_models):
         note_ids = collection.decks.get_note_ids(deck_id, include_from_dynamic=True)
-        return [Note.from_collection(collection, note_id, note_models) for note_id in note_ids]
+        return Note.get_notes_from_nids(collection, note_models, note_ids)
 
     @classmethod
     def from_collection(cls, collection, note_id, note_models):
