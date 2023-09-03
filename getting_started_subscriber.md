@@ -15,6 +15,11 @@ The key will be a series of words separated by dashes. Example:
 pip-item-hawaii-skylark-network-rugby
 ```
 
+## Video Guide
+
+If you prefer to watch a video, check out our latest Video Guide that walks you through the necessary steps to subscribe to a deck!
+[![AnkiCollab Subscriber Video](https://img.youtube.com/vi/-INzy3mF06I/0.jpg)](https://www.youtube.com/watch?v=-INzy3mF06I)
+
 ## Getting a Key
 
 If you know a deck's maintainer, they can give you the subscription key to paste into AnkiCollab.
