@@ -10,12 +10,14 @@ from .export_manager import *
 from .import_manager import *
 
 from .media_import import on_media_btn
-from .thread import run_function_in_thread
+from .hooks import onProfileLoaded
 from .dialogs import LoginDialog
 
-auto_approve_action = QAction('Auto Approve (Maintainer only)', mw)
+pull_on_startup_action = QAction('Check for Updates on Startup', mw)
+auto_approve_action = QAction('Auto Approve Changes (Maintainer only)', mw)
 login_manager_action = QAction('Logout', mw)
 collab_menu = QMenu('AnkiCollab', mw)
+settings_menu = QMenu('Settings', mw)
     
 def add_maintainer_checkbox():
     strings_data = mw.addonManager.getConfig(__name__)
@@ -32,7 +34,7 @@ def add_maintainer_checkbox():
             auto_approve_action.triggered.connect(toggle_auto_approve)
             
             if auto_approve_action not in collab_menu.actions():
-                collab_menu.addAction(auto_approve_action)
+                settings_menu.addAction(auto_approve_action)
                
 def delete_selected_rows(table):
     strings_data = mw.addonManager.getConfig(__name__)
@@ -246,16 +248,23 @@ def on_login_manager_btn():
             if "settings" in strings_data and strings_data["settings"]["token"] != "": # Login was Successful                
                 login_manager_action.setText("Logout")
                 add_maintainer_checkbox()
- 
-def request_update():
-    handle_pull(None)
-            
-def onProfileLoaded():
-    aqt.utils.tooltip("Retrieving latest data from AnkiCollab...")
-    run_function_in_thread(request_update)
-                   
+     
+def store_default_config():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None:
+        if "settings" not in strings_data:
+            strings_data["settings"] = {}
+        if "token" not in strings_data["settings"]:
+            strings_data["settings"]["token"] = ""
+        if "auto_approve" not in strings_data["settings"]:
+            strings_data["settings"]["auto_approve"] = False
+        if "pull_on_startup" not in strings_data["settings"]:
+            strings_data["settings"]["pull_on_startup"] = False
+    mw.addonManager.writeConfig(__name__, strings_data)
+       
 def menu_init():                
     mw.form.menubar.addMenu(collab_menu)
+    store_default_config()
 
     edit_list_action = QAction('Edit Subscriptions', mw)
     collab_menu.addAction(edit_list_action)
@@ -268,19 +277,36 @@ def menu_init():
 
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None:
-        if "settings" in strings_data and strings_data["settings"]["token"] != "":
-            login_manager_action.setText("Logout")
-            add_maintainer_checkbox()
-        else:
-            login_manager_action.setText("Login")
+        if "settings" in strings_data and "token" in strings_data["settings"]:
+            if strings_data["settings"]["token"] != "":
+                login_manager_action.setText("Logout")
+                add_maintainer_checkbox()
+            else:
+                login_manager_action.setText("Login")
+            
+        if "settings" in strings_data and "pull_on_startup" in strings_data["settings"]:
+            pull_on_startup_action.setCheckable(True)
+            pull_on_startup_action.setChecked(bool(strings_data["settings"]["pull_on_startup"]))
 
     collab_menu.addAction(login_manager_action)
 
     media_import_action = QAction('Import Media from Folder', mw)
     collab_menu.addAction(media_import_action)
 
+    def toggle_startup_pull(checked):
+        strings_data = mw.addonManager.getConfig(__name__)
+        if "settings" not in strings_data:
+            strings_data["settings"] = {}
+        strings_data["settings"]["pull_on_startup"] = checked
+        mw.addonManager.writeConfig(__name__, strings_data)
+
+    pull_on_startup_action.triggered.connect(toggle_startup_pull)
+    settings_menu.addAction(pull_on_startup_action)
+            
+    collab_menu.addMenu(settings_menu)
+    
     links_menu = QMenu('Links', mw)
-    collab_menu.addMenu(links_menu)
+    collab_menu.addMenu(links_menu)    
 
     community_action = QAction('Join the Community', mw)
     links_menu.addAction(community_action)

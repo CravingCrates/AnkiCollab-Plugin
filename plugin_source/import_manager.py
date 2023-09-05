@@ -18,8 +18,7 @@ import anki
 
 from aqt.qt import *
 from aqt import mw
-from .dialogs import ChangelogDialog
-from .dialogs import OptionalTagsDialog
+from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
 from .crowd_anki.representation.note import Note
@@ -137,6 +136,31 @@ def update_timestamp(deck_hash):
                 details["timestamp"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                 break
         mw.addonManager.writeConfig(__name__, strings_data)     
+
+def get_noteids_from_uuids(guids):
+    noteids = []
+    for guid in guids:
+        query = "select id from notes where guid=?"
+        note_id = aqt.mw.col.db.scalar(query, guid)
+        if note_id:
+            noteids.append(note_id)
+    return noteids
+
+def get_guids_from_noteids(nids):
+    guids = []
+    for nid in nids:
+        query = "select guid from notes where id=?"
+        guid = aqt.mw.col.db.scalar(query, nid)
+        if guid:
+            guids.append(guid)
+    return guids
+
+def open_browser_with_nids(nids):
+    if not nids:
+        return
+    browser = aqt.dialogs.open("Browser", aqt.mw)
+    browser.form.searchEdit.lineEdit().setText("nid:" + " or nid:".join(str(nid) for nid in nids))
+    browser.onSearchActivated()    
         
 def update_gdrive_data(deck_hash, gdrive_new):
     strings_data = mw.addonManager.getConfig(__name__)
@@ -147,6 +171,14 @@ def update_gdrive_data(deck_hash, gdrive_new):
                 break
         mw.addonManager.writeConfig(__name__, strings_data)   
 
+def delete_notes(nids):
+    if not nids:
+        return
+    aqt.mw.col.remove_notes(nids)
+    aqt.mw.col.reset()
+    mw.reset()
+    aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Deleted %d notes." % len(nids), parent=QApplication.focusWidget()))
+   
 def install_update(subscription):
     if check_optional_tag_changes(subscription['deck_hash'], subscription['optional_tags']):
         dialog = OptionalTagsDialog(get_optional_tags(subscription['deck_hash']), subscription['optional_tags'])
@@ -160,7 +192,7 @@ def install_update(subscription):
     deck = deck_initializer.from_json(subscription['deck'])
     config = prep_config(subscription['protected_fields'], [tag for tag, value in subscribed_tags.items() if value], True if subscription['optional_tags'] else False)
     deck.save_to_collection(aqt.mw.col, import_config=config)
-    
+        
     # Handle Media
     if gdrive_folder != "":
         update_gdrive_data(subscription['deck_hash'], subscription['gdrive'])
@@ -170,8 +202,19 @@ def install_update(subscription):
         )
         handle_media_import(deck.media_files, api)
     else:
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder found. Please ask the maintainer to set one up on the website."))
-    
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder found. Please ask the maintainer to set one up on the website.", parent=QApplication.focusWidget()))
+        
+    # Handle deleted Notes  
+    deleted_nids = get_noteids_from_uuids(subscription['deleted_notes'])  
+    if deleted_nids:
+        del_notes_dialog = DeletedNotesDialog(deleted_nids, subscription['deck_hash'])
+        del_notes_choice = del_notes_dialog.exec()
+
+        if del_notes_choice == QDialog.DialogCode.Accepted:
+            delete_notes(deleted_nids)
+        elif del_notes_choice == QDialog.DialogCode.Rejected:
+            open_browser_with_nids(deleted_nids)
+            
     return deck.anki_dict["name"]
     
 def abort_update(deck_hash):
@@ -180,7 +223,6 @@ def abort_update(deck_hash):
 def postpone_update():
     pass
         
-
 def prep_config(protected_fields, optional_tags, has_optional_tags):
     config = ImportConfig(
             add_tag_to_cards= [],
@@ -212,7 +254,7 @@ def show_changelog_popup(subscription):
         postpone_update()
     else:
         abort_update(deck_hash)
-     
+ 
 def import_webresult(webresult, input_hash):    
     #if webresult is empty, make popup to tell user that there are no updates
     if not webresult:
@@ -258,4 +300,4 @@ def handle_pull(input_hash):
             aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash))
         else:
             infot = "A Server Error occurred. Please notify us!"
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot))
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget()))

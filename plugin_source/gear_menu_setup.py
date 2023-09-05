@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+import webbrowser
 
 import aqt
 from anki.decks import DeckId
@@ -22,6 +23,13 @@ from .google_drive_api import GoogleDriveAPI
 def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
     """Adds a menu item under the gears icon to export a deck's media files."""
 
+    def get_gdrive():
+        deckHash = get_deck_hash_from_did(did)        
+        if deckHash is None:
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("AnkiCollab: Deck not found.", parent=QApplication.focusWidget()))
+            return None
+        return get_gdrive_data(deckHash)
+
     def export_media() -> None:
         config = mw.addonManager.getConfig(__name__)
         field = get_configured_search_field(config)
@@ -31,24 +39,16 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
         export_with_progress(mw, exporter, note_count)
         
     def gdrive_upload_missing() -> None:
-        deckHash = get_deck_hash_from_did(did)        
-        if deckHash is None:
-            aqt.utils.tooltip("AnkiCollab: Deck not found.")
-            return
-        gdrive_data = get_gdrive_data(deckHash)
+        gdrive_data = get_gdrive()
         if gdrive_data is not None:
             exporter = DeckMediaExporter(mw.col, DeckId(did))
             all_media = exporter.get_list_of_media() # this is filtered later
             upload_media_with_progress(deckHash, all_media)
         else:
-            aqt.utils.tooltip("No Google Drive folder set for this deck.")     
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))    
         
     def gdrive_download_missing() -> None:
-        deckHash = get_deck_hash_from_did(did)        
-        if deckHash is None:
-            aqt.utils.tooltip("AnkiCollab: Deck not found.")
-            return
-        gdrive_data = get_gdrive_data(deckHash)
+        gdrive_data = get_gdrive()
         if gdrive_data is not None:
             exporter = DeckMediaExporter(mw.col, DeckId(did))
             api = GoogleDriveAPI(
@@ -58,14 +58,26 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
             all_media = exporter.get_list_of_media() # this is filtered in the handle_media function to only download missing media
             handle_media_import(all_media, api)
         else:
-            aqt.utils.tooltip("No Google Drive folder set for this deck.")
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))
 
-    action = menu.addAction("AnkiCollab: Export Media to Disk")
-    action2 = menu.addAction("AnkiCollab: Download Missing Media")
-    action3 = menu.addAction("AnkiCollab: Upload New Media")
+    def open_gdrive_folder() -> None:
+        gdrive_data = get_gdrive()
+        if gdrive_data is not None:
+            webbrowser.open(f"https://drive.google.com/drive/u/1/folders/{gdrive_data['folder_id']}")
+        else:
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))
+            
+            
+    links_menu = QMenu('AnkiCollab', mw)
+    menu.addMenu(links_menu)
+    action = links_menu.addAction("Export Media to Disk")
+    action2 = links_menu.addAction("Download Missing Media")
+    action3 = links_menu.addAction("Upload New Media")
+    action4 = links_menu.addAction("Open Folder in Browser")
     qconnect(action.triggered, export_media)
     qconnect(action2.triggered, gdrive_download_missing)
     qconnect(action3.triggered, gdrive_upload_missing)
+    qconnect(action4.triggered, open_gdrive_folder)
     
 
 def add_browser_menu_item(browser: Browser) -> None:

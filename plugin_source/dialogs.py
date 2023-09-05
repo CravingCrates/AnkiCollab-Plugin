@@ -215,4 +215,43 @@ class AddChangelogDialog(QDialog):
             QMessageBox.warning(self, "Error", "An unknown error occurred while publishing the changelog.")
 
         self.accept()
-            
+       
+
+class DeletedNotesDialog(QDialog):
+    def __init__(self, deleted_notes, deck_hash):
+        super().__init__()
+        local_name = get_local_deck_from_hash(deck_hash)
+        self.setWindowTitle(f"AnkiCollab - Notes Removed from Deck {local_name}")
+        self.setModal(True)
+
+        layout = QVBoxLayout()
+
+        label = QLabel("The maintainers removed the following notes from the deck. How do you want to proceed?\n")
+        layout.addWidget(label)
+
+        scroll_area = QScrollArea()
+
+        deleted_notes_text = QTextBrowser()
+        deleted_notes_text.setMaximumHeight(200)
+
+        deleted_notes_str = "\n".join(map(str, deleted_notes))
+        deleted_notes_text.setPlainText(deleted_notes_str)
+
+        scroll_area.setWidget(deleted_notes_text)
+        scroll_area.setWidgetResizable(True)  # Allow the QTextBrowser to expand within the scroll area
+
+        layout.addWidget(scroll_area)
+
+        button_box = QDialogButtonBox()
+        delete_button = button_box.addButton("Delete Notes", QDialogButtonBox.ButtonRole.AcceptRole)
+        open_in_browser_button = button_box.addButton("Show in Browser", QDialogButtonBox.ButtonRole.RejectRole)
+        button_box.addButton("Keep Notes", QDialogButtonBox.ButtonRole.ActionRole)
+
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+        delete_button.clicked.connect(self.accept)
+        open_in_browser_button.clicked.connect(self.reject)
+
+        self.adjustSize()

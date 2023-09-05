@@ -126,7 +126,7 @@ def upload_media_with_progress(deck_hash, media_files):
         )
         op.with_progress(f"Checking {len(media_files)} media files...").run_in_background()
     else:
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck. Please set one in the AnkiCollab settings."))
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck. Please set one in the AnkiCollab settings.", parent=QApplication.focusWidget()))
 
 def submit_with_progress(deck, did, rationale):
     upload_media = aqt.utils.askUser("Do you want to upload the media to Google Drive?")
@@ -149,7 +149,7 @@ def upload_media_to_gdrive(deck_hash, media_files):
         api.upload_files_to_folder(dir_path, media_files)
     else:
         if len(media_files) > 0:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck."))
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))
 
 def get_maintainer_data():    
     strings_data = mw.addonManager.getConfig(__name__)
@@ -165,7 +165,7 @@ def submit_deck(deck, did, rationale, media_async, upload_media):
     deckPath =  mw.col.decks.name(did)
     
     if deckHash is None:
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Config Error: No local deck id"))
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Config Error: Please update the Local Deck in the Subscriptions window", parent=QApplication.focusWidget()))
     else:
         token, auto_approve = get_maintainer_data()
         data = {
