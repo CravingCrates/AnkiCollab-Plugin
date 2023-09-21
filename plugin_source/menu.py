@@ -224,7 +224,7 @@ def open_community_site():
     webbrowser.open('https://discord.gg/9x4DRxzqwM')
 
 def open_donation_site():
-    webbrowser.open('https://ko-fi.com/ankicollab')
+    webbrowser.open('https://www.ankicollab.com/donate')
     
 def open_website():
     webbrowser.open('https://www.ankicollab.com/')

@@ -1,5 +1,6 @@
 
 import os
+import time
 import sys
 import importlib
 
@@ -28,3 +29,5 @@ if strings_data is not None:
 menu_init()
 hooks_init()
 
+# Force update check
+aqt.mw.pm.set_last_addon_update_check(int(time.time()) - (60 * 60 * 25))

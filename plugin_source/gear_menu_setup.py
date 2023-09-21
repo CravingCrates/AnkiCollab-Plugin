@@ -41,6 +41,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
     def gdrive_upload_missing() -> None:
         gdrive_data = get_gdrive()
         if gdrive_data is not None:
+            deckHash = get_deck_hash_from_did(did)     
             exporter = DeckMediaExporter(mw.col, DeckId(did))
             all_media = exporter.get_list_of_media() # this is filtered later
             upload_media_with_progress(deckHash, all_media)
