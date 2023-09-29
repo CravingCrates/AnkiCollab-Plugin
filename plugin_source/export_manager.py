@@ -122,7 +122,7 @@ def upload_media_with_progress(deck_hash, media_files):
         op = QueryOp(
             parent=mw,
             op=lambda _: api.upload_files_to_folder(dir_path, media_files, media_upload_progress_cb),
-            success=on_media_upload_done,
+            success=on_media_upload_done
         )
         op.with_progress(f"Checking {len(media_files)} media files...").run_in_background()
     else:
@@ -134,7 +134,7 @@ def submit_with_progress(deck, did, rationale):
     op = QueryOp(
         parent=mw,
         op=lambda _: submit_deck(deck, did, rationale, False, upload_media),
-        success=do_nothing,
+        success=do_nothing
     )
     op.with_progress("Uploading to AnkiCollab...").run_in_background()
 
@@ -202,6 +202,9 @@ def suggest_subdeck(did):
     deck = deck_initializer.from_collection(aqt.mw.col, deck.name)
     
     deckHash = get_deck_hash_from_did(did)
+    if deckHash is None:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Config Error: Please update the Local Deck in the Subscriptions window", parent=QApplication.focusWidget()))
+        return
     response = requests.get("https://plugin.ankicollab.com/GetDeckTimestamp/" + deckHash)
     
     if response and response.status_code == 200:
@@ -281,7 +284,7 @@ def make_new_card(note: anki.notes.Note):
         op = QueryOp(
             parent=mw,
             op=lambda _: prep_suggest_card(note, 6), # 6 New card rationale
-            success=do_nothing,
+            success=do_nothing
         )
         op.run_in_background()
         

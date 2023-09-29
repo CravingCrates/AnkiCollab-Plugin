@@ -78,7 +78,7 @@ def update_local_deck(input_hash, new_deck, popup_dialog, subs_dialog):
     subs_dialog.accept()
     on_edit_list() #reopen with updated data
 
-def on_edit_list():
+def on_edit_list():    
     dialog = QDialog(mw)
     dialog.setWindowTitle('Edit list')
     layout = QVBoxLayout()

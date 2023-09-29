@@ -23,7 +23,7 @@ class ChangeModelDialog(QDialog):
         # todo consider extracting UI file
         self.form = aqt.forms.changemodel.Ui_Dialog()
         self.form.setupUi(self)
-        self.setWindowModality(Qt.WindowModal)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setup()
 
         self.pauseUpdate = False
@@ -78,10 +78,10 @@ class ChangeModelDialog(QDialog):
         map_widget = QWidget()
         map_widget_layout = QGridLayout()
         combos = []
-        targets = [entity['name'] for entity in dst] + [_("Nothing")]
+        targets = [entity['name'] for entity in dst] + ["Nothing"]
         indices = {}
         for i, entity in enumerate(src):
-            map_widget_layout.addWidget(QLabel(_("Change %s to:") % entity['name']), i, 0)
+            map_widget_layout.addWidget(QLabel(f"Change {entity['name']} to:"), i, 0)
             combo_box = QComboBox()
             combo_box.addItems(targets)
             idx = min(i, len(targets) - 1)

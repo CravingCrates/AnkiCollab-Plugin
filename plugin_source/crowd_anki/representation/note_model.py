@@ -54,13 +54,12 @@ class NoteModel(JsonSerializableAnkiDict):
 
     def make_current(self, collection):
         # Sync through setting global "current" model makes me sad too, but it's ingrained on many levels down
-        collection.models.setCurrent(self.anki_dict)
+        collection.models.set_current(self.anki_dict)
         collection.decks.current()['mid'] = self.anki_dict["id"]
 
     def update_cards(self, collection, old_model):
         if self.check_semantically_identical(NoteModel.from_json(old_model), self):
             return
-
         self.make_current(collection)
 
         old_model["name"] += " *old"
@@ -71,4 +70,4 @@ class NoteModel(JsonSerializableAnkiDict):
 
         # todo signals instead of direct dialog creation?
 
-        ChangeModelDialog(collection, collection.models.nids(old_model), old_model).exec_()
+        ChangeModelDialog(collection, collection.models.nids(old_model), old_model).exec()

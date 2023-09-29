@@ -176,8 +176,12 @@ class NoteMediaExporter(MediaExporter):
             notetypes_in_selection.add(note.note_type()['name'])
             yield get_note_media(self.col, note, self.field)
 
+        get_notetype_by_name = getattr(self.col.models, "by_name", None)
+        if not get_notetype_by_name:
+            get_notetype_by_name = self.col.models.byName  # type: ignore[attr-defined]
+            
         for notetype_name in notetypes_in_selection:
-            notetype = self.col.models.byName(notetype_name)
+            notetype = get_notetype_by_name(notetype_name)
             yield get_notetype_media(notetype)
 
 class DeckMediaExporter(MediaExporter):
@@ -208,6 +212,10 @@ class DeckMediaExporter(MediaExporter):
             notetypes_in_deck.add(note.note_type()['name'])
             yield get_note_media(self.col, note, self.field)
 
+        get_notetype_by_name = getattr(self.col.models, "by_name", None)
+        if not get_notetype_by_name:
+            get_notetype_by_name = self.col.models.byName  # type: ignore[attr-defined]
+            
         for notetype_name in notetypes_in_deck:
-            notetype = self.col.models.byName(notetype_name)
+            notetype = get_notetype_by_name(notetype_name)
             yield get_notetype_media(notetype)

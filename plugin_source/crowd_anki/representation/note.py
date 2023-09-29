@@ -86,6 +86,7 @@ class Note(JsonSerializableAnkiObject):
         else:
             new_model.make_current(collection)
             # todo signals instead of direct dialog creation?
+            # Jan: This will cause issues on Mac (not in main thread because the parent is different)
             dialog = ChangeModelDialog(collection, [self.anki_object.id], self.note_type())
 
             # def on_accepted():

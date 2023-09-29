@@ -123,6 +123,7 @@ def init_add_card(addCardsDialog):
     button_box.addButton(mw.form.invokeAfterAddCheckbox, QDialogButtonBox.ButtonRole.DestructiveRole)
     
 def request_update():
+    remove_nonexistent_decks()
     handle_pull(None)
             
 def onProfileLoaded():
