@@ -6,6 +6,7 @@
     - [Adding a Deck to AnkiCollab](#adding-a-deck-to-ankicollab)
     - [Add Media Support](#media-support)
     - [Auto Approve Changes](#auto-approve-changes)
+    - [Add Notes and Subdecks](#add-notes-and-subdecks)
   - [Handling Suggestions](#handling-suggestions)
     - [Content Changes](#content-changes)
   - [Credits](#credits)
@@ -59,6 +60,14 @@ For convenience purposes, you can let the system auto approve all changes you (o
 Once you're logged in, check the box. That's all you need to do!
 
 ![Auto Approve Checkbox](https://i.imgur.com/IkRpkgi.png)
+
+### Add notes and subdecks
+- If you happen to want to add more notes, just select them in your browser (Ctrl + B), hit right click and select "Ankicollab : Bulk suggest notes". You can then review them on the site (if you haven't turned on [auto approve changes](#auto-approve-changes)).
+
+![](https://i.imgur.com/tV2tOga.png)
+- If you want to add some subdecks to the deck (keep in mind that once added they can't be removed for now), you can go on the left of the *Browse* window and right click on the master deck which you chose when first publishing, right click and select "suggest on Ankicollab"
+
+![](https://i.imgur.com/zLCt3xV.png)
 
 ### Content Changes
 
