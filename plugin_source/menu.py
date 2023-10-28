@@ -18,6 +18,13 @@ auto_approve_action = QAction('Auto Approve Changes (Maintainer only)', mw)
 login_manager_action = QAction('Logout', mw)
 collab_menu = QMenu('AnkiCollab', mw)
 settings_menu = QMenu('Settings', mw)
+
+# Prevent macOS menu bar merging into Preferences by string matching "settings"
+# by setting MenuRole to NoRole from the default TextHeuristicRole.
+settings_menu.menuAction().setMenuRole(QAction.NoRole)
+# Also set this for the settings menu actions to be safe.
+pull_on_startup_action.setMenuRole(QAction.NoRole)
+auto_approve_action.setMenuRole(QAction.NoRole)
     
 def add_maintainer_checkbox():
     strings_data = mw.addonManager.getConfig(__name__)
