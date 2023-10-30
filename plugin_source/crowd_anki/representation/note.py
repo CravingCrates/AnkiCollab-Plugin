@@ -134,7 +134,7 @@ class Note(JsonSerializableAnkiObject):
         if new_note:
             collection.add_note(self.anki_object, deck.anki_dict["id"])
         else:
-            collection.update_card(self.anki_object)
+            collection.update_note(self.anki_object)
             if not import_config.ignore_deck_movement:
                 # Todo: consider move only when majority of cards are in a different deck.
                 collection.set_deck(self.anki_object.card_ids(), deck.anki_dict["id"])
