@@ -100,8 +100,8 @@ def on_edit_list():
             table.setRowCount(len(strings_data))
     table.setColumnCount(2) # set number of columns to 2
     table.setHorizontalHeaderLabels(['Subscription Key', 'Local Deck']) # add column headers   
-    table.setColumnWidth(0, table.width() * 0.4) # adjust column widths
-    table.setColumnWidth(1, table.width() * 0.4)
+    table.setColumnWidth(0, int(table.width() * 0.4)) # adjust column widths
+    table.setColumnWidth(1, int(table.width() * 0.4))
     
     if strings_data is not None:
         row = 0
@@ -241,6 +241,7 @@ def on_login_manager_btn():
     if strings_data is not None:
         if "settings" in strings_data and strings_data["settings"]["token"] != "":
             # Logout
+            requests.get("https://plugin.ankicollab.com/removeToken/" + strings_data["settings"]["token"])  
             strings_data["settings"]["token"] = ""
             login_manager_action.setText("Login")
             if auto_approve_action in collab_menu.actions():

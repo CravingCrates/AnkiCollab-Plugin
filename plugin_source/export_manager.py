@@ -6,6 +6,7 @@ import requests
 import aqt
 import aqt.utils
 import anki
+from anki.utils import point_version
 
 from aqt.qt import *
 from aqt import mw
@@ -124,6 +125,8 @@ def upload_media_with_progress(deck_hash, media_files):
             op=lambda _: api.upload_files_to_folder(dir_path, media_files, media_upload_progress_cb),
             success=on_media_upload_done
         )
+        if point_version() >= 231000:
+            op.without_collection()
         op.with_progress(f"Checking {len(media_files)} media files...").run_in_background()
     else:
         aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck. Please set one in the AnkiCollab settings.", parent=QApplication.focusWidget()))
@@ -136,6 +139,8 @@ def submit_with_progress(deck, did, rationale):
         op=lambda _: submit_deck(deck, did, rationale, False, upload_media),
         success=do_nothing
     )
+    if point_version() >= 231000:
+        op.without_collection()
     op.with_progress("Uploading to AnkiCollab...").run_in_background()
 
 def upload_media_to_gdrive(deck_hash, media_files):
@@ -286,6 +291,8 @@ def make_new_card(note: anki.notes.Note):
             op=lambda _: prep_suggest_card(note, 6), # 6 New card rationale
             success=do_nothing
         )
+        if point_version() >= 231000:
+            op.without_collection()
         op.run_in_background()
         
 def handle_export(did, email) -> str:

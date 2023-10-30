@@ -72,10 +72,23 @@ class Note(JsonSerializableAnkiObject):
         if self.note_model_uuid == old_model_uuid:
             return
 
-        # todo if models semantically identical - create map without calling dialog
 
         uuid_fetcher = UuidFetcher(collection)
         new_model = NoteModel.from_json(uuid_fetcher.get_model(self.note_model_uuid))
+        # todo if models semantically identical - create map without calling dialog
+        # old_model = NoteModel.from_json(uuid_fetcher.get_model(old_model_uuid))
+        # if NoteModel.check_semantically_identical(new_model, old_model):
+        #     # models are semantically identical, so create a mapping without calling dialog
+        #     field_map = {}
+        #     template_map = {}
+        #     for i, field in enumerate(new_model.anki_dict['flds']):
+        #         field_map[i] = i
+        #     for i, template in enumerate(new_model.anki_dict['tmpls']):
+        #         template_map[i] = i
+        #     model_map_cache[old_model_uuid][self.note_model_uuid] = NoteModel.ModelMap(field_map, template_map)
+        #     return
+
+        # # models are not semantically identical, so call dialog to create mapping
         mapping = model_map_cache[old_model_uuid].get(self.note_model_uuid)
         if mapping:
             collection.models.change(self.note_type(),
@@ -91,7 +104,7 @@ class Note(JsonSerializableAnkiObject):
 
             # def on_accepted():
             model_map_cache[old_model_uuid][self.note_model_uuid] = \
-            NoteModel.ModelMap(dialog.get_field_map(), dialog.get_template_map())
+                NoteModel.ModelMap(dialog.get_field_map(), dialog.get_template_map())
 
             # dialog.accepted.connect(on_accepted)
             # dialog.exec_()
@@ -99,18 +112,6 @@ class Note(JsonSerializableAnkiObject):
 
         # To get an updated note to work with
         self.anki_object = uuid_fetcher.get_note(self.get_uuid())
-
-    def move_cards_to_deck(self, deck_id, move_from_dynamic_decks=False):
-        """
-        Move all cards for note with given id to specified deck.
-        :param deck_id:
-        :param move_from_dynamic_decks:
-        :return:
-        """
-        # Todo: consider move only when majority of cards are in a different deck.
-        for card in self.anki_object.cards():
-            card.move_to_deck(deck_id, move_from_dynamic_decks)
-            card.flush()
 
     def save_to_collection(self, collection, deck, model_map_cache, import_config):
         # Todo uuid match on existing notes
@@ -133,9 +134,10 @@ class Note(JsonSerializableAnkiObject):
         if new_note:
             collection.add_note(self.anki_object, deck.anki_dict["id"])
         else:
-            self.anki_object.flush()
+            collection.update_card(self.anki_object)
             if not import_config.ignore_deck_movement:
-                self.move_cards_to_deck(deck.anki_dict["id"])
+                # Todo: consider move only when majority of cards are in a different deck.
+                collection.set_deck(self.anki_object.card_ids(), deck.anki_dict["id"])
 
     def handle_import_config_changes(self, import_config, note_model):
         # Personal Fields
