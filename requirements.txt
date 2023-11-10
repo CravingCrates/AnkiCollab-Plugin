@@ -1,0 +1,3 @@
+aqt
+anki
+sentry-sdk

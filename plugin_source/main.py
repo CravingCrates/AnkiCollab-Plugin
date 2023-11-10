@@ -4,6 +4,16 @@ import time
 import sys
 import importlib
 
+
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn="https://examplePublicKey@o0.ingest.sentry.io/0",
+
+    # Enable performance monitoring
+    # enable_tracing=True,
+)
+
 # Thanks to abdo for this fix
 sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
 google_path = os.path.join(os.path.dirname(__file__), "dist", "google")
