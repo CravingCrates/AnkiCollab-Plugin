@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 import base64
 import gzip
 
+from .import_manager import update_gdrive_data
+
 from .google_drive_api import GoogleDriveAPI
 from .thread import run_function_in_thread
 
@@ -49,8 +51,17 @@ def get_gdrive_data(deck_hash):
         for sub, details in strings_data.items():
             if sub == deck_hash:                
                 if "gdrive" not in details or len(details["gdrive"]) == 0 or details["gdrive"]["folder_id"] == "":
-                    return None
+                    break
                 return details["gdrive"]
+    # GDrive data not found, see if we can find it on the server
+    response = requests.get("https://plugin.ankicollab.com/GetGDriveData/" + deck_hash)
+    if response and response.status_code == 200:
+        res = response.text
+        if res is not None and res:
+            gdrive_data = json.loads(res)
+            update_gdrive_data(deck_hash, gdrive_data)
+            return gdrive_data
+        print("GDrive data not found on server")
     return None
 
 def get_hash_from_local_id(deck_id):
