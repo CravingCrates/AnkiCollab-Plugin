@@ -159,5 +159,5 @@ class ImportDialog(QDialog):
     def read_personal_fields(self, config):
         for model_name, fields_dict in self.personal_field_ui_dict.items():
             for field_name, widget_item in fields_dict.items():
-                if widget_item.checkState() == Qt.Checked:
+                if widget_item.checkState() == Qt.CheckState.Checked:
                     config.add_field(model_name, field_name)

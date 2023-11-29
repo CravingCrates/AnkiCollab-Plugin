@@ -3,7 +3,7 @@ import aqt
 import aqt.utils
 from anki.notes import Note
 from aqt.qt import QDialog, Qt, QHBoxLayout, QWidget, QGridLayout, QComboBox, QLabel
-
+from functools import partial
 
 class ChangeModelDialog(QDialog):
     """
@@ -88,7 +88,7 @@ class ChangeModelDialog(QDialog):
             combo_box.setCurrentIndex(idx)
             indices[combo_box] = idx
             combo_box.currentIndexChanged.connect(
-                lambda entry_id: self.on_combo_changed(entry_id, combo_box, key))
+                partial(self.on_combo_changed, combo_box=combo_box, key=key))
             combos.append(combo_box)
             map_widget_layout.addWidget(combo_box, i, 1)
         map_widget.setLayout(map_widget_layout)
@@ -110,16 +110,16 @@ class ChangeModelDialog(QDialog):
         if combo_box_index == combo_box.count() - 1:
             # set to 'nothing'
             return
+        # update the index before the loop
+        indices[combo_box] = combo_box_index
         # find another combo with same index
         for c in combos:
-            if c == combo_box:
+            if c == combo_box or c.currentIndex() != combo_box_index:
                 continue
-            if c.currentIndex() == combo_box_index:
-                self.pauseUpdate = True
-                c.setCurrentIndex(indices[combo_box])
-                self.pauseUpdate = False
-                break
-        indices[combo_box] = combo_box_index
+            self.pauseUpdate = True
+            c.setCurrentIndex(indices[combo_box])
+            self.pauseUpdate = False
+            break
 
     def get_template_map(self, old=None, combos=None, new=None):
         if not old:

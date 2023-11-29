@@ -226,7 +226,10 @@ def install_update(subscription):
         [tag for tag, value in subscribed_tags.items() if value],
         True if subscription["optional_tags"] else False,
     )
-    deck.save_to_collection(aqt.mw.col, import_config=config)
+    map_cache = defaultdict(dict)
+    note_type_data = {}
+    deck.handle_notetype_changes(aqt.mw.col, map_cache, note_type_data)
+    deck.save_to_collection(aqt.mw.col, map_cache, note_type_data, import_config=config)
 
     # Handle Media
     if gdrive_folder != "":

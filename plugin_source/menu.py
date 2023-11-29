@@ -134,7 +134,9 @@ def on_edit_list():
     add_button = QPushButton('Add Subscription')
     add_button.clicked.connect(lambda: add_to_table(line_edit, table, dialog))
     
-    disclaimer = QLabel("The download may take a long time and Anki may seem unresponsive. Just be patient and do not close it.")
+    disclaimer = QLabel("I declare under penalty of perjury that the material I am sharing is entirely my own work, or I have obtained a license from the intellectual property holder(s) to share it here.")
+    disclaimer.setMaximumWidth(600)
+    disclaimer.setWordWrap(True)
     
     add_layout = QHBoxLayout()
     add_layout.addWidget(line_edit)

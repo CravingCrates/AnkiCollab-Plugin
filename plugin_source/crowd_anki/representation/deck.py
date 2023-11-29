@@ -10,6 +10,7 @@ from ..utils import utils
 from ..utils.constants import UUID_FIELD_NAME
 from ..utils.uuid import UuidFetcher
 from ..utils.notifier import AnkiModalNotifier
+from ..anki.overrides.change_model_dialog import ChangeModelDialog
 from ...thread import run_function_in_thread
 
 import os
@@ -145,45 +146,127 @@ class Deck(JsonSerializableAnkiDict):
         
     def on_success(self, count: int) -> None:
         mw.progress.finish()
-        if aqt.utils.askUser(f"{count} Notes got updated.\n\nDo you want to clear unused tags and empty cards from your collection?"):
-            clear_unused_tags(parent=mw).run_in_background()
-            show_empty_cards(mw)
+        if count > 0:
+            if aqt.utils.askUser(f"{count} Notes got updated.\n\nDo you want to clear unused tags and empty cards from your collection?"):
+                clear_unused_tags(parent=mw).run_in_background()
+                show_empty_cards(mw)
         mw.reset()
+    
+    def import_progress_cb(self, curr: int, max_i: int):
+        aqt.mw.taskman.run_on_main(
+            lambda: aqt.mw.progress.update(
+                label=
+                f"Processed {curr} / {max_i} cards...",
+                value=curr,
+                max=max_i,
+            )
+        )
         
-    def save_to_collection(self, collection, import_config: ImportConfig):
-        self.save_metadata(collection)
+    def save_to_collection(self, collection, model_map_cache, note_type_data, import_config: ImportConfig):
+        self.save_metadata(collection, model_map_cache, note_type_data)
         op = QueryOp(
             parent=mw,
-            op=lambda collection=collection, parent_name="", model_map_cache=defaultdict(dict), import_config=import_config: self.save_decks_and_notes(collection=collection,
-                                  parent_name=parent_name,
-                                  model_map_cache=model_map_cache,
-                                  import_config=import_config
-                                  ),
+            op=lambda collection=collection,
+            parent_name="",
+            status_cb=self.import_progress_cb,
+            status_cur=0,
+            status_max=self.get_note_count(),
+            import_config=import_config: 
+                self.save_decks_and_notes(collection=collection,
+                    parent_name=parent_name,
+                    status_cb=status_cb,
+                    status_cur=status_cur,
+                    status_max=status_max,
+                    import_config=import_config
+                ),
             success=self.on_success,
         )
         op.with_progress("Synchronizing...").run_in_background()
+        
+    def handle_notetype_changes(self, collection, model_map_cache, note_type_data):
+        def on_accepted():
+            model_map_cache[old_model_uuid][note.note_model_uuid] = \
+                NoteModel.ModelMap(dialog.get_field_map(), dialog.get_template_map())
+                            
+        for note_model in self.metadata.models.values():
+            note_model.save_to_collection(collection)
+        
+        fetcher = UuidFetcher(collection)
+        
+        # Fetch the ids and model GUIDs of all notes with a UUID in note_uuids
+        note_uuids = [note.get_uuid() for note in self.notes]
+        placeholders = ', '.join('?' for _ in note_uuids)
+        query = "SELECT guid, mid, id FROM notes WHERE guid IN ({})"
+        query = query.format(placeholders)
+        mids_and_ids = collection.db.all(query, *note_uuids)
+        model_guids = {uuid: (collection.models.get(mid).get(UUID_FIELD_NAME), id) for uuid, mid, id in mids_and_ids}
 
-    def save_metadata(self, collection):
+        for note in self.notes:
+            old_model_uuid, note_id = model_guids.get(note.get_uuid(), (None, None))
+            if old_model_uuid and note.note_model_uuid != old_model_uuid: # note has changed model
+                mapping = model_map_cache[old_model_uuid].get(note.note_model_uuid)
+                if not mapping: # mapping not found, so call dialog to create mapping
+                    note.anki_object = fetcher.get_note(note.get_uuid())
+                    if note.anki_object is None: # Should be impossible to reach
+                        print(f"No note found with UUID: {note.get_uuid()}")
+                        continue
+                    new_model = NoteModel.from_json(fetcher.get_model(note.note_model_uuid))
+                    new_model.make_current(collection)
+                    dialog = ChangeModelDialog(collection, [note.anki_object.id], note.note_type(), mw)
+                    dialog.accepted.connect(on_accepted)
+                    dialog.exec()
+            if note_id is not None: # note exists in collection = not new
+                if old_model_uuid not in note_type_data:
+                    if note.anki_object is None:
+                        note.anki_object = fetcher.get_note(note.get_uuid())
+                    note_type = note.note_type()
+                    note_type_data[old_model_uuid] = (note_type, note.note_model_uuid, [])
+                if note.note_model_uuid != old_model_uuid:
+                    note_type_data[old_model_uuid][2].append(note_id)
+                    
+        for child in self.children:
+            child.handle_notetype_changes(collection, model_map_cache, note_type_data)
+
+    def save_metadata(self, collection, model_map_cache, note_type_data):
         for config in self.metadata.deck_configs.values():
             config.save_to_collection(collection)
 
-        for note_model in self.metadata.models.values():
-            note_model.save_to_collection(collection)
+        # Update notetypes for existing notes
+        fetcher = UuidFetcher(collection)
+        for old_model_uuid, (note_type, new_model_uuid, note_ids) in note_type_data.items():
+            if note_ids:
+                new_model = NoteModel.from_json(fetcher.get_model(new_model_uuid))
+                new_model.make_current(collection)
+                mapping = model_map_cache[old_model_uuid].get(new_model_uuid)
+                if mapping:
+                    collection.models.change(note_type,
+                                            note_ids,
+                                            new_model.anki_dict,
+                                            mapping.field_map,
+                                            mapping.template_map)
             
         self._save_deck(collection, "") # We store the root deck in this thread to avoid concurrency issues
         
-    def save_decks_and_notes(self, collection, parent_name, model_map_cache, import_config: ImportConfig):
+    def save_decks_and_notes(self, collection, parent_name, status_cb, status_cur, status_max, import_config: ImportConfig):
         full_name = self._save_deck(collection, parent_name) # duplicated call for root deck, but thats fine
         
         for note in self.notes:
-            note.save_to_collection(collection, self, model_map_cache, import_config=import_config)
+            note.save_to_collection(collection, self, import_config=import_config)
+            status_cur += 1
+            status_cb(status_cur, status_max)
+            if mw.progress.want_cancel():
+                return status_cur
                 
         for child in self.children:
             child.save_decks_and_notes(collection=collection,
                                        parent_name=full_name,
-                                       model_map_cache=model_map_cache,
+                                       status_cb=status_cb,
+                                       status_cur=status_cur,
+                                       status_max=status_max,
                                        import_config=import_config
-                                       )        
+                                       )
+            if mw.progress.want_cancel():
+                return status_cur
         return self.get_note_count()
 
     def _save_deck(self, collection, parent_name):        

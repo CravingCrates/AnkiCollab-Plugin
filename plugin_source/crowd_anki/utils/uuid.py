@@ -29,6 +29,12 @@ class UuidFetcher:
 
         return AnkiNote(self.collection, id=note_id)
 
+    def get_model_guids_from_note_ids(self, note_ids):
+        placeholders = ', '.join('?' for _ in note_ids)
+        query = "SELECT id, mid FROM notes WHERE id IN ({})"
+        query = query.format(placeholders)
+        mids = dict(self.collection.db.all(query, *note_ids))
+        return {id: self.collection.models.get(mid).get(UUID_FIELD_NAME) for id, mid in mids.items()}
 
 def get_value_by_uuid(values: List, uuid: str):
     return seq(values).find(lambda it: it.get(UUID_FIELD_NAME) == uuid)

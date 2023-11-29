@@ -1,10 +1,11 @@
 import re
 import anki
+import aqt
 import anki.utils
+from aqt import mw
 from anki.notes import Note as AnkiNote
 from .json_serializable import JsonSerializableAnkiObject
 from .note_model import NoteModel
-from ..anki.overrides.change_model_dialog import ChangeModelDialog
 from ..importer.import_dialog import ImportConfig
 from ..config.config_settings import ConfigSettings
 from ..utils.constants import UUID_FIELD_NAME
@@ -64,56 +65,46 @@ class Note(JsonSerializableAnkiObject):
         # history.)
         return self.anki_object.note_type() if hasattr(self.anki_object, 'note_type') else self.anki_object.model()
 
-    def handle_model_update(self, collection, model_map_cache):
-        """
-        Update note's cards if note's model has changed
-        """
-        old_model_uuid = self.note_type().get(UUID_FIELD_NAME)
-        if self.note_model_uuid == old_model_uuid:
-            return
+    # def handle_model_update(self, collection, model_map_cache):
+    #     """
+    #     Update note's cards if note's model has changed
+    #     """
+    #     old_model_uuid = self.note_type().get(UUID_FIELD_NAME)
+    #     if self.note_model_uuid == old_model_uuid:
+    #         return
 
 
-        uuid_fetcher = UuidFetcher(collection)
-        new_model = NoteModel.from_json(uuid_fetcher.get_model(self.note_model_uuid))
-        # todo if models semantically identical - create map without calling dialog
-        # old_model = NoteModel.from_json(uuid_fetcher.get_model(old_model_uuid))
-        # if NoteModel.check_semantically_identical(new_model, old_model):
-        #     # models are semantically identical, so create a mapping without calling dialog
-        #     field_map = {}
-        #     template_map = {}
-        #     for i, field in enumerate(new_model.anki_dict['flds']):
-        #         field_map[i] = i
-        #     for i, template in enumerate(new_model.anki_dict['tmpls']):
-        #         template_map[i] = i
-        #     model_map_cache[old_model_uuid][self.note_model_uuid] = NoteModel.ModelMap(field_map, template_map)
-        #     return
+    #     uuid_fetcher = UuidFetcher(collection)
+    #     new_model = NoteModel.from_json(uuid_fetcher.get_model(self.note_model_uuid))
+    #     # todo if models semantically identical - create map without calling dialog
+    #     # old_model = NoteModel.from_json(uuid_fetcher.get_model(old_model_uuid))
+    #     # if NoteModel.check_semantically_identical(new_model, old_model):
+    #     #     # models are semantically identical, so create a mapping without calling dialog
+    #     #     field_map = {}
+    #     #     template_map = {}
+    #     #     for i, field in enumerate(new_model.anki_dict['flds']):
+    #     #         field_map[i] = i
+    #     #     for i, template in enumerate(new_model.anki_dict['tmpls']):
+    #     #         template_map[i] = i
+    #     #     model_map_cache[old_model_uuid][self.note_model_uuid] = NoteModel.ModelMap(field_map, template_map)
+    #     #     return
 
-        # # models are not semantically identical, so call dialog to create mapping
-        mapping = model_map_cache[old_model_uuid].get(self.note_model_uuid)
-        if mapping:
-            collection.models.change(self.note_type(),
-                                     [self.anki_object.id],
-                                     new_model.anki_dict,
-                                     mapping.field_map,
-                                     mapping.template_map)
-        else:
-            new_model.make_current(collection)
-            # todo signals instead of direct dialog creation?
-            # Jan: This will cause issues on Mac (not in main thread because the parent is different)
-            dialog = ChangeModelDialog(collection, [self.anki_object.id], self.note_type())
+    #     # # models are not semantically identical, so call dialog to create mapping
+    #     mapping = model_map_cache[old_model_uuid].get(self.note_model_uuid)
+    #     if mapping: # should always be true from the background thread
+    #         collection.models.change(self.note_type(),
+    #                                  [self.anki_object.id],
+    #                                  new_model.anki_dict,
+    #                                  mapping.field_map,
+    #                                  mapping.template_map)
+    #     else:
+    #         print("Error: model mapping not found for note model update")
+    #         print("note info: ", self.anki_object.id, old_model_uuid)
 
-            # def on_accepted():
-            model_map_cache[old_model_uuid][self.note_model_uuid] = \
-                NoteModel.ModelMap(dialog.get_field_map(), dialog.get_template_map())
+    #     # To get an updated note to work with
+    #     self.anki_object = uuid_fetcher.get_note(self.get_uuid())
 
-            # dialog.accepted.connect(on_accepted)
-            # dialog.exec_()
-            # todo process cancel
-
-        # To get an updated note to work with
-        self.anki_object = uuid_fetcher.get_note(self.get_uuid())
-
-    def save_to_collection(self, collection, deck, model_map_cache, import_config):
+    def save_to_collection(self, collection, deck, import_config):
         # Todo uuid match on existing notes
 
         note_model = deck.metadata.models[self.note_model_uuid]
@@ -122,8 +113,6 @@ class Note(JsonSerializableAnkiObject):
         new_note = self.anki_object is None
         if new_note:
             self.anki_object = AnkiNote(collection, note_model.anki_dict)
-        else:
-            self.handle_model_update(collection, model_map_cache)
 
         self.handle_import_config_changes(import_config, note_model)
 
@@ -154,6 +143,3 @@ class Note(JsonSerializableAnkiObject):
                 if tag.startswith('AnkiCollab_Optional::'):
                     if tag.split('::')[1] not in import_config.optional_tags:
                         self.anki_object_dict["tags"].remove(tag)
-                    
-
-        
