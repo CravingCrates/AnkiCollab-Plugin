@@ -122,6 +122,8 @@ class Note(JsonSerializableAnkiObject):
 
         if new_note:
             collection.add_note(self.anki_object, deck.anki_dict["id"])
+            if import_config.suspend_new_cards:
+                collection.sched.suspend_cards(self.anki_object.card_ids())
         else:
             collection.update_note(self.anki_object)
             if not import_config.ignore_deck_movement:

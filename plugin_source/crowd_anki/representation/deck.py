@@ -163,7 +163,7 @@ class Deck(JsonSerializableAnkiDict):
         )
         
     def save_to_collection(self, collection, model_map_cache, note_type_data, import_config: ImportConfig):
-        self.save_metadata(collection, model_map_cache, note_type_data)
+        self.save_metadata(collection, import_config.home_deck, model_map_cache, note_type_data)
         op = QueryOp(
             parent=mw,
             op=lambda collection=collection,
@@ -227,7 +227,7 @@ class Deck(JsonSerializableAnkiDict):
         for child in self.children:
             child.handle_notetype_changes(collection, model_map_cache, note_type_data)
 
-    def save_metadata(self, collection, model_map_cache, note_type_data):
+    def save_metadata(self, collection, home_deck, model_map_cache, note_type_data):
         for config in self.metadata.deck_configs.values():
             config.save_to_collection(collection)
 
@@ -245,10 +245,10 @@ class Deck(JsonSerializableAnkiDict):
                                             mapping.field_map,
                                             mapping.template_map)
             
-        self._save_deck(collection, "") # We store the root deck in this thread to avoid concurrency issues
+        self._save_deck(collection, "", home_deck) # We store the root deck in this thread to avoid concurrency issues
         
     def save_decks_and_notes(self, collection, parent_name, status_cb, status_cur, status_max, import_config: ImportConfig):
-        full_name = self._save_deck(collection, parent_name) # duplicated call for root deck, but thats fine
+        full_name = self._save_deck(collection, parent_name, import_config.home_deck) # duplicated call for root deck, but thats fine
         
         for note in self.notes:
             note.save_to_collection(collection, self, import_config=import_config)
@@ -258,28 +258,37 @@ class Deck(JsonSerializableAnkiDict):
                 return status_cur
                 
         for child in self.children:
-            child.save_decks_and_notes(collection=collection,
-                                       parent_name=full_name,
-                                       status_cb=status_cb,
-                                       status_cur=status_cur,
-                                       status_max=status_max,
-                                       import_config=import_config
-                                       )
+            status_cur = child.save_decks_and_notes(collection=collection,
+                                    parent_name=full_name,
+                                    status_cb=status_cb,
+                                    status_cur=status_cur,
+                                    status_max=status_max,
+                                    import_config=import_config
+                                    )
             if mw.progress.want_cancel():
                 return status_cur
-        return self.get_note_count()
+        return status_cur
 
-    def _save_deck(self, collection, parent_name):        
+    def _save_deck(self, collection, parent_name, home_deck):        
         full_name = (parent_name + self.DECK_NAME_DELIMITER if parent_name else "") + self.anki_dict["name"]
         deck_dict = UuidFetcher(collection).get_deck(self.get_uuid())
 
         deck_id = collection.decks.id(full_name, create=False)
+        
+        # Only create new deck for root deck. Subdecks get overwritten.
         if deck_id and (not deck_dict or deck_dict["id"] != deck_id):
-            full_name = self._rename_deck(full_name, collection)
+            if not parent_name:
+                if home_deck: # set the home deck as the root deck
+                    full_name = home_deck
+                    new_deck_id = collection.decks.id(full_name)
+                    deck_dict = collection.decks.get(new_deck_id) # Update to home deck
+                else:
+                    full_name = self._rename_deck(full_name, collection)
+            #else: Don't rename subdecks to prevent ugly _(AnkiCollab) subdecks
 
         if not deck_dict:
             new_deck_id = collection.decks.id(full_name)
-            deck_dict = collection.decks.get(new_deck_id)
+            deck_dict = collection.decks.get(new_deck_id) # Create deck in collection
 
         deck_dict.update(self.anki_dict)
 

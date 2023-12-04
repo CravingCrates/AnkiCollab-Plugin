@@ -45,9 +45,9 @@ class NoteModel(JsonSerializableAnkiDict):
         self.anki_dict = utils.merge_dicts(note_model_dict, self.anki_dict)
 
         if new_model:
-            collection.models.add_dict(self.anki_dict)
+            collection.models.add(self.anki_dict)
         else:
-            collection.models.update_dict(self.anki_dict)
+            collection.models.update(self.anki_dict)
 
         if not new_model:
             self.update_cards(collection, note_model_dict)

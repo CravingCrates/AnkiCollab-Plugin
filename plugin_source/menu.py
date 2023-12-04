@@ -14,6 +14,8 @@ from .hooks import onProfileLoaded
 from .dialogs import LoginDialog
 
 pull_on_startup_action = QAction('Check for Updates on Startup', mw)
+suspend_new_cards_action = QAction('Automatically suspend new Cards', mw)
+move_cards_action = QAction('Do not move Cards automatically', mw)
 auto_approve_action = QAction('Auto Approve Changes (Maintainer only)', mw)
 login_manager_action = QAction('Logout', mw)
 collab_menu = QMenu('AnkiCollab', mw)
@@ -24,6 +26,8 @@ settings_menu = QMenu('Settings', mw)
 settings_menu.menuAction().setMenuRole(QAction.MenuRole.NoRole)
 # Also set this for the settings menu actions to be safe.
 pull_on_startup_action.setMenuRole(QAction.MenuRole.NoRole)
+suspend_new_cards_action.setMenuRole(QAction.MenuRole.NoRole)
+move_cards_action.setMenuRole(QAction.MenuRole.NoRole)
 auto_approve_action.setMenuRole(QAction.MenuRole.NoRole)
 
 def add_maintainer_checkbox():
@@ -134,9 +138,7 @@ def on_edit_list():
     add_button = QPushButton('Add Subscription')
     add_button.clicked.connect(lambda: add_to_table(line_edit, table, dialog))
     
-    disclaimer = QLabel("I declare under penalty of perjury that the material I am sharing is entirely my own work, or I have obtained a license from the intellectual property holder(s) to share it here.")
-    disclaimer.setMaximumWidth(600)
-    disclaimer.setWordWrap(True)
+    disclaimer = QLabel("The download may take a long time and Anki may seem unresponsive. Just be patient and do not close it.")
     
     add_layout = QHBoxLayout()
     add_layout.addWidget(line_edit)
@@ -197,7 +199,10 @@ def on_push_deck_action(self):
     email_field = QLineEdit()
     
     publish_button = QPushButton("Publish Deck")    
-    disclaimer = QLabel("Processing can take a few minutes on the website. Be patient, please.")
+    
+    disclaimer = QLabel("I declare under penalty of perjury that the material I am sharing is entirely my own work, or I have obtained a license from the intellectual property holder(s) to share it here.")
+    disclaimer.setMaximumWidth(600)
+    disclaimer.setWordWrap(True)
     
     def on_publish_button_clicked():
         strings_data = mw.addonManager.getConfig(__name__)
@@ -270,6 +275,10 @@ def store_default_config():
             strings_data["settings"]["auto_approve"] = False
         if "pull_on_startup" not in strings_data["settings"]:
             strings_data["settings"]["pull_on_startup"] = False
+        if "suspend_new_cards" not in strings_data["settings"]:
+            strings_data["settings"]["suspend_new_cards"] = False
+        if "auto_move_cards" not in strings_data["settings"]:
+            strings_data["settings"]["auto_move_cards"] = False
     mw.addonManager.writeConfig(__name__, strings_data)
        
 def menu_init():                
@@ -286,6 +295,12 @@ def menu_init():
     collab_menu.addAction(pull_changes_action)
 
     strings_data = mw.addonManager.getConfig(__name__)
+    
+    def set_action(strings_data, setting_key, action):
+        if "settings" in strings_data and setting_key in strings_data["settings"]:
+            action.setCheckable(True)
+            action.setChecked(bool(strings_data["settings"][setting_key]))
+
     if strings_data is not None:
         if "settings" in strings_data and "token" in strings_data["settings"]:
             if strings_data["settings"]["token"] != "":
@@ -293,25 +308,31 @@ def menu_init():
                 add_maintainer_checkbox()
             else:
                 login_manager_action.setText("Login")
-            
-        if "settings" in strings_data and "pull_on_startup" in strings_data["settings"]:
-            pull_on_startup_action.setCheckable(True)
-            pull_on_startup_action.setChecked(bool(strings_data["settings"]["pull_on_startup"]))
+
+        set_action(strings_data, "pull_on_startup", pull_on_startup_action)
+        set_action(strings_data, "suspend_new_cards", suspend_new_cards_action)
+        set_action(strings_data, "auto_move_cards", move_cards_action)
 
     collab_menu.addAction(login_manager_action)
 
     media_import_action = QAction('Import Media from Folder', mw)
     collab_menu.addAction(media_import_action)
 
-    def toggle_startup_pull(checked):
+    def toggle_setting(setting_key, checked):
         strings_data = mw.addonManager.getConfig(__name__)
         if "settings" not in strings_data:
             strings_data["settings"] = {}
-        strings_data["settings"]["pull_on_startup"] = checked
+        strings_data["settings"][setting_key] = checked
         mw.addonManager.writeConfig(__name__, strings_data)
 
-    pull_on_startup_action.triggered.connect(toggle_startup_pull)
+    pull_on_startup_action.triggered.connect(lambda checked: toggle_setting("pull_on_startup", checked))
     settings_menu.addAction(pull_on_startup_action)
+
+    suspend_new_cards_action.triggered.connect(lambda checked: toggle_setting("suspend_new_cards", checked))
+    settings_menu.addAction(suspend_new_cards_action)
+
+    move_cards_action.triggered.connect(lambda checked: toggle_setting("auto_move_cards", checked))
+    settings_menu.addAction(move_cards_action)
             
     collab_menu.addMenu(settings_menu)
     

@@ -14,7 +14,7 @@ import aqt
 import aqt.utils
 from aqt.operations import QueryOp
 import anki
-
+from anki.utils import point_version
 from aqt.qt import *
 from aqt import mw
 from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog
@@ -69,7 +69,10 @@ class ImportConfig(PersonalFieldsHolder):
     use_notes: bool
     use_media: bool
 
-    ignore_deck_movement: bool
+    ignore_deck_movement: bool    
+    suspend_new_cards: bool
+    
+    home_deck: str = None
 
 
 def media_download_progress_cb(curr: int, max_i: int):
@@ -226,6 +229,7 @@ def install_update(subscription):
         [tag for tag, value in subscribed_tags.items() if value],
         True if subscription["optional_tags"] else False,
     )
+    config.home_deck = get_home_deck(subscription["deck_hash"])
     map_cache = defaultdict(dict)
     note_type_data = {}
     deck.handle_notetype_changes(aqt.mw.col, map_cache, note_type_data)
@@ -273,7 +277,9 @@ def prep_config(protected_fields, optional_tags, has_optional_tags):
         has_optional_tags=has_optional_tags,
         use_notes=True,
         use_media=False,
-        ignore_deck_movement=False,
+        ignore_deck_movement=get_deck_movement_status(),
+        suspend_new_cards=get_card_suspension_status(),
+        home_deck=None,
     )
     for protected_field in protected_fields:
         model_name = protected_field["name"]
@@ -330,6 +336,26 @@ def import_webresult(webresult, input_hash):
         else:  # Update deck
             show_changelog_popup(subscription)
 
+def get_card_suspension_status():
+    strings_data = mw.addonManager.getConfig(__name__)
+    val = False
+    if strings_data is not None and strings_data["settings"] is not None:
+        val = bool(strings_data["settings"]["suspend_new_cards"])
+    return val
+
+def get_deck_movement_status():
+    strings_data = mw.addonManager.getConfig(__name__)
+    val = True
+    if strings_data is not None and strings_data["settings"] is not None:
+        val = bool(strings_data["settings"]["auto_move_cards"])
+    return val
+
+def get_home_deck(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    for hash, details in strings_data.items():
+        if (hash == deck_hash and details["deckId"] != 0):  # Local Deck is set
+            return mw.col.decks.name_if_exists(details["deckId"])
+    return None
 
 def remove_nonexistent_decks():
     strings_data = mw.addonManager.getConfig(__name__)
@@ -362,7 +388,6 @@ def remove_nonexistent_decks():
                     mw.addonManager.writeConfig(__name__, strings_data)
                 else:
                     print("strings_data is None or empty")
-
 
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
 def handle_pull(input_hash):
