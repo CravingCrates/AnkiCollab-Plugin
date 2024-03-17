@@ -200,7 +200,7 @@ def on_push_deck_action(self):
     
     publish_button = QPushButton("Publish Deck")    
     
-    disclaimer = QLabel("I declare under penalty of perjury that the material I am sharing is entirely my own work, or I have obtained a license from the intellectual property holder(s) to share it here.")
+    disclaimer = QLabel("I declare under penalty of perjury that the material I am sharing is entirely my own work, or I have obtained a license from the intellectual property holder(s) to share it on AnkiCollab.")
     disclaimer.setMaximumWidth(600)
     disclaimer.setWordWrap(True)
     

@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import json
 import os
+import webbrowser
 import requests
 from datetime import datetime, timedelta
 from concurrent.futures import Future
@@ -17,7 +18,8 @@ import anki
 from anki.utils import point_version
 from aqt.qt import *
 from aqt import mw
-from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog
+
+from .dialogs import AskMediaDownloadDialog, ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
 from .crowd_anki.representation.note import Note
@@ -30,8 +32,10 @@ from .crowd_anki.representation import deck_initializer
 from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
 
-from .google_drive_api import GoogleDriveAPI
+from .utils import get_deck_hash_from_did
+from .google_drive_api import GoogleDriveAPI, get_gdrive_data, update_gdrive_data
 
+from .stats import ReviewHistory
 
 import base64
 import gzip
@@ -95,8 +99,18 @@ def on_media_download_done(count: int) -> None:
     elif count == -2:
         aqt.utils.showInfo("Google API Error.")
 
-
-def handle_media_import(media_files, api):
+def on_stats_upload_done(data) -> None:
+    mw.progress.finish()
+    aqt.utils.tooltip("Review History upload done. Thanks for sharing!", parent=QApplication.focusWidget())
+     
+def open_gdrive_folder(deckHash) -> None:    
+    gdrive_data = get_gdrive_data(deckHash)
+    if gdrive_data is not None:
+        webbrowser.open(f"https://drive.google.com/drive/u/1/folders/{gdrive_data['folder_id']}")
+    else:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))
+        
+def handle_media_import(deckHash, media_files, api):
     if media_files is None:
         return
     dir_path = aqt.mw.col.media.dir()
@@ -106,6 +120,14 @@ def handle_media_import(media_files, api):
             missing_files.append(file_name)
     # Download the missing files
     if len(missing_files) > 0:
+        # if there is more than 100 files ask the user if they wouldn't rather download it from the browser because its a lot faster, if they press no, do the queryOp
+        
+        if len(missing_files) > 100:
+            dialog = AskMediaDownloadDialog()
+            choice = dialog.exec()
+            if choice == QDialog.DialogCode.Accepted:
+                open_gdrive_folder(deckHash)
+                return
         op = QueryOp(
             parent=mw,
             op=lambda _: api.download_selected_files_as_zip(
@@ -183,17 +205,6 @@ def open_browser_with_nids(nids):
     )
     browser.onSearchActivated()
 
-
-def update_gdrive_data(deck_hash, gdrive_new):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        for sub, details in strings_data.items():
-            if sub == deck_hash:
-                details["gdrive"] = gdrive_new
-                break
-        mw.addonManager.writeConfig(__name__, strings_data)
-
-
 def delete_notes(nids):
     if not nids:
         return
@@ -205,7 +216,40 @@ def delete_notes(nids):
             "Deleted %d notes." % len(nids), parent=QApplication.focusWidget()
         )
     )
-
+    
+def update_stats_timestamp(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for sub, details in strings_data.items():
+            if sub == deck_hash:
+                details["last_stats_timestamp"] = int(datetime.utcnow().timestamp())
+                break
+        mw.addonManager.writeConfig(__name__, strings_data)
+        
+    
+def wants_to_share_stats(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    stats_enabled = False
+    last_stats_timestamp = 0
+    if strings_data:
+        for sub, details in strings_data.items():
+            if sub == deck_hash:
+                if "last_stats_timestamp" in details:
+                    last_stats_timestamp = details["last_stats_timestamp"]                
+                if "share_stats" in details:
+                    stats_enabled = details["share_stats"]
+                else:
+                    dialog = AskShareStatsDialog()
+                    choice = dialog.exec()
+                    if choice == QDialog.DialogCode.Accepted:
+                        stats_enabled = True
+                    else:
+                        stats_enabled = False
+                    if dialog.isChecked():
+                        details["share_stats"] = stats_enabled                    
+                        mw.addonManager.writeConfig(__name__, strings_data)
+                break
+    return (stats_enabled, last_stats_timestamp)
 
 def install_update(subscription):
     if check_optional_tag_changes(
@@ -222,6 +266,7 @@ def install_update(subscription):
 
     service_account = subscription["gdrive"]["service_account"]
     gdrive_folder = subscription["gdrive"]["folder_id"]
+    stats_enabled = subscription["stats_enabled"]
 
     deck = deck_initializer.from_json(subscription["deck"])
     config = prep_config(
@@ -239,7 +284,7 @@ def install_update(subscription):
     if gdrive_folder != "":
         update_gdrive_data(subscription["deck_hash"], subscription["gdrive"])
         api = GoogleDriveAPI(service_account=service_account, folder_id=gdrive_folder)
-        handle_media_import(deck.media_files, api)
+        handle_media_import(subscription["deck_hash"], deck.media_files, api)
     else:
         aqt.mw.taskman.run_on_main(
             lambda: aqt.utils.tooltip(
@@ -259,6 +304,21 @@ def install_update(subscription):
         elif del_notes_choice == QDialog.DialogCode.Rejected:
             open_browser_with_nids(deleted_nids)
 
+    # Upload stats if the maintainer wants them    
+    if stats_enabled:
+        # Only upload stats if the user wants to share them
+        (share_data, last_stats_timestamp) = wants_to_share_stats( subscription["deck_hash"])
+        if share_data:
+            rh = ReviewHistory(subscription["deck_hash"])
+            op = QueryOp(
+                parent=mw,
+                op=lambda _: rh.upload_review_history(last_stats_timestamp),
+                success=on_stats_upload_done
+            )
+            op.with_progress(
+                "Uploading Review History..."
+            ).run_in_background()
+            update_stats_timestamp(subscription["deck_hash"])
     return deck.anki_dict["name"]
 
 

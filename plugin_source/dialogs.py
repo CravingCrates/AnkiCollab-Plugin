@@ -255,3 +255,41 @@ class DeletedNotesDialog(QDialog):
         open_in_browser_button.clicked.connect(self.reject)
 
         self.adjustSize()
+        
+class AskShareStatsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("Help Improve the Deck!")
+
+        self.layout = QVBoxLayout(self)
+
+        self.message = QLabel("The deck maintainers would like to use anonymized review data to improve the deck. Would you like to share your stats?")
+        self.layout.addWidget(self.message)
+
+        self.checkbox = QCheckBox("Remember my decision")
+        self.layout.addWidget(self.checkbox)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.layout.addWidget(self.buttons)
+
+    def isChecked(self):
+        return self.checkbox.isChecked()
+    
+class AskMediaDownloadDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("AnkiCollab - Media Download")
+
+        self.layout = QVBoxLayout(self)
+
+        self.message = QLabel("There are a lot of media files to download, would you rather download them manually from the browser? (This will be a lot faster)")
+        self.layout.addWidget(self.message)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.layout.addWidget(self.buttons)

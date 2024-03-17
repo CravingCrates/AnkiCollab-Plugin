@@ -7,6 +7,7 @@ import sys
 import aqt
 from aqt import mw
 from aqt.qt import *
+import requests
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
 
@@ -48,16 +49,18 @@ class GoogleDriveAPI:
             yield lst[i:i + chunk_size]
              
     def download_selected_files_as_zip(self, file_names, local_folder_path, download_progress_cb=None):
-        files = []
         counter = 0
+        maxx = len(file_names)
         for chunk in self.chunks(file_names, 50):  # break up file_names into chunks of 100
             if mw.progress.want_cancel():
                 break
             query = f"("
             query += " or ".join([f"name='{file_name}'" for file_name in chunk])
             query += ")"
-            files.extend(self.query_files(query))
-            counter += self._download_files(files, local_folder_path, len(file_names), counter, download_progress_cb)
+            res = self._download_files(self.query_files(query), local_folder_path, maxx, counter, download_progress_cb)
+            if res < 0: # Abort because something is wrong
+                continue
+            counter += res
 
             
     def query_files(self, query):
@@ -79,13 +82,14 @@ class GoogleDriveAPI:
         except HttpError as error:
             self._handle_http_error(error)
         
-        return files       
+        return files
 
     def list_media_files_in_folder(self):
         query = f"mimeType != 'application/vnd.google-apps.folder' and trashed=false"
         return self.query_files(query)
     
     def _download_files(self, items, local_folder_path, total_files, curr_amount, download_progress_cb) -> int:
+        counter = 0
         try:
             if items is None or len(items) == 0:
                 print('No media files found.')
@@ -102,11 +106,11 @@ class GoogleDriveAPI:
                         request = self.service.files().get_media(fileId=item['id'])
                         file_bytes = io.BytesIO(request.execute())
                         zip_file.writestr(file_name, file_bytes.getvalue())
-                        curr_amount += 1
+                        counter += 1
 
                     # Update the download progress
                     if download_progress_cb:
-                        download_progress_cb(int(curr_amount), int(total_files))
+                        download_progress_cb(int(curr_amount + counter), int(total_files))
                         
                     if mw.progress.want_cancel():
                         break
@@ -116,7 +120,7 @@ class GoogleDriveAPI:
 
             os.remove(zip_path)
             
-            return curr_amount
+            return counter
 
         except HttpError as error:
             self._handle_http_error(error)
@@ -150,3 +154,31 @@ class GoogleDriveAPI:
 
         except HttpError as error:
             self._handle_http_error(error)
+
+def update_gdrive_data(deck_hash, gdrive_new):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for sub, details in strings_data.items():
+            if sub == deck_hash:
+                details["gdrive"] = gdrive_new
+                break
+        mw.addonManager.writeConfig(__name__, strings_data)
+        
+def get_gdrive_data(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:        
+        for sub, details in strings_data.items():
+            if sub == deck_hash:                
+                if "gdrive" not in details or len(details["gdrive"]) == 0 or details["gdrive"]["folder_id"] == "":
+                    break
+                return details["gdrive"]
+    # GDrive data not found, see if we can find it on the server
+    response = requests.get("https://plugin.ankicollab.com/GetGDriveData/" + deck_hash)
+    if response and response.status_code == 200:
+        res = response.text
+        if res is not None and res:
+            gdrive_data = json.loads(res)
+            update_gdrive_data(deck_hash, gdrive_data)
+            return gdrive_data
+        print("GDrive data not found on server")
+    return None

@@ -15,10 +15,11 @@ from aqt.qt import *
 
 from .media_export import DeckMediaExporter, NoteMediaExporter, get_configured_search_field, get_configured_exts, export_with_progress
 
-from .export_manager import get_deck_hash_from_did, get_gdrive_data, upload_media_with_progress
+from .utils import get_deck_hash_from_did
+from .export_manager import upload_media_with_progress
 from .import_manager import handle_media_import
 
-from .google_drive_api import GoogleDriveAPI
+from .google_drive_api import GoogleDriveAPI, get_gdrive_data
 
 def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
     """Adds a menu item under the gears icon to export a deck's media files."""
@@ -57,7 +58,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
                 folder_id=gdrive_data['folder_id'],
             )
             all_media = exporter.get_list_of_media() # this is filtered in the handle_media function to only download missing media
-            handle_media_import(all_media, api)
+            handle_media_import(get_deck_hash_from_did(did), all_media, api)
         else:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))
 

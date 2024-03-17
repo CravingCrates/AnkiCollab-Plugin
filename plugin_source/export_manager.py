@@ -17,9 +17,7 @@ from datetime import datetime, timedelta
 import base64
 import gzip
 
-from .import_manager import update_gdrive_data
-
-from .google_drive_api import GoogleDriveAPI
+from .google_drive_api import GoogleDriveAPI, get_gdrive_data
 from .thread import run_function_in_thread
 
 
@@ -34,72 +32,7 @@ from .crowd_anki.representation import deck_initializer
 from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
 
-def get_timestamp(deck_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:        
-        for sub, details in strings_data.items():
-            if sub == deck_hash:
-                date_string = details["timestamp"]
-                datetime_obj = datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
-                unix_timestamp = datetime_obj.timestamp()
-                return unix_timestamp
-    return None
-
-def get_gdrive_data(deck_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:        
-        for sub, details in strings_data.items():
-            if sub == deck_hash:                
-                if "gdrive" not in details or len(details["gdrive"]) == 0 or details["gdrive"]["folder_id"] == "":
-                    break
-                return details["gdrive"]
-    # GDrive data not found, see if we can find it on the server
-    response = requests.get("https://plugin.ankicollab.com/GetGDriveData/" + deck_hash)
-    if response and response.status_code == 200:
-        res = response.text
-        if res is not None and res:
-            gdrive_data = json.loads(res)
-            update_gdrive_data(deck_hash, gdrive_data)
-            return gdrive_data
-        print("GDrive data not found on server")
-    return None
-
-def get_hash_from_local_id(deck_id):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        for hash, details in strings_data.items():
-            if "deckId" in details and details["deckId"] == deck_id:
-                return hash
-    return None
-
-def get_deck_hash_from_did(did):
-    deckHash = get_hash_from_local_id(did)
-    parent = mw.col.decks.parents(did)
-    if not deckHash and parent:
-        parent_len = len(parent)
-        i = 0
-        deckHash = get_hash_from_local_id(did)
-        while i < parent_len and not deckHash:
-            deck_id = parent[parent_len - i - 1]["id"]
-            deckHash = get_hash_from_local_id(deck_id)
-            i += 1
-    return deckHash
-
-def get_did_from_hash(deck_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        for hash, details in strings_data.items():
-            if hash == deck_hash:
-                return details["deckId"]
-    return None
-
-def get_local_deck_from_hash(input_hash):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        for hash, details in strings_data.items():
-            if hash == input_hash:
-                return mw.col.decks.name(details["deckId"])
-    return "None"
+from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timestamp, get_did_from_hash
 
 def do_nothing(count: int):
     pass
@@ -176,7 +109,7 @@ def get_maintainer_data():
             
 def submit_deck(deck, did, rationale, media_async, upload_media):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    deckHash = get_deck_hash_from_did(did)#
+    deckHash = get_deck_hash_from_did(did)
     newName = get_local_deck_from_hash(deckHash)
     deckPath =  mw.col.decks.name(did)
     
