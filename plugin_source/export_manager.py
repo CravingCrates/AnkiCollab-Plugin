@@ -75,12 +75,12 @@ def upload_media_with_progress(deck_hash, media_files):
     else:
         aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck. Please set one in the AnkiCollab settings.", parent=QApplication.focusWidget()))
 
-def submit_with_progress(deck, did, rationale):
+def submit_with_progress(deck, did, rationale, commit_text):
     upload_media = aqt.utils.askUser("Do you want to upload the media to Google Drive?")
     
     op = QueryOp(
         parent=mw,
-        op=lambda _: submit_deck(deck, did, rationale, False, upload_media),
+        op=lambda _: submit_deck(deck, did, rationale, commit_text, False, upload_media),
         success=do_nothing
     )
     if point_version() >= 231000:
@@ -107,7 +107,7 @@ def get_maintainer_data():
             return strings_data["settings"]["token"], strings_data["settings"]["auto_approve"]
     return "", False
             
-def submit_deck(deck, did, rationale, media_async, upload_media):    
+def submit_deck(deck, did, rationale, commit_text, media_async, upload_media):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     deckHash = get_deck_hash_from_did(did)
     newName = get_local_deck_from_hash(deckHash)
@@ -123,6 +123,7 @@ def submit_deck(deck, did, rationale, media_async, upload_media):
             "new_name": newName, 
             "deck": deck_res, 
             "rationale": rationale,
+            "commit_text": commit_text,
             "token": token,
             "force_overwrite": auto_approve,
             }
@@ -141,6 +142,61 @@ def submit_deck(deck, did, rationale, media_async, upload_media):
             
         if response:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
+
+def get_commit_info(default_opt = 0):
+    options = [
+        "None", "Deck Creation", "Updated content", "New content", "Content error",
+        "Spelling/Grammar", "New card", "Updated Tags",
+        "New Tags", "Bulk Suggestion", "Other", "Note Removal"
+    ]
+
+    dialog = QInputDialog()
+    dialog.setOption(QInputDialog.InputDialogOption.UseListViewForComboBoxItems)
+    dialog.setComboBoxItems(options)
+    dialog.setComboBoxEditable(False)
+    dialog.setWindowTitle("Commit Information")
+    dialog.setLabelText("Select a rationale (mandatory):")
+    dialog.setTextValue(options[default_opt])
+    dialog.setInputMode(QInputDialog.InputMode.TextInput)
+    dialog.setOkButtonText("OK")
+    dialog.setCancelButtonText("Cancel")
+
+    if dialog.exec() == QInputDialog.DialogCode.Accepted:
+        rationale = options.index(dialog.textValue())
+
+        textDialog = QDialog()
+        textDialog.setWindowTitle("Additional Information (optional):")
+        layout = QVBoxLayout()
+        textEdit = QTextEdit()
+        textEdit.setFixedHeight(5 * textEdit.fontMetrics().lineSpacing())
+
+        doc = QTextDocument()
+        doc.setMaximumBlockCount(255)
+        textEdit.setDocument(doc)
+        @pyqtSlot()
+        def checkLength():
+            if len(textEdit.toPlainText()) > 255:
+                cursor = textEdit.textCursor()  # Save cursor position
+                pos = cursor.position()
+                textEdit.setPlainText(textEdit.toPlainText()[:255])
+                pos = min(pos, 255)
+                cursor.setPosition(pos)  # Restore cursor position
+                textEdit.setTextCursor(cursor)
+
+        textEdit.textChanged.connect(checkLength)
+
+        layout.addWidget(textEdit)
+        okButton = QPushButton("Submit")
+        okButton.clicked.connect(textDialog.accept)
+        layout.addWidget(okButton)
+        textDialog.setLayout(layout)
+
+        if textDialog.exec() == QDialog.DialogCode.Accepted:
+            additional_info = textEdit.toPlainText()
+            return rationale, additional_info
+
+    aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Aborting", parent=QApplication.instance().focusWidget()))
+    return None, None
 
 def suggest_subdeck(did):
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
@@ -165,7 +221,10 @@ def suggest_subdeck(did):
     
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
-    submit_with_progress(deck, did, 9) # 9: Bulk Suggestion rationale
+    (rationale, commit_text) = get_commit_info(9) # Bulk Suggestion
+    if rationale is None:
+        return
+    submit_with_progress(deck, did, rationale, commit_text)
     
 def bulk_suggest_notes(nids):
     notes = [aqt.mw.col.get_note(nid) for nid in nids]
@@ -191,8 +250,11 @@ def bulk_suggest_notes(nids):
     deck = deck_initializer.from_collection(aqt.mw.col, deck.name, note_ids=nids)
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck)
-
-    submit_with_progress(deck, did, 9) # 9: Bulk Suggestion rationale
+    
+    (rationale, commit_text) = get_commit_info(9)# 9: Bulk Suggestion rationale
+    if rationale is None:
+        return
+    submit_with_progress(deck, did, rationale, commit_text) 
 
 def prep_suggest_card(note: anki.notes.Note, rationale):
     # i'm in the ghetto, help
@@ -212,21 +274,14 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
     
-    if rationale is None: 
-        options = [
-            "None", "Deck Creation", "Updated content", "New content", "Content error",
-            "Spelling/Grammar", "New card", "Updated Tags",
-            "New Tags", "Bulk Suggestion", "Other"
-        ]
-
-        selected, ok = QInputDialog.getItem(None, "Rationale", "Select a rationale:", options, 0, False)
-
-        if ok:
-            rationale = options.index(selected)
-        else:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Aborting due to lack of rationale", parent=QApplication.focusWidget()))
-            return
-    submit_deck(deck, did, rationale, True, True)
+    if rationale is None:
+        (rationale, commit_text) = get_commit_info()
+    if rationale is None:
+        return
+    if commit_text is None:
+        commit_text = ""
+        
+    submit_deck(deck, did, rationale, commit_text, True, True)
 
 def make_new_card(note: anki.notes.Note):
     if mw.form.invokeAfterAddCheckbox.isChecked():

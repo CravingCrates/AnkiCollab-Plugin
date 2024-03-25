@@ -66,10 +66,14 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
     
     guids = get_guids_from_noteids(nids)
     
-    print(guids)
+    (rationale, commit_text) = get_commit_info(11)
+    if rationale is None:
+        return
+    
     payload = {
         'remote_deck': deckHash,
         'note_guids': guids,
+        'commit_text': commit_text,
         'token': get_login_token(),
         'force_overwrite': False
     }
@@ -84,11 +88,7 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
 def request_note_removal(browser: Browser, nids: Sequence[NoteId]) -> None:
     if len(nids) < 1:
         aqt.utils.showInfo("Please select a note", parent=browser)
-        return
-    
-    if not aqt.utils.askUser("Are you sure you want to remove the selected Notes from AnkiCollab and your collection?", parent=browser):
-        return
-    
+        return    
     remove_notes(nids, browser)
 
 def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
