@@ -159,7 +159,6 @@ def get_optional_tags(deck_hash):
                 return details["optional_tags"]
     return {}
 
-
 def check_optional_tag_changes(deck_hash, optional_tags):
     sorted_old = sorted(get_optional_tags(deck_hash).keys())
     sorted_new = sorted(optional_tags)

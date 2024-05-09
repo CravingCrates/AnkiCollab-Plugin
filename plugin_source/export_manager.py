@@ -106,9 +106,22 @@ def get_maintainer_data():
         if "settings" in strings_data and strings_data["settings"]["token"] != "":
             return strings_data["settings"]["token"], strings_data["settings"]["auto_approve"]
     return "", False
+
+def get_personal_tags(deck_hash):
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data:
+        for hash, details in strings_data.items():
+            if hash == deck_hash:
+                if "personal_tags" not in details:
+                    details["personal_tags"] = ["leech"]
+                    mw.addonManager.writeConfig(__name__, strings_data)
+                return details["personal_tags"]
+    return []
+
             
 def submit_deck(deck, did, rationale, commit_text, media_async, upload_media):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
+        
     deckHash = get_deck_hash_from_did(did)
     newName = get_local_deck_from_hash(deckHash)
     deckPath =  mw.col.decks.name(did)
@@ -186,10 +199,13 @@ def get_commit_info(default_opt = 0):
         textEdit.textChanged.connect(checkLength)
 
         layout.addWidget(textEdit)
-        okButton = QPushButton("Submit")
-        okButton.clicked.connect(textDialog.accept)
+        okButton = QPushButton("Submit (Enter)")
         layout.addWidget(okButton)
         textDialog.setLayout(layout)
+        okButton.clicked.connect(textDialog.accept)
+        okButton.setFocus()
+        textEdit.setReadOnly(True)
+        textEdit.mousePressEvent = lambda _ : textEdit.setReadOnly(False)
 
         if textDialog.exec() == QDialog.DialogCode.Accepted:
             additional_info = textEdit.toPlainText()
@@ -218,6 +234,10 @@ def suggest_subdeck(did):
         if last_pulled is None:
             last_pulled = 0.0
         deck_initializer.remove_unchanged_notes(deck, last_updated, last_pulled)
+    
+    personal_tags = get_personal_tags(deckHash)
+    if personal_tags:
+        deck_initializer.remove_tags_from_notes(deck, personal_tags)
     
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
@@ -251,10 +271,14 @@ def bulk_suggest_notes(nids):
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck)
     
+    personal_tags = get_personal_tags(deckHash)
+    if personal_tags:
+        deck_initializer.remove_tags_from_notes(deck, personal_tags)
+    
     (rationale, commit_text) = get_commit_info(9)# 9: Bulk Suggestion rationale
     if rationale is None:
         return
-    submit_with_progress(deck, did, rationale, commit_text) 
+    submit_with_progress(deck, did, rationale, commit_text)
 
 def prep_suggest_card(note: anki.notes.Note, rationale):
     # i'm in the ghetto, help
@@ -270,16 +294,21 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
     deck._load_metadata()
 
     newNote = Note.from_collection(mw.col, note.id, deck.metadata.models)
+    
+    deckHash = get_deck_hash_from_did(did)
+    personal_tags = get_personal_tags(deckHash)
+    if personal_tags:
+        newNote.remove_tags(personal_tags)
+    
     deck.notes = [newNote]
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
     
+    commit_text = ""
     if rationale is None:
         (rationale, commit_text) = get_commit_info()
     if rationale is None:
         return
-    if commit_text is None:
-        commit_text = ""
         
     submit_deck(deck, did, rationale, commit_text, True, True)
 
@@ -305,8 +334,11 @@ def handle_export(did, email) -> str:
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck)
 
+    personal_tags = ["leech"] # The only default option. 
+    deck_initializer.remove_tags_from_notes(deck, personal_tags)
+        
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    
+
     data = {"deck": deck_res, "email": email}
     compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
     based_data = base64.b64encode(compressed_data)
@@ -319,7 +351,7 @@ def handle_export(did, email) -> str:
         if res["status"] == 0:
             msg_box.setText(res["message"])
         else:
-            msg_box.setText("Deck published! Thanks for sharing! Please upload the media manually to Google Drive")
+            msg_box.setText("Deck published. Thanks for sharing! Please upload the media manually to Google Drive")
         msg_box.exec()
         
         if res["status"] == 1:

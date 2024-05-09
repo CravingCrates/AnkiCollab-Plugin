@@ -53,7 +53,17 @@ def remove_unchanged_notes(deck, timestamp, timestamp2) -> None:
     
     for child in deck.children:
         remove_unchanged_notes(child, timestamp, timestamp2)
+
+def remove_tags_from_notes(deck, tags) -> None:
+    """Remove tags from all notes in the deck and its children"""
+    if deck is None:
+        return
     
+    for note in deck.notes:
+        note.remove_tags(tags)
+    
+    for child in deck.children:
+        remove_tags_from_notes(child, tags)
 
 def from_json(json_dict, deck_metadata=None) -> Deck:
     """load metadata, load notes, load children"""

@@ -145,3 +145,9 @@ class Note(JsonSerializableAnkiObject):
                 if tag.startswith('AnkiCollab_Optional::'):
                     if tag.split('::')[1] not in import_config.optional_tags:
                         self.anki_object_dict["tags"].remove(tag)
+
+    def remove_tags(self, tags): # Option to remove personal tags from notes before uploading them
+        for personal_tag in tags:
+            if personal_tag in self.anki_object_dict["tags"]:
+                self.anki_object_dict["tags"].remove(personal_tag)      
+            self.anki_object_dict["tags"] = [tag for tag in self.anki_object_dict["tags"] if not tag.startswith(f"{personal_tag}::")]

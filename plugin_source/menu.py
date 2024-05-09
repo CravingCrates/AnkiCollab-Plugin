@@ -68,6 +68,7 @@ def add_to_table(line_edit, table, dialog):
             'deckId': 0,
             'optional_tags': {},
             'gdrive': {},
+            'personal_tags': ["leech"],
         }
         mw.addonManager.writeConfig(__name__, strings_data)
         line_edit.setText('')
@@ -215,7 +216,13 @@ def on_push_deck_action(self):
                 break  
         uuid = handle_export(deck_id, email)
         if uuid:
-            strings_data[uuid] = { 'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), 'deckId': deck_id }
+            strings_data[uuid] = {
+                'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                'deckId': deck_id,
+                'optional_tags': {},
+                'gdrive': {},
+                'personal_tags': ["leech"],
+            }
             mw.addonManager.writeConfig(__name__, strings_data)
     
     publish_button.clicked.connect(on_publish_button_clicked)
