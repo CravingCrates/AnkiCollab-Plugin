@@ -31,8 +31,16 @@ Deck settings — learning steps, new card limits, maximum interval, etc. — ar
 ## Subscriber
 
 <details close>
-<summary><b>Can I suggest a card to be deleted?</b></summary>
-Currently, there is no way to delete individual cards from a deck uploaded to <a href="https://ankicollab.com/decks">AnkiCollab.com/Decks</a>. As a workaround, suggest a tag like <code>#!DELETE</code> indicating that you want a card deleted.
+<summary><b>Can I exclude certain (personal) tags from uploading, like "leech"?</b></summary>
+Yes!<br />
+  Open Anki<br />
+  Open the Add-ons window (where you install new add-ons), then double-click/Open the Config of AnkiCollab.<br />
+  In the respective deck you're trying to edit, locate this line:<br />
+  <img src="https://i.imgur.com/HrZyNZu.png" width="50%"><br />
+  and add your desired tags to it.<br />
+  Separate the tags with commas and enclose them in quotes, like this:<br />
+  <img src="https://i.imgur.com/zMyYDxC.png" width="50%">  <br />
+  Confirm by clicking OK, and you're done
 </details>
 
 ## Maintainer
