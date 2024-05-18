@@ -1,4 +1,5 @@
 
+import webbrowser
 import aqt
 import aqt.utils
 import anki
@@ -33,6 +34,13 @@ def get_login_token():
             if "token" in strings_data["settings"]:
                 return strings_data["settings"]["token"]
     return None   
+
+def set_rated_true():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None and "settings" in strings_data:
+        if "rated_addon" in strings_data["settings"]:
+            strings_data["settings"]["rated_addon"] = True
+            mw.addonManager.writeConfig(__name__, strings_data)
 
 class ChangelogDialog(QDialog):
     def __init__(self, changelog, deck_hash):
@@ -293,3 +301,45 @@ class AskMediaDownloadDialog(QDialog):
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         self.layout.addWidget(self.buttons)
+        
+class RateAddonDialog(QDialog):
+    def __init__(self, parent=None):
+        super(RateAddonDialog, self).__init__(parent)
+        self.setWindowTitle("Message from the AnkiCollab Team:)")
+
+        layout = QVBoxLayout(self)
+
+        text_label = QLabel("Your review helps make our add-on more well-known in the community and motivates us to keep improving.\n\n"
+                            "If you're enjoying our add-on, please rate us. If you have any issues, let us know.\n")
+        layout.addWidget(text_label)
+
+        love_it_button = QPushButton("Love it? Rate us!")
+        love_it_button.setFixedWidth(350)
+        love_it_layout = QHBoxLayout()
+        love_it_layout.addStretch()
+        love_it_layout.addWidget(love_it_button)
+        love_it_layout.addStretch()
+
+        needs_work_button = QPushButton("Needs work? Tell us more!")
+        needs_work_button.setFixedWidth(350)
+        needs_work_layout = QHBoxLayout()
+        needs_work_layout.addStretch()
+        needs_work_layout.addWidget(needs_work_button)
+        needs_work_layout.addStretch()
+
+        love_it_button.clicked.connect(self.love_it_button_click)
+        needs_work_button.clicked.connect(self.needs_work_button_click)
+
+        layout.addLayout(love_it_layout)
+        layout.addLayout(needs_work_layout)
+
+        self.setModal(True)
+
+    def love_it_button_click(self):
+        self.close()
+        webbrowser.open('https://ankiweb.net/shared/review/1957538407')
+        set_rated_true()
+
+    def needs_work_button_click(self):
+        self.close()
+        webbrowser.open('https://discord.gg/9x4DRxzqwM')

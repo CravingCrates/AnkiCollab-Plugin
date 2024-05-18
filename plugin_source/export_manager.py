@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 import base64
 import gzip
 
+from .dialogs import RateAddonDialog
+
 from .google_drive_api import GoogleDriveAPI, get_gdrive_data
 from .thread import run_function_in_thread
 
@@ -37,6 +39,20 @@ from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timesta
 def do_nothing(count: int):
     pass
 
+def ask_for_rating():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None and "settings" in strings_data:
+        if "push_counter" in strings_data["settings"]:
+            push_counter = strings_data["settings"]["push_counter"]
+            strings_data["settings"]["push_counter"] = push_counter + 1
+            if push_counter % 15 == 0: # every 15 bulk suggestions
+                last_ratepls = strings_data["settings"]["last_ratepls"]
+                if (datetime.utcnow() - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 14: # only ask every 14 days
+                    if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
+                        strings_data["settings"]["last_ratepls"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                        dialog = RateAddonDialog()
+                        dialog.exec()
+            mw.addonManager.writeConfig(__name__, strings_data)
 
 def media_upload_progress_cb(curr: int, max_i: int):
     aqt.mw.taskman.run_on_main(
@@ -155,6 +171,7 @@ def submit_deck(deck, did, rationale, commit_text, media_async, upload_media):
             
         if response:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
+            aqt.mw.taskman.run_on_main(lambda: ask_for_rating())
 
 def get_commit_info(default_opt = 0):
     options = [

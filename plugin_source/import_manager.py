@@ -19,7 +19,7 @@ from anki.utils import point_version
 from aqt.qt import *
 from aqt import mw
 
-from .dialogs import AskMediaDownloadDialog, ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog
+from .dialogs import AskMediaDownloadDialog, ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
 from .crowd_anki.representation.note import Note
@@ -364,6 +364,21 @@ def show_changelog_popup(subscription):
     else:
         abort_update(deck_hash)
 
+def ask_for_rating():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None and "settings" in strings_data:
+        if "pull_counter" in strings_data["settings"]:
+            pull_counter = strings_data["settings"]["pull_counter"]
+            strings_data["settings"]["pull_counter"] = pull_counter + 1
+            if pull_counter % 30 == 0: # every 30 pulls
+                last_ratepls = strings_data["settings"]["last_ratepls"]
+                if (datetime.utcnow() - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 30: # only ask once a month
+                    if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
+                        strings_data["settings"]["last_ratepls"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                        dialog = RateAddonDialog()
+                        dialog.exec()
+            mw.addonManager.writeConfig(__name__, strings_data)
+
 
 def import_webresult(webresult, input_hash):
     # if webresult is empty, make popup to tell user that there are no updates
@@ -394,6 +409,8 @@ def import_webresult(webresult, input_hash):
             mw.addonManager.writeConfig(__name__, strings_data)
         else:  # Update deck
             show_changelog_popup(subscription)
+    
+    ask_for_rating()
 
 def get_card_suspension_status():
     strings_data = mw.addonManager.getConfig(__name__)

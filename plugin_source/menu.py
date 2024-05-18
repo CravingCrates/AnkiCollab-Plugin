@@ -246,7 +246,7 @@ def open_community_site():
 
 def open_donation_site():
     webbrowser.open('https://www.ankicollab.com/donate')
-    
+        
 def open_website():
     webbrowser.open('https://www.ankicollab.com/')
         
@@ -286,6 +286,16 @@ def store_default_config():
             strings_data["settings"]["suspend_new_cards"] = False
         if "auto_move_cards" not in strings_data["settings"]:
             strings_data["settings"]["auto_move_cards"] = False
+        
+        if "rated_addon" not in strings_data["settings"]:
+            strings_data["settings"]["rated_addon"] = False
+        if "last_ratepls" not in strings_data["settings"]:
+            strings_data["settings"]["last_ratepls"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        if "pull_counter" not in strings_data["settings"]:
+            strings_data["settings"]["pull_counter"] = 0
+        if "push_counter" not in strings_data["settings"]:
+            strings_data["settings"]["push_counter"] = 0
+        
     mw.addonManager.writeConfig(__name__, strings_data)
        
 def menu_init():                
