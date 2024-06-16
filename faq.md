@@ -42,6 +42,20 @@ Yes!<br />
   <img src="https://i.imgur.com/zMyYDxC.png" width="50%">  <br />
   Confirm by clicking OK, and you're done
 </details>
+<details close>
+<summary><b>Can I protect certain cards or fields from being updated?</b></summary>
+Yes, you can safeguard specific fields within individual cards to prevent them from being updated. This is particularly useful if you want certain information to remain constant, despite updates. Here's how you can do it:
+
+- **To protect a specific field:** Use the `AnkiCollab_Protect::` command followed by the field name. For example, if you have a card with fields named `Front` and `Back`, and you wish to keep the `Back` field unchanged, add the following tag to your card: `AnkiCollab_Protect::Back`.
+
+- **Handling fields with spaces:** If the field name includes spaces (e.g., `Question Mark`), replace the spaces with underscores when adding the tag, as tags cannot contain spaces. For instance, use `AnkiCollab_Protect::Question_Mark`.
+
+  ![Example Image](https://i.imgur.com/Alpi0VJ.png)
+
+- **To protect all fields on a card:** If your goal is to protect the entire card, thereby preventing any updates to it, add the tag `AnkiCollab_Protect::All`.
+
+Additionally, it's worth noting that certain fields may already be protected by the maintainers on the website. This is often the case for "personal" fields designed for individual customization. If you're unsure whether a field is protected, or if you're a maintainer looking to protect fields for all users, you can check and adjust these settings in the Deck Settings on the website.
+</details>
 
 ## Maintainer
 

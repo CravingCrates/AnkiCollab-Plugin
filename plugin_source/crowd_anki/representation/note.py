@@ -4,6 +4,8 @@ import aqt
 import anki.utils
 from aqt import mw
 from anki.notes import Note as AnkiNote
+
+from ...var_defs import PREFIX_OPTIONAL_TAGS, PREFIX_PROTECTED_FIELDS
 from .json_serializable import JsonSerializableAnkiObject
 from .note_model import NoteModel
 from ..importer.import_dialog import ImportConfig
@@ -131,23 +133,44 @@ class Note(JsonSerializableAnkiObject):
                 collection.set_deck(self.anki_object.card_ids(), deck.anki_dict["id"])
 
     def handle_import_config_changes(self, import_config, note_model):
-        # Personal Fields
+        # Protected Fields set by maintainer
         for num in range(len(self.anki_object_dict["fields"])):
             if import_config.is_personal_field(note_model.anki_dict['name'], note_model.anki_dict['flds'][num]['name']):
                 self.anki_object_dict["fields"][num] = self.anki_object.fields[num]
-
-        # Tag Cards on Import
-        self.anki_object_dict["tags"] += import_config.add_tag_to_cards
+                
+        # Protected Fields set by user
+        for tag in self.anki_object.tags:
+            if tag.startswith(PREFIX_PROTECTED_FIELDS):
+                tag_parts = tag.split('::', 1)
+                if len(tag_parts) > 1:
+                    protected_field = tag_parts[1]
+                    if tag not in self.anki_object_dict["tags"]:
+                        self.anki_object_dict["tags"].append(tag)
+                    if protected_field == "All":
+                        self.anki_object_dict["fields"] = self.anki_object.fields
+                        break
+                    for field_num, field in enumerate(note_model.anki_dict['flds']):
+                        if protected_field == field['name'] or protected_field.replace('_', ' ') == field['name']:
+                            self.anki_object_dict["fields"][field_num] = self.anki_object.fields[field_num]
+                            break
         
         # Remove unused optional tags
         if import_config.has_optional_tags:
+            updated_tags = []
             for tag in self.anki_object_dict["tags"]:
-                if tag.startswith('AnkiCollab_Optional::'):
-                    if tag.split('::')[1] not in import_config.optional_tags:
-                        self.anki_object_dict["tags"].remove(tag)
+                if tag.startswith(PREFIX_OPTIONAL_TAGS):
+                    tag_parts = tag.split('::', 1)
+                    if len(tag_parts) > 1 and tag_parts[1] not in import_config.optional_tags:
+                        continue
+                updated_tags.append(tag)
+            self.anki_object_dict["tags"] = updated_tags
 
     def remove_tags(self, tags): # Option to remove personal tags from notes before uploading them
         for personal_tag in tags:
             if personal_tag in self.anki_object_dict["tags"]:
-                self.anki_object_dict["tags"].remove(personal_tag)      
+                self.anki_object_dict["tags"].remove(personal_tag)
+            # Remove tags that start with the personal_tag prefix
             self.anki_object_dict["tags"] = [tag for tag in self.anki_object_dict["tags"] if not tag.startswith(f"{personal_tag}::")]
+
+        # Remove any tags that are just whitespace
+        self.anki_object_dict["tags"] = [tag for tag in self.anki_object_dict["tags"] if tag.strip()]

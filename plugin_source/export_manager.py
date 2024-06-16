@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 import base64
 import gzip
 
+from .var_defs import DEFAULT_PROTECTED_TAGS, PREFIX_PROTECTED_FIELDS
+
 from .dialogs import RateAddonDialog
 
 from .google_drive_api import GoogleDriveAPI, get_gdrive_data
@@ -125,15 +127,20 @@ def get_maintainer_data():
 
 def get_personal_tags(deck_hash):
     strings_data = mw.addonManager.getConfig(__name__)
+    combined_tags = set()
+
     if strings_data:
         for hash, details in strings_data.items():
             if hash == deck_hash:
+                personal_tags = details.get("personal_tags", DEFAULT_PROTECTED_TAGS)
                 if "personal_tags" not in details:
-                    details["personal_tags"] = ["leech"]
-                    mw.addonManager.writeConfig(__name__, strings_data)
-                return details["personal_tags"]
+                    details["personal_tags"] = personal_tags
+                    mw.addonManager.writeConfig(__name__, strings_data)                
+                combined_tags.update(personal_tags)
+                combined_tags.add(PREFIX_PROTECTED_FIELDS)
+                
+                return list(combined_tags)
     return []
-
             
 def submit_deck(deck, did, rationale, commit_text, media_async, upload_media):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
@@ -351,8 +358,7 @@ def handle_export(did, email) -> str:
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck)
 
-    personal_tags = ["leech"] # The only default option. 
-    deck_initializer.remove_tags_from_notes(deck, personal_tags)
+    deck_initializer.remove_tags_from_notes(deck, DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS])
         
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
 
