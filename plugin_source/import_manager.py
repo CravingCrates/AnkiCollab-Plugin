@@ -353,16 +353,20 @@ def show_changelog_popup(subscription):
     changelog = subscription["changelog"]
     deck_hash = subscription["deck_hash"]
 
-    dialog = ChangelogDialog(changelog, deck_hash)
-    choice = dialog.exec()
+    if changelog:
+        dialog = ChangelogDialog(changelog, deck_hash)
+        choice = dialog.exec()
 
-    if choice == QDialog.DialogCode.Accepted:
+        if choice == QDialog.DialogCode.Accepted:
+            install_update(subscription)
+            update_timestamp(deck_hash)
+        elif choice == QDialog.DialogCode.Rejected:
+            postpone_update()
+        else:
+            abort_update(deck_hash)
+    else: # Skip changelog window if there is no message for the user
         install_update(subscription)
         update_timestamp(deck_hash)
-    elif choice == QDialog.DialogCode.Rejected:
-        postpone_update()
-    else:
-        abort_update(deck_hash)
 
 def ask_for_rating():
     strings_data = mw.addonManager.getConfig(__name__)

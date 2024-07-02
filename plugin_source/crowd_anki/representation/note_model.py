@@ -27,15 +27,15 @@ class NoteModel(JsonSerializableAnkiDict):
     @staticmethod
     def check_semantically_identical(first_model, second_model):
         field_names = ("flds", "tmpls")
+        keys_by_field = {
+            "flds": ["name", "ord"],
+            "tmpls": ["qfmt", "afmt", "bqfmt", "bafmt", "bfont", "bsize", "name", "ord"]
+        }
         for field in field_names:
-            if field == "flds":
-                for first_fld, second_fld in zip(first_model.anki_dict[field], second_model.anki_dict[field]):
-                    for key in ["name", "ord"]:
-                        if (first_fld.get(key) or 0) != (second_fld.get(key) or 0):
-                            return False
-            else:
-                if not utils.json_compare(first_model.anki_dict[field], second_model.anki_dict[field]):
-                    return False
+            for first_fld, second_fld in zip(first_model.anki_dict[field], second_model.anki_dict[field]):
+                for key in keys_by_field[field]:
+                    if (first_fld.get(key) or 0) != (second_fld.get(key) or 0):
+                        return False
         return True
 
     def save_to_collection(self, collection: Collection):
