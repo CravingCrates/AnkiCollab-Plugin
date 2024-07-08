@@ -71,11 +71,9 @@ The folder should now have two people with access: you and your service account.
 ![folder access](https://i.imgur.com/rAzqXVe.png)
 
 Bonus Step:
-If you want to enable everyone on the AnkiCollab website to view the media files, you can allow "General access" to "Anyone with the link" by clicking "Manage access" again.
+If you want to allow anyone with the link to view the media files, you can allow "General access" to "Anyone with the link" by clicking "Manage access" again.
 
 ![general access](https://i.imgur.com/BTM5uJM.png)
-
-This will enable everyone on the website to view the media files (but not edit them, of course).
 
 Congratulations! You are now 99% done. The final step is to set up your Google media in AnkiCollab.
 
