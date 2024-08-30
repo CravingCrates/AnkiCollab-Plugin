@@ -107,3 +107,27 @@ Let's say you subscribed to a Flower Identification deck, but they're missing th
 ![Blue arrow pointing to the Suggest on AnkiCollab buttom at the bottom of the Add window.](https://i.imgur.com/HvJM2Fn.png)
 
 Now you just need to wait for the maintainer to approve your card!
+
+## Downloading Updates
+
+To download any changes or new content for your subscribed deck, you can manually check for new content or automatically check for updates on startup. 
+
+### Check for New Content Manually
+
+On the toolbar, click `AnkiCollab → Check for New Content`.
+
+![A cursor hovering over the Check for New Content button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/dtxRALy.png)
+
+This will retrieve any available updates for your subscription.
+
+If any updates are available, you will be shown the changelog and asked if you want to Install Now, Skip this Update, or Decide Later.
+
+![A new update window showing a new update in AnkiCollab.](https://i.imgur.com/9uB5HMM.png)
+
+### Check for New Content Automatically
+
+On the toolbar, click `AnkiCollab → Settings → Check for Updates on Startup`.
+
+![A cursor hovering over the Check for Updates on Startup button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/dQ9ZUbU.png)
+
+When you startup Anki, AnkiCollab will automatically check for updates and prompt you to install any available updates.
