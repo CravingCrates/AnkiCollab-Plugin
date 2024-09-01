@@ -6,6 +6,9 @@
   - [Suggesting Changes](#suggesting-changes)
     - [Card Content and Tags](#card-content-and-tags)
     - [New Cards](#new-cards)
+  - [Downloading Updates](#downloading-updates)
+    - [Check for New Content Manually](#check-for-new-content-manually)
+    - [Check for New Content Automatically](#check-for-new-content-automatically)
 
 If you don't want to maintain or publish decks, you **do not** need an account. The **subscription key** 🔑 is all you need!
 
