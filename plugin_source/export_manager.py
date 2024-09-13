@@ -17,6 +17,10 @@ from datetime import datetime, timedelta
 import base64
 import gzip
 
+from .crowd_anki.representation.note_model import NoteModel
+
+from .crowd_anki.utils.uuid import UuidFetcher
+
 from .var_defs import DEFAULT_PROTECTED_TAGS, PREFIX_PROTECTED_FIELDS
 
 from .dialogs import RateAddonDialog
@@ -169,16 +173,29 @@ def submit_deck(deck, did, rationale, commit_text, media_async, upload_media):
         response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
         
         # Hacky, but for bulk suggestions we want the progress bar to include media files, 
-        # but for single suggestions we can run it in the background to make it a smoother experience    
+        # but for single suggestions we can run it in the background to make it a smoother experience            
         if upload_media:
             if media_async: 
                 run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list())
             else:
-                upload_media_to_gdrive(deckHash, deck.get_media_file_list())
-            
-        if response:
+                upload_media_to_gdrive(deckHash, deck.get_media_file_list())    
+                
+        if response.status_code == 200:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
             aqt.mw.taskman.run_on_main(lambda: ask_for_rating())
+            return
+    
+        if response.status_code == 500:
+            print(response.text)
+            if "Notetype Error: " in response.text:
+                missing_note_uuid = response.text.split("Notetype Error: ")[1]
+                note_model_dict = UuidFetcher(aqt.mw.col).get_model(missing_note_uuid)
+                note_model = NoteModel.from_json(note_model_dict)
+                maybe_name = note_model.anki_dict["name"]
+                aqt.mw.taskman.run_on_main(
+                    lambda: aqt.utils.showCritical(f"The Notetype\n{maybe_name}\ndoes not exist on the cloud deck. Please only use notetypes that the maintainer added.", title="AnkiCollab Upload Error: Notetype not found.")
+                )
+                
 
 def get_commit_info(default_opt = 0):
     options = [
