@@ -78,6 +78,8 @@ class ImportConfig(PersonalFieldsHolder):
     
     home_deck: str = None
 
+def do_nothing(count: int):
+    pass
 
 def media_download_progress_cb(curr: int, max_i: int):
     aqt.mw.taskman.run_on_main(
@@ -250,7 +252,7 @@ def wants_to_share_stats(deck_hash):
                 break
     return (stats_enabled, last_stats_timestamp)
 
-def install_update(subscription):
+def install_update(subscription, is_new = False):
     if check_optional_tag_changes(
         subscription["deck_hash"], subscription["optional_tags"]
     ):
@@ -278,7 +280,6 @@ def install_update(subscription):
     note_type_data = {}
     deck.handle_notetype_changes(aqt.mw.col, map_cache, note_type_data)
     deck.save_to_collection(aqt.mw.col, map_cache, note_type_data, import_config=config)
-
     # Handle Media
     if gdrive_folder != "":
         update_gdrive_data(subscription["deck_hash"], subscription["gdrive"])
@@ -291,7 +292,6 @@ def install_update(subscription):
                 parent=QApplication.focusWidget(),
             )
         )
-
     # Handle deleted Notes
     deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
     if deleted_nids:
@@ -302,9 +302,8 @@ def install_update(subscription):
             delete_notes(deleted_nids)
         elif del_notes_choice == QDialog.DialogCode.Rejected:
             open_browser_with_nids(deleted_nids)
-
-    # Upload stats if the maintainer wants them    
-    if stats_enabled:
+    # Upload stats if the maintainer wants them, don't bother for new decks
+    if stats_enabled and not is_new:
         # Only upload stats if the user wants to share them
         (share_data, last_stats_timestamp) = wants_to_share_stats( subscription["deck_hash"])
         if share_data:
@@ -394,11 +393,15 @@ def import_webresult(webresult, input_hash):
         return
 
     # Create a backup for the user before updating!
-    aqt.mw.create_backup_now()
+    QueryOp(
+            parent=mw,
+            op=lambda _: aqt.mw.create_backup_now(),
+            success=do_nothing
+        ).with_progress().run_in_background()
 
     for subscription in webresult:
         if input_hash:  # New deck
-            deck_name = install_update(subscription)
+            deck_name = install_update(subscription, True)
             strings_data = mw.addonManager.getConfig(__name__)
             for hash, details in strings_data.items():
                 if (
@@ -414,7 +417,8 @@ def import_webresult(webresult, input_hash):
         else:  # Update deck
             show_changelog_popup(subscription)
     
-    ask_for_rating()
+    if not input_hash: # Only ask for a rating if they are updating a deck and not adding a new deck to avoid spam popups
+        ask_for_rating()
 
 def get_card_suspension_status():
     strings_data = mw.addonManager.getConfig(__name__)

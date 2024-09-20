@@ -41,7 +41,7 @@ class GoogleDriveAPI:
         print(f"[GDrive] An error occurred: {error_message}")
 
     def _set_up_service(self):
-        self.service = build('drive', 'v3', credentials=self.creds)
+        self.service = build('drive', 'v3', credentials=self.creds, cache_discovery=False)
           
     def chunks(self, lst, chunk_size):
         """Yield successive chunk_size-sized chunks from lst."""

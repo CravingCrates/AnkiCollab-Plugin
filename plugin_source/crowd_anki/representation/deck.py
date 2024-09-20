@@ -1,4 +1,5 @@
 from collections import namedtuple, defaultdict
+from concurrent.futures import Future
 from typing import Callable, Any, Iterable
 
 from .deck_config import DeckConfig
@@ -15,15 +16,28 @@ from ...thread import run_function_in_thread
 
 import os
 import aqt
-from anki.collection import Collection
+from anki.collection import Collection, EmptyCardsReport
 from aqt.operations import QueryOp
-from aqt.emptycards import show_empty_cards
+from aqt.emptycards import EmptyCardsDialog
 from aqt.operations.tag import clear_unused_tags
 from aqt.utils import showInfo
 from aqt import mw
 
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
 
+
+def silent_clear_empty_cards() -> None:
+    def on_done(fut: Future) -> None:
+        report: EmptyCardsReport = fut.result()
+        if report.notes:
+            dialog = EmptyCardsDialog(aqt.mw, report)
+            dialog._delete_cards(keep_notes=True)
+
+    aqt.mw.taskman.run_in_background(aqt.mw.col.get_empty_cards, on_done)
+
+def silent_clear_unused_tags() -> None:
+    aqt.mw.taskman.run_in_background(aqt.mw.col.tags.clear_unused_tags)
+    
 class Deck(JsonSerializableAnkiDict):
     DECK_NAME_DELIMITER = "::"
 
@@ -147,9 +161,8 @@ class Deck(JsonSerializableAnkiDict):
     def on_success(self, count: int) -> None:
         mw.progress.finish()
         if count > 0:
-            if aqt.utils.askUser(f"{count} Notes got updated.\n\nDo you want to clear unused tags and empty cards from your collection?"):
-                clear_unused_tags(parent=mw).run_in_background()
-                show_empty_cards(mw)
+            silent_clear_unused_tags()
+            silent_clear_empty_cards()
         mw.reset()
     
     def import_progress_cb(self, curr: int, max_i: int):
