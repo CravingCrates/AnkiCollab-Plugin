@@ -56,6 +56,11 @@ Yes, you can safeguard specific fields within individual cards to prevent them f
 
 Additionally, it's worth noting that certain fields may already be protected by the maintainers on the website. This is often the case for "personal" fields designed for individual customization. If you're unsure whether a field is protected, or if you're a maintainer looking to protect fields for all users, you can check and adjust these settings in the Deck Settings on the website.
 </details>
+<details close>
+<summary><b>I get this Error: "Please only use notetypes that the maintainer added"!?</b></summary>
+You can only suggest notes with notetypes that already exist on the deck (since its initial upload). That way, the maintainer can be sure that subscribers only upload notes with correct notetypes. Allowing new notetypes will soon be a toggleable option on the website.
+If you have a lot of subscribers, I'll manually help you but if it's just you and your friend, please reupload the deck with all notetypes configured properly.
+</details>
 
 ## Maintainer
 
