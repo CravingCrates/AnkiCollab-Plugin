@@ -2,7 +2,7 @@
 from aqt import mw
 
 from aqt.qt import *
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 import webbrowser
 
@@ -217,7 +217,7 @@ def on_push_deck_action(self):
         uuid = handle_export(deck_id, email)
         if uuid:
             strings_data[uuid] = {
-                'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                 'deckId': deck_id,
                 'optional_tags': {},
                 'gdrive': {},
@@ -290,7 +290,7 @@ def store_default_config():
         if "rated_addon" not in strings_data["settings"]:
             strings_data["settings"]["rated_addon"] = False
         if "last_ratepls" not in strings_data["settings"]:
-            strings_data["settings"]["last_ratepls"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         if "pull_counter" not in strings_data["settings"]:
             strings_data["settings"]["pull_counter"] = 0
         if "push_counter" not in strings_data["settings"]:

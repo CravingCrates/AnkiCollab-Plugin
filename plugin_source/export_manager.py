@@ -13,7 +13,7 @@ from aqt import mw
 import aqt.utils
 from aqt.operations import QueryOp
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import base64
 import gzip
 
@@ -53,9 +53,9 @@ def ask_for_rating():
             strings_data["settings"]["push_counter"] = push_counter + 1
             if push_counter % 15 == 0: # every 15 bulk suggestions
                 last_ratepls = strings_data["settings"]["last_ratepls"]
-                if (datetime.utcnow() - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 14: # only ask every 14 days
+                if (datetime.now(timezone.utc) - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 14: # only ask every 14 days
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
-                        strings_data["settings"]["last_ratepls"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                        strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                         dialog = RateAddonDialog()
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
@@ -103,7 +103,7 @@ def submit_with_progress(deck, did, rationale, commit_text):
     op = QueryOp(
         parent=mw,
         op=lambda _: submit_deck(deck, did, rationale, commit_text, False, upload_media),
-        success=do_nothing
+        success=lambda _: 1,
     )
     if point_version() >= 231000:
         op.without_collection()
@@ -292,6 +292,10 @@ def bulk_suggest_notes(nids):
     # Find top level deck and make sure it's the same for all notes
     deckHash = get_deck_hash_from_did(notes[0].cards()[0].did)
     
+    if deckHash is None:
+        aqt.utils.showInfo("Cannot find the Cloud Deck for these notes")
+        return
+    
     for note in notes:
         if get_deck_hash_from_did(note.cards()[0].did) != deckHash:
             aqt.utils.showInfo("Please only select cards from the same deck")
@@ -358,7 +362,7 @@ def make_new_card(note: anki.notes.Note):
         op = QueryOp(
             parent=mw,
             op=lambda _: prep_suggest_card(note, 6), # 6 New card rationale
-            success=do_nothing
+            success=lambda _: 1,
         )
         if point_version() >= 231000:
             op.without_collection()

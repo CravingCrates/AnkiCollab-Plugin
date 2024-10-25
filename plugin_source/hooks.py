@@ -61,8 +61,14 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
     deckHash = get_deck_hash_from_did(aqt.mw.col.get_note(nids[0]).cards()[0].did)
     
     if deckHash is None:
-        aqt.utils.showInfo("Cannot find the Subscription Key for this Deck", parent=window if window is not None else mw)
+        aqt.utils.showInfo("Cannot find the Cloud Deck for these notes", parent=window if window is not None else mw)
         return
+    
+    notes = [aqt.mw.col.get_note(nid) for nid in nids]    
+    for note in notes:
+        if get_deck_hash_from_did(note.cards()[0].did) != deckHash:
+            aqt.utils.showInfo("Please only select cards from the same deck", parent=window if window is not None else mw)
+            return
     
     guids = get_guids_from_noteids(nids)
     

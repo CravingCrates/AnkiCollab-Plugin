@@ -4,14 +4,19 @@ import aqt
 import anki.utils
 from aqt import mw
 from anki.notes import Note as AnkiNote
+from anki.utils import is_win, point_version
 
+ANKI_INT_VERSION = point_version()
+ANKI_VERSION_23_10_00 = 231000
+if ANKI_INT_VERSION >= ANKI_VERSION_23_10_00:
+    from anki.collection import AddNoteRequest
+    
 from ...var_defs import PREFIX_OPTIONAL_TAGS, PREFIX_PROTECTED_FIELDS
 from .json_serializable import JsonSerializableAnkiObject
 from .note_model import NoteModel
 from ..importer.import_dialog import ImportConfig
 from ..config.config_settings import ConfigSettings
 from ..utils.constants import UUID_FIELD_NAME
-from ..utils.uuid import UuidFetcher
 
 
 class Note(JsonSerializableAnkiObject):
@@ -106,12 +111,46 @@ class Note(JsonSerializableAnkiObject):
     #     # To get an updated note to work with
     #     self.anki_object = uuid_fetcher.get_note(self.get_uuid())
 
-    def save_to_collection(self, collection, deck, import_config):
-        # Todo uuid match on existing notes
+    @staticmethod
+    def bulk_update_notes(collection, notes, deck_id, import_config):
+        if not notes:
+            return
+        collection.update_notes([note.anki_object for note in notes])
+        
+        if not import_config.ignore_deck_movement:
+            cards_to_move = []
+            target_deck_id = deck_id
+            for note in notes:
+                card_ids = note.anki_object.card_ids()
+                for card_id in card_ids:
+                    card = collection.get_card(card_id)
+                    if card.did != target_deck_id and card.odid == 0: # skip filtered decks 2
+                        cards_to_move.append(card_id)
+            if cards_to_move:
+                collection.set_deck(cards_to_move, target_deck_id)
+        
+    @staticmethod
+    def bulk_add_notes(collection, notes, deck_id, import_config):
+        if ANKI_INT_VERSION >= ANKI_VERSION_23_10_00:
+            add_note_requests = [AddNoteRequest(note.anki_object, deck_id=deck_id) for note in notes]
+            collection.add_notes(add_note_requests)
+        else:
+            for note in notes:
+                collection.add_note(note.anki_object, deck_id)
 
+        # Suspend new cards if configured
+        if import_config and import_config.suspend_new_cards:
+            cards_to_suspend = []
+            for note in notes:
+                cards_to_suspend.extend(note.anki_object.card_ids())
+            if cards_to_suspend:
+                collection.sched.suspend_cards(cards_to_suspend)                
+
+    #returns True if the note is new
+    def prep_for_update(self, collection, deck, import_config, int_time, fetcher):
         note_model = deck.metadata.models[self.note_model_uuid]
 
-        self.anki_object = UuidFetcher(collection).get_note(self.get_uuid())
+        self.anki_object = fetcher.get_note(self.get_uuid())
         new_note = self.anki_object is None
         if new_note:
             self.anki_object = AnkiNote(collection, note_model.anki_dict)
@@ -120,50 +159,57 @@ class Note(JsonSerializableAnkiObject):
 
         self.anki_object.__dict__.update(self.anki_object_dict)
         self.anki_object.mid = note_model.anki_dict["id"]
-        self.anki_object.mod = anki.utils.int_time()
-
-        if new_note:
-            collection.add_note(self.anki_object, deck.anki_dict["id"])
-            if import_config.suspend_new_cards:
-                collection.sched.suspend_cards(self.anki_object.card_ids())
-        else:
-            collection.update_note(self.anki_object)
-            if not import_config.ignore_deck_movement:
-                # Todo: consider move only when majority of cards are in a different deck.
-                collection.set_deck(self.anki_object.card_ids(), deck.anki_dict["id"])
-
-    def handle_import_config_changes(self, import_config, note_model):
-        # Protected Fields set by maintainer
-        for num in range(len(self.anki_object_dict["fields"])):
-            if import_config.is_personal_field(note_model.anki_dict['name'], note_model.anki_dict['flds'][num]['name']):
-                self.anki_object_dict["fields"][num] = self.anki_object.fields[num]
-                
-        # Protected Fields set by user
-        for tag in self.anki_object.tags:
-            if tag.startswith(PREFIX_PROTECTED_FIELDS):
-                tag_parts = tag.split('::', 1)
-                if len(tag_parts) > 1:
-                    protected_field = tag_parts[1]
-                    if tag not in self.anki_object_dict["tags"]:
-                        self.anki_object_dict["tags"].append(tag)
-                    if protected_field == "All":
-                        self.anki_object_dict["fields"] = self.anki_object.fields
-                        break
-                    for field_num, field in enumerate(note_model.anki_dict['flds']):
-                        if protected_field == field['name'] or protected_field.replace('_', ' ') == field['name']:
-                            self.anki_object_dict["fields"][field_num] = self.anki_object.fields[field_num]
-                            break
+        self.anki_object.mod = int_time
         
-        # Remove unused optional tags
+        return new_note
+            
+    def handle_import_config_changes(self, import_config, note_model):
+        # Cache field names and indices for faster lookup
+        field_name_to_index = {
+            field['name']: idx 
+            for idx, field in enumerate(note_model.anki_dict['flds'])
+        }
+        
+        # Handle protected fields set by maintainer 
+        protected_fields = [
+            num for num in range(len(self.anki_object_dict["fields"]))
+            if import_config.is_personal_field(note_model.anki_dict['name'], 
+                                            note_model.anki_dict['flds'][num]['name'])
+        ]
+        for num in protected_fields:
+            self.anki_object_dict["fields"][num] = self.anki_object.fields[num]
+
+        protected_tags = [
+            tag for tag in self.anki_object.tags 
+            if tag.startswith(PREFIX_PROTECTED_FIELDS)
+        ]
+        
+        for tag in protected_tags:
+            # Ensure protected tags are preserved in anki_object_dict
+            if tag not in self.anki_object_dict["tags"]:
+                self.anki_object_dict["tags"].append(tag)
+                
+            protected_field = tag.split('::', 1)[1]
+            
+            if protected_field == "Tags":
+                self.anki_object_dict["tags"] = self.anki_object.tags
+                
+            if protected_field == "All":
+                self.anki_object_dict["fields"] = self.anki_object.fields
+                break
+                
+            # Handle individual field protection
+            field_idx = field_name_to_index.get(protected_field) or \
+                    field_name_to_index.get(protected_field.replace('_', ' '))
+            if field_idx is not None:
+                self.anki_object_dict["fields"][field_idx] = self.anki_object.fields[field_idx]
+
         if import_config.has_optional_tags:
-            updated_tags = []
-            for tag in self.anki_object_dict["tags"]:
-                if tag.startswith(PREFIX_OPTIONAL_TAGS):
-                    tag_parts = tag.split('::', 1)
-                    if len(tag_parts) > 1 and tag_parts[1] not in import_config.optional_tags:
-                        continue
-                updated_tags.append(tag)
-            self.anki_object_dict["tags"] = updated_tags
+            self.anki_object_dict["tags"] = [
+                tag for tag in self.anki_object_dict["tags"]
+                if not tag.startswith(PREFIX_OPTIONAL_TAGS) or 
+                tag.split('::', 1)[1] in import_config.optional_tags
+            ]
 
     def remove_tags(self, tags): # Option to remove personal tags from notes before uploading them
         for personal_tag in tags:

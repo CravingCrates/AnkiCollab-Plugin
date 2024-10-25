@@ -5,7 +5,7 @@ import json
 import os
 import webbrowser
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import Future
 
 from pprint import pp
@@ -103,7 +103,7 @@ def on_media_download_done(count: int) -> None:
 
 def on_stats_upload_done(data) -> None:
     mw.progress.finish()
-    aqt.utils.tooltip("Review History upload done. Thanks for sharing!", parent=QApplication.focusWidget())
+    #aqt.utils.tooltip("Review History upload done. Thanks for sharing!", parent=QApplication.focusWidget())
      
 def open_gdrive_folder(deckHash) -> None:    
     gdrive_data = get_gdrive_data(deckHash)
@@ -172,7 +172,7 @@ def update_timestamp(deck_hash):
     if strings_data:
         for sub, details in strings_data.items():
             if sub == deck_hash:
-                details["timestamp"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                details["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                 break
         mw.addonManager.writeConfig(__name__, strings_data)
 
@@ -223,7 +223,7 @@ def update_stats_timestamp(deck_hash):
     if strings_data:
         for sub, details in strings_data.items():
             if sub == deck_hash:
-                details["last_stats_timestamp"] = int(datetime.utcnow().timestamp())
+                details["last_stats_timestamp"] = int(datetime.now(timezone.utc).timestamp())
                 break
         mw.addonManager.writeConfig(__name__, strings_data)
         
@@ -375,9 +375,9 @@ def ask_for_rating():
             strings_data["settings"]["pull_counter"] = pull_counter + 1
             if pull_counter % 30 == 0: # every 30 pulls
                 last_ratepls = strings_data["settings"]["last_ratepls"]
-                if (datetime.utcnow() - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 30: # only ask once a month
+                if (datetime.now(timezone.utc) - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 30: # only ask once a month
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
-                        strings_data["settings"]["last_ratepls"] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                        strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                         dialog = RateAddonDialog()
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
@@ -396,7 +396,7 @@ def import_webresult(webresult, input_hash):
     QueryOp(
             parent=mw,
             op=lambda _: aqt.mw.create_backup_now(),
-            success=do_nothing
+            success=lambda _: 1,
         ).with_progress().run_in_background()
 
     for subscription in webresult:
@@ -410,7 +410,7 @@ def import_webresult(webresult, input_hash):
                     details["deckId"] = aqt.mw.col.decks.id(deck_name)
                     # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
                     details["timestamp"] = (
-                        datetime.now() - timedelta(days=1)
+                        datetime.now(timezone.utc) - timedelta(days=1)
                     ).strftime("%Y-%m-%d %H:%M:%S")
 
             mw.addonManager.writeConfig(__name__, strings_data)
@@ -419,6 +419,10 @@ def import_webresult(webresult, input_hash):
     
     if not input_hash: # Only ask for a rating if they are updating a deck and not adding a new deck to avoid spam popups
         ask_for_rating()
+        infot = "AnkiCollab: Updated deck(s) successfully!"
+        aqt.mw.taskman.run_on_main(
+            lambda: aqt.utils.tooltip(infot, parent=mw)
+        )
 
 def get_card_suspension_status():
     strings_data = mw.addonManager.getConfig(__name__)

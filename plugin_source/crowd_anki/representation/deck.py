@@ -5,6 +5,7 @@ from typing import Callable, Any, Iterable
 from .deck_config import DeckConfig
 from .json_serializable import JsonSerializableAnkiDict
 from .note_model import NoteModel
+from .note import Note
 from ..anki.adapters.file_provider import FileProvider
 from ..importer.import_dialog import ImportConfig
 from ..utils import utils
@@ -16,6 +17,7 @@ from ...thread import run_function_in_thread
 
 import os
 import aqt
+import anki
 from anki.collection import Collection, EmptyCardsReport
 from aqt.operations import QueryOp
 from aqt.emptycards import EmptyCardsDialog
@@ -157,13 +159,14 @@ class Deck(JsonSerializableAnkiDict):
                                              {deck_config.get_uuid(): deck_config for deck_config in deck_config_list})
 
         self.metadata = DeckMetadata(new_deck_configs, new_models)
-        
+     
     def on_success(self, count: int) -> None:
         mw.progress.finish()
         if count > 0:
             silent_clear_unused_tags()
             silent_clear_empty_cards()
-        mw.reset()
+        # Reset window without blocking main thread
+        aqt.mw.reset()
     
     def import_progress_cb(self, curr: int, max_i: int):
         aqt.mw.taskman.run_on_main(
@@ -262,14 +265,29 @@ class Deck(JsonSerializableAnkiDict):
         
     def save_decks_and_notes(self, collection, parent_name, status_cb, status_cur, status_max, import_config: ImportConfig):
         full_name = self._save_deck(collection, parent_name, import_config.home_deck) # duplicated call for root deck, but thats fine
+            
+        new_notes = []
+        update_notes = []
+        deck_id = self.anki_dict["id"] if self else None
+        if not deck_id:
+            return status_cur
+        int_time = anki.utils.int_time()
+        uuid_fetcher = UuidFetcher(collection)
         
         for note in self.notes:
-            note.save_to_collection(collection, self, import_config=import_config)
+            is_new = note.prep_for_update(collection, self, import_config, int_time, uuid_fetcher)
+            (new_notes if is_new else update_notes).append(note)
+            
             status_cur += 1
             status_cb(status_cur, status_max)
             if mw.progress.want_cancel():
                 return status_cur
-                
+            
+        if new_notes:
+            Note.bulk_add_notes(collection, new_notes, deck_id, import_config)
+        if update_notes:
+            Note.bulk_update_notes(collection, update_notes, deck_id, import_config)
+            
         for child in self.children:
             status_cur = child.save_decks_and_notes(collection=collection,
                                     parent_name=full_name,
