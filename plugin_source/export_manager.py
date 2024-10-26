@@ -53,7 +53,8 @@ def ask_for_rating():
             strings_data["settings"]["push_counter"] = push_counter + 1
             if push_counter % 15 == 0: # every 15 bulk suggestions
                 last_ratepls = strings_data["settings"]["last_ratepls"]
-                if (datetime.now(timezone.utc) - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 14: # only ask every 14 days
+                last_ratepls_dt = datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - last_ratepls_dt).days > 14:
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                         dialog = RateAddonDialog()

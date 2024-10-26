@@ -374,8 +374,9 @@ def ask_for_rating():
             pull_counter = strings_data["settings"]["pull_counter"]
             strings_data["settings"]["pull_counter"] = pull_counter + 1
             if pull_counter % 30 == 0: # every 30 pulls
-                last_ratepls = strings_data["settings"]["last_ratepls"]
-                if (datetime.now(timezone.utc) - datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S')).days > 30: # only ask once a month
+                last_ratepls = strings_data["settings"]["last_ratepls"]                
+                last_ratepls_dt = datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - last_ratepls_dt).days > 30:
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                         dialog = RateAddonDialog()

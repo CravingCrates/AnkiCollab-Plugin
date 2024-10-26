@@ -26,7 +26,7 @@ class NoteModel(JsonSerializableAnkiDict):
 
     @staticmethod
     def check_semantically_identical(first_model, second_model):
-        field_names = ("flds") # Test: only check flds and not tmpls for now. This is a temporary fix to reduce the number of false positives.
+        field_names = ("flds",) # Test: only check flds and not tmpls for now. This is a temporary fix to reduce the number of false positives.
         keys_by_field = {
             "flds": ["name", "ord"],
             "tmpls": ["qfmt", "afmt", "bqfmt", "bafmt", "bfont", "bsize", "name", "ord"]
