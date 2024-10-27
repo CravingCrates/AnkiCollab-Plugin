@@ -204,11 +204,6 @@ def get_commit_info(default_opt = 0):
         "Spelling/Grammar", "New card", "Updated Tags",
         "New Tags", "Bulk Suggestion", "Other", "Note Removal"
     ]
-
-    token, auto_approve = get_maintainer_data()
-    if auto_approve:
-        return 9, "Auto-Approved"
-    
     
     # Create the dialog
     dialog = QDialog()
