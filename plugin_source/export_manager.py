@@ -147,55 +147,54 @@ def get_personal_tags(deck_hash):
                 return list(combined_tags)
     return []
             
-def submit_deck(deck, did, rationale, commit_text, media_async, upload_media):    
+def submit_deck(deck, did, rationale, commit_text, media_async, upload_media, token = "", auto_approve=False):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
         
     deckHash = get_deck_hash_from_did(did)
     newName = get_local_deck_from_hash(deckHash)
     deckPath =  mw.col.decks.name(did)
-    
-    if deckHash is None:
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Config Error: Please update the Local Deck in the Subscriptions window", parent=QApplication.focusWidget()))
-    else:
+
+    if token == "":
         token, auto_approve = get_maintainer_data()
-        data = {
-            "remote_deck": deckHash, 
-            "deck_path": deckPath, 
-            "new_name": newName, 
-            "deck": deck_res, 
-            "rationale": rationale,
-            "commit_text": commit_text,
-            "token": token,
-            "force_overwrite": auto_approve,
-            }
-        compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
-        based_data = base64.b64encode(compressed_data)
-        headers = {"Content-Type": "application/json"}
-        response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
-        
-        # Hacky, but for bulk suggestions we want the progress bar to include media files, 
-        # but for single suggestions we can run it in the background to make it a smoother experience            
-        if upload_media:
-            if media_async: 
-                run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list())
-            else:
-                upload_media_to_gdrive(deckHash, deck.get_media_file_list())    
-                
-        if response.status_code == 200:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
-            aqt.mw.taskman.run_on_main(lambda: ask_for_rating())
-            return
     
-        if response.status_code == 500:
-            print(response.text)
-            if "Notetype Error: " in response.text:
-                missing_note_uuid = response.text.split("Notetype Error: ")[1]
-                note_model_dict = UuidFetcher(aqt.mw.col).get_model(missing_note_uuid)
-                note_model = NoteModel.from_json(note_model_dict)
-                maybe_name = note_model.anki_dict["name"]
-                aqt.mw.taskman.run_on_main(
-                    lambda: aqt.utils.showCritical(f"The Notetype\n{maybe_name}\ndoes not exist on the cloud deck. Please only use notetypes that the maintainer added.", title="AnkiCollab Upload Error: Notetype not found.")
-                )
+    data = {
+        "remote_deck": deckHash, 
+        "deck_path": deckPath, 
+        "new_name": newName, 
+        "deck": deck_res, 
+        "rationale": rationale,
+        "commit_text": commit_text,
+        "token": token,
+        "force_overwrite": auto_approve,
+        }
+    compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
+    based_data = base64.b64encode(compressed_data)
+    headers = {"Content-Type": "application/json"}
+    response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
+    
+    # Hacky, but for bulk suggestions we want the progress bar to include media files, 
+    # but for single suggestions we can run it in the background to make it a smoother experience            
+    if upload_media:
+        if media_async: 
+            run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list())
+        else:
+            upload_media_to_gdrive(deckHash, deck.get_media_file_list())    
+            
+    if response.status_code == 200:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
+        aqt.mw.taskman.run_on_main(lambda: ask_for_rating())
+        return
+
+    if response.status_code == 500:
+        print(response.text)
+        if "Notetype Error: " in response.text:
+            missing_note_uuid = response.text.split("Notetype Error: ")[1]
+            note_model_dict = UuidFetcher(aqt.mw.col).get_model(missing_note_uuid)
+            note_model = NoteModel.from_json(note_model_dict)
+            maybe_name = note_model.anki_dict["name"]
+            aqt.mw.taskman.run_on_main(
+                lambda: aqt.utils.showCritical(f"The Notetype\n{maybe_name}\ndoes not exist on the cloud deck. Please only use notetypes that the maintainer added.", title="AnkiCollab Upload Error: Notetype not found.")
+            )
                 
 
 def get_commit_info(default_opt = 0):
@@ -350,13 +349,19 @@ def prep_suggest_card(note: anki.notes.Note, rationale):
     #spaghetti name fix
     deck.anki_dict["name"] = mw.col.decks.name(did).split("::")[-1]
     
-    commit_text = ""
-    if rationale is None:
-        (rationale, commit_text) = get_commit_info()
-    if rationale is None:
-        return
-        
-    submit_deck(deck, did, rationale, commit_text, True, True)
+    if deckHash is None:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Config Error: Please update the Local Deck in the Subscriptions window", parent=QApplication.focusWidget()))
+    else:
+        token, auto_approve = get_maintainer_data()
+        commit_text = ""
+        if auto_approve:
+            (rationale, commit_text) = 10, "Auto-Approved" #rationale = Other
+        if rationale is None:
+            (rationale, commit_text) = get_commit_info()
+        if rationale is None:
+            return
+
+        submit_deck(deck, did, rationale, commit_text, True, True, token, auto_approve)
 
 def make_new_card(note: anki.notes.Note):
     if mw.form.invokeAfterAddCheckbox.isChecked():
