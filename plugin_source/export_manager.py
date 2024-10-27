@@ -205,6 +205,11 @@ def get_commit_info(default_opt = 0):
         "New Tags", "Bulk Suggestion", "Other", "Note Removal"
     ]
 
+    token, auto_approve = get_maintainer_data()
+    if auto_approve:
+        return 9, "Auto-Approved"
+    
+    
     # Create the dialog
     dialog = QDialog()
     dialog.setWindowTitle("Commit Information")
@@ -213,12 +218,14 @@ def get_commit_info(default_opt = 0):
     layout = QVBoxLayout()
     
     # Create the list view for rationale
-    listView = QListView()
-    model = QStringListModel(options)
-    listView.setModel(model)
-    listView.setCurrentIndex(model.index(default_opt))
+    listWidget = QListWidget()
+    for option in options:
+        item = QListWidgetItem(option)
+        listWidget.addItem(item)
+    listWidget.setCurrentRow(default_opt)
+    listWidget.doubleClicked.connect(dialog.accept)  # Submit dialog on double-click
     layout.addWidget(QLabel("Select a rationale (mandatory):"))
-    layout.addWidget(listView)
+    layout.addWidget(listWidget)
     
     # Create the text edit for additional information
     textEdit = QTextEdit()
@@ -254,13 +261,13 @@ def get_commit_info(default_opt = 0):
     textEdit.mousePressEvent = lambda _: textEdit.setReadOnly(False)
     
     if dialog.exec() == QDialog.DialogCode.Accepted:
-        rationale = listView.currentIndex().row()
+        rationale = listWidget.currentIndex().row()
         additional_info = textEdit.toPlainText()
         return rationale, additional_info
     
     aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Aborting", parent=QApplication.instance().focusWidget()))
     return None, None
-
+    
 def suggest_subdeck(did):
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
     if deck.is_dynamic:
