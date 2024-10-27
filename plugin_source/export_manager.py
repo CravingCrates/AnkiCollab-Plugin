@@ -205,54 +205,59 @@ def get_commit_info(default_opt = 0):
         "New Tags", "Bulk Suggestion", "Other", "Note Removal"
     ]
 
-    dialog = QInputDialog()
-    dialog.setOption(QInputDialog.InputDialogOption.UseListViewForComboBoxItems)
-    dialog.setComboBoxItems(options)
-    dialog.setComboBoxEditable(False)
+    # Create the dialog
+    dialog = QDialog()
     dialog.setWindowTitle("Commit Information")
-    dialog.setLabelText("Select a rationale (mandatory):")
-    dialog.setTextValue(options[default_opt])
-    dialog.setInputMode(QInputDialog.InputMode.TextInput)
-    dialog.setOkButtonText("OK")
-    dialog.setCancelButtonText("Cancel")
-
-    if dialog.exec() == QInputDialog.DialogCode.Accepted:
-        rationale = options.index(dialog.textValue())
-
-        textDialog = QDialog()
-        textDialog.setWindowTitle("Additional Information (optional):")
-        layout = QVBoxLayout()
-        textEdit = QTextEdit()
-        textEdit.setFixedHeight(5 * textEdit.fontMetrics().lineSpacing())
-
-        doc = QTextDocument()
-        doc.setMaximumBlockCount(255)
-        textEdit.setDocument(doc)
-        @pyqtSlot()
-        def checkLength():
-            if len(textEdit.toPlainText()) > 255:
-                cursor = textEdit.textCursor()  # Save cursor position
-                pos = cursor.position()
-                textEdit.setPlainText(textEdit.toPlainText()[:255])
-                pos = min(pos, 255)
-                cursor.setPosition(pos)  # Restore cursor position
-                textEdit.setTextCursor(cursor)
-
-        textEdit.textChanged.connect(checkLength)
-
-        layout.addWidget(textEdit)
-        okButton = QPushButton("Submit (Enter)")
-        layout.addWidget(okButton)
-        textDialog.setLayout(layout)
-        okButton.clicked.connect(textDialog.accept)
-        okButton.setFocus()
-        textEdit.setReadOnly(True)
-        textEdit.mousePressEvent = lambda _ : textEdit.setReadOnly(False)
-
-        if textDialog.exec() == QDialog.DialogCode.Accepted:
-            additional_info = textEdit.toPlainText()
-            return rationale, additional_info
-
+    
+    # Create the layout
+    layout = QVBoxLayout()
+    
+    # Create the list view for rationale
+    listView = QListView()
+    model = QStringListModel(options)
+    listView.setModel(model)
+    listView.setCurrentIndex(model.index(default_opt))
+    layout.addWidget(QLabel("Select a rationale (mandatory):"))
+    layout.addWidget(listView)
+    
+    # Create the text edit for additional information
+    textEdit = QTextEdit()
+    textEdit.setFixedHeight(5 * textEdit.fontMetrics().lineSpacing())
+    textEdit.setPlaceholderText("Enter additional information (optional, max 255 characters)")
+    
+    def checkLength():
+        text = textEdit.toPlainText()
+        if len(text) > 255:
+            cursor = textEdit.textCursor()
+            pos = cursor.position()
+            textEdit.setPlainText(text[:255])
+            cursor.setPosition(pos)  # Restore cursor position
+            textEdit.setTextCursor(cursor)
+    
+    textEdit.textChanged.connect(checkLength)
+    layout.addWidget(QLabel("Additional Information: (optional)"))
+    layout.addWidget(textEdit)
+    
+    # Create the submit and cancel buttons
+    buttonLayout = QHBoxLayout()
+    cancelButton = QPushButton("Cancel")
+    okButton = QPushButton("Submit")
+    buttonLayout.addWidget(cancelButton)
+    buttonLayout.addWidget(okButton)
+    layout.addLayout(buttonLayout)
+    
+    dialog.setLayout(layout)
+    okButton.clicked.connect(dialog.accept)
+    cancelButton.clicked.connect(dialog.reject)
+    cancelButton.setFocus()
+    textEdit.setReadOnly(True)
+    textEdit.mousePressEvent = lambda _: textEdit.setReadOnly(False)
+    
+    if dialog.exec() == QDialog.DialogCode.Accepted:
+        rationale = listView.currentIndex().row()
+        additional_info = textEdit.toPlainText()
+        return rationale, additional_info
+    
     aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("Aborting", parent=QApplication.instance().focusWidget()))
     return None, None
 
