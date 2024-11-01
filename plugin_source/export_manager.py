@@ -194,7 +194,7 @@ def submit_deck(deck, did, rationale, commit_text, media_async, upload_media):
                 note_model = NoteModel.from_json(note_model_dict)
                 maybe_name = note_model.anki_dict["name"]
                 aqt.mw.taskman.run_on_main(
-                    lambda: aqt.utils.showCritical(f"The Notetype\n{maybe_name}\ndoes not exist on the cloud deck. Please only use notetypes that the maintainer added.", title="AnkiCollab Upload Error: Notetype not found.")
+                    lambda: aqt.utils.showCritical(f"The Notetype\n{maybe_name}\ndoes not exist on the cloud deck. Please only use notetypes that the maintainer added. Notetype is available if it was present in any of the decks this maintainer initially shared.", title="AnkiCollab Upload Error: Notetype not found.")
                 )
                 
 
