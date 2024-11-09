@@ -54,7 +54,7 @@ def ask_for_rating():
             if push_counter % 15 == 0: # every 15 bulk suggestions
                 last_ratepls = strings_data["settings"]["last_ratepls"]
                 last_ratepls_dt = datetime.strptime(last_ratepls, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-                if (datetime.now(timezone.utc) - last_ratepls_dt).days > 14:
+                if (datetime.now(timezone.utc) - last_ratepls_dt).days > 14:  # only ask every 14 days
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                         dialog = RateAddonDialog()
@@ -202,7 +202,7 @@ def get_commit_info(default_opt = 0):
     options = [
         "None", "Deck Creation", "Updated content", "New content", "Content error",
         "Spelling/Grammar", "New card", "Updated Tags",
-        "New Tags", "Bulk Suggestion", "Other", "Note Removal"
+        "New Tags", "Bulk Suggestion", "Other", "Note Removal", "Changed Deck"
     ]
 
     dialog = QInputDialog()
