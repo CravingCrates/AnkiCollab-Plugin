@@ -196,8 +196,8 @@ def on_push_deck_action(self):
     deck_names.sort()
     deck_combo_box.addItems(deck_names)
     
-    email_label = QLabel("Email: (Make sure to create an account on the website first)")
-    email_field = QLineEdit()
+    username_label = QLabel("Username: (Make sure to create an account on the website first)")
+    username_field = QLineEdit()
     
     publish_button = QPushButton("Publish Deck")    
     
@@ -208,13 +208,13 @@ def on_push_deck_action(self):
     def on_publish_button_clicked():
         strings_data = mw.addonManager.getConfig(__name__)
         selected_deck_name = deck_combo_box.currentText()
-        email = email_field.text()
+        username = username_field.text()
         deck_id = None
         for deck in decks:
             if deck['name'] == selected_deck_name:
                 deck_id = deck['id']
                 break  
-        uuid = handle_export(deck_id, email)
+        uuid = handle_export(deck_id, username)
         if uuid:
             strings_data[uuid] = {
                 'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
@@ -230,8 +230,8 @@ def on_push_deck_action(self):
     layout = QVBoxLayout()
     layout.addWidget(deck_label)
     layout.addWidget(deck_combo_box)
-    layout.addWidget(email_label)
-    layout.addWidget(email_field)
+    layout.addWidget(username_label)
+    layout.addWidget(username_field)
     layout.addWidget(disclaimer)
     button_layout = QHBoxLayout()
     button_layout.addStretch()

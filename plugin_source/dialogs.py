@@ -125,13 +125,13 @@ class LoginDialog(QDialog):
 
         layout = QVBoxLayout()
 
-        label = QLabel("Please enter your AnkiCollab email and password:")
+        label = QLabel("Please enter your AnkiCollab username and password:")
         layout.addWidget(label)
 
         form_layout = QFormLayout()
 
-        self.email_input = QLineEdit()
-        form_layout.addRow("Email:", self.email_input)
+        self.username_input = QLineEdit()
+        form_layout.addRow("Username:", self.username_input)
 
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -150,14 +150,14 @@ class LoginDialog(QDialog):
         login_button.clicked.connect(self.login)
 
     def login(self):
-        email = self.email_input.text()
+        username = self.username_input.text()
         password = self.password_input.text()
-        if not email or not password:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo("Please enter a email and password."))
+        if not username or not password:
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo("Please enter a username and password."))
             return
         
         payload = {
-            'email': email,
+            'username': username,
             'password': password
         }
         response = requests.post("https://plugin.ankicollab.com/login", data=payload)

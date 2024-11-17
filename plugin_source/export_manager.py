@@ -382,7 +382,7 @@ def make_new_card(note: anki.notes.Note):
             op.without_collection()
         op.run_in_background()
         
-def handle_export(did, email) -> str:
+def handle_export(did, username) -> str:
     deck = AnkiDeck(aqt.mw.col.decks.get(did, default=False))
     if deck.is_dynamic:
         aqt.utils.showInfo("Filtered decks are not supported. Sorry!")
@@ -397,7 +397,7 @@ def handle_export(did, email) -> str:
         
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
 
-    data = {"deck": deck_res, "email": email}
+    data = {"deck": deck_res, "username": username}
     compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
     based_data = base64.b64encode(compressed_data)
     headers = {"Content-Type": "application/json"}
