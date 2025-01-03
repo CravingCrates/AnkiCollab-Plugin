@@ -146,7 +146,7 @@ def get_personal_tags(deck_hash):
                 
                 return list(combined_tags)
     return []
-            
+              
 def submit_deck(deck, did, rationale, commit_text, media_async, upload_media, token = "", auto_approve=False):    
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
         
@@ -156,6 +156,23 @@ def submit_deck(deck, did, rationale, commit_text, media_async, upload_media, to
 
     if token == "":
         token, auto_approve = get_maintainer_data()
+    
+    if token != "":
+        # Check user token
+        token_info = {
+            'token': token,
+            'deck_hash': deckHash,
+        }
+        token_check_response = requests.post("https://plugin.ankicollab.com/CheckUserToken", json=token_info, headers={"Content-Type": "application/json"})
+        if token_check_response.status_code == 200:
+            token_res = token_check_response.text
+            if token_res != "true": # Invalid token
+                from .menu import force_logout # bypass circular import uwu
+                force_logout()
+                token = ""
+                auto_approve = False
+                aqt.mw.taskman.run_on_main(lambda: aqt.utils.showWarning("Your AnkiCollab Login expired or is invalid. Please renew your Login under AnkiCollab > Login in the menu bar", parent=QApplication.focusWidget()))
+                
     
     data = {
         "remote_deck": deckHash, 

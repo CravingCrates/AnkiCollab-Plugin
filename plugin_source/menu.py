@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 import requests
 import webbrowser
 
-from .export_manager import *
+from .var_defs import DEFAULT_PROTECTED_TAGS
+from .utils import get_local_deck_from_hash
 from .import_manager import *
+from .export_manager import handle_export
 
 from .media_import import on_media_btn
 from .hooks import onProfileLoaded
@@ -30,6 +32,18 @@ suspend_new_cards_action.setMenuRole(QAction.MenuRole.NoRole)
 move_cards_action.setMenuRole(QAction.MenuRole.NoRole)
 auto_approve_action.setMenuRole(QAction.MenuRole.NoRole)
 
+def force_logout():
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is not None and "settings" in strings_data and strings_data["settings"]["token"] != "":
+        # Logout
+        requests.get("https://plugin.ankicollab.com/removeToken/" + strings_data["settings"]["token"])  
+        strings_data["settings"]["token"] = ""
+        login_manager_action.setText("Login")
+        if auto_approve_action in collab_menu.actions():
+            collab_menu.removeAction(auto_approve_action)
+        mw.addonManager.writeConfig(__name__, strings_data)
+        
+        
 def add_maintainer_checkbox():
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None:
@@ -255,12 +269,7 @@ def on_login_manager_btn():
     if strings_data is not None:
         if "settings" in strings_data and strings_data["settings"]["token"] != "":
             # Logout
-            requests.get("https://plugin.ankicollab.com/removeToken/" + strings_data["settings"]["token"])  
-            strings_data["settings"]["token"] = ""
-            login_manager_action.setText("Login")
-            if auto_approve_action in collab_menu.actions():
-                collab_menu.removeAction(auto_approve_action)
-            mw.addonManager.writeConfig(__name__, strings_data)
+            force_logout()
             aqt.utils.showInfo("You have been logged out.")
         else:
             # Popup login dialog

@@ -26,13 +26,20 @@ class NoteModel(JsonSerializableAnkiDict):
 
     @staticmethod
     def check_semantically_identical(first_model, second_model):
-        field_names = ("flds",) # Test: only check flds and not tmpls for now. This is a temporary fix to reduce the number of false positives.
+        field_names = ("flds", "tmpls", )
         keys_by_field = {
             "flds": ["name", "ord"],
-            "tmpls": ["qfmt", "afmt", "bqfmt", "bafmt", "bfont", "bsize", "name", "ord"]
+            "tmpls": ["name", "ord"]
         }
         for field in field_names:
-            for first_fld, second_fld in zip(first_model.anki_dict[field], second_model.anki_dict[field]):
+            # would be nice to allow field reordering and mapping it correctly, but i cba to implement it now
+            first_items = sorted(first_model.anki_dict[field], key=lambda x: x.get("ord", 0))
+            second_items = sorted(second_model.anki_dict[field], key=lambda x: x.get("ord", 0))
+            
+            if len(first_items) != len(second_items):
+                return False
+                
+            for first_fld, second_fld in zip(first_items, second_items):
                 for key in keys_by_field[field]:
                     if (first_fld.get(key) or 0) != (second_fld.get(key) or 0):
                         return False
