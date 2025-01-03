@@ -256,6 +256,10 @@ def get_commit_info(default_opt = 0):
     textEdit.textChanged.connect(checkLength)
     layout.addWidget(QLabel("Additional Information: (optional)"))
     layout.addWidget(textEdit)
+
+    #Added Ctrl+Return Shortcut to submit the form
+    shortcut = QShortcut(QKeySequence("Ctrl+Return"), textEdit)
+    shortcut.activated.connect(dialog.accept)
     
     # Create the submit and cancel buttons
     buttonLayout = QHBoxLayout()
