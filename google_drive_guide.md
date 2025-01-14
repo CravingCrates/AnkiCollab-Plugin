@@ -3,9 +3,21 @@
 AnkiCollab is a collaborative tool for sharing Anki decks. It allows you to share your decks with your subscribers and create a collaborative community of users who can contribute and learn together. However, one of the limitations of AnkiCollab is that it doesn't support media files directly, and this can be a problem if your decks rely heavily on images or audio. Fortunately, you can use Google Drive to store and share your media files with your subscribers. In this guide, we'll walk you through the steps to set up Google Drive with AnkiCollab.
 
 If you follow this guide, it will take you roughly 5-10 minutes to set up full media support for your deck and you won't have to spend another second thinking about it afterwards.
+
+## Disclaimer: Use at Your Own Risk
+
+The approach described in this guide involves the use of Google Service Accounts to automate access to Google Drive data. This method requires sharing the private key associated with the service account in a public setting, which poses significant security risks. By exposing the private key, unauthorized parties could potentially gain access to the associated Google Drive data, leading to data breaches, unauthorized modifications, or loss of data.
+
+Users are strongly advised to understand the security implications before proceeding. It is currently the only automated media support AnkiCollab offers, but generally speaking not recommended.
+
+Additionally, the use of Google APIs may incur costs depending on the level of usage. Users should review the Google Cloud pricing structure to avoid unexpected charges.
+
+The authors and contributors of this project disclaim any responsibility for data loss, unauthorized access, security breaches, or financial costs resulting from the use of this approach. Proceed with caution and at your own risk.
+
+
 ## Step 1: Create a Google Account
 
-If you don't have a Google account, you'll need to create one. You can use your existing Google account, but we recommend creating a new one so that your subscribers will have limited access to it.
+If you don't have a Google account, you'll need to create one. You can use your existing Google account, but we recommend creating a new one so that your subscribers will have limited access to it. In theory, the public has full access to everything on your drive, so always keep that in mind.
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
 2. Click on "Select a project".
