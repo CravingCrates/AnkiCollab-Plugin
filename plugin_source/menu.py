@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import requests
 import webbrowser
 
+from .identifier import subscribe_to_deck, unsubscribe_from_deck
+
 from .var_defs import DEFAULT_PROTECTED_TAGS
 from .utils import get_local_deck_from_hash
 from .import_manager import *
@@ -67,7 +69,7 @@ def delete_selected_rows(table):
     for row in selected_rows:
         if table.item(row, 0) is not None:
             deck_hash = table.item(row, 0).text()
-            requests.get("https://plugin.ankicollab.com/RemoveSubscription/" + deck_hash)      
+            unsubscribe_from_deck(deck_hash)
             strings_data.pop(deck_hash)
     for row in reversed(selected_rows):
         table.removeRow(row)
@@ -90,6 +92,7 @@ def add_to_table(line_edit, table, dialog):
         table.insertRow(num_rows)
         table.setItem(num_rows, 0, QTableWidgetItem(string))
         dialog.accept()
+        subscribe_to_deck(string)
         handle_pull(string)
         #on_edit_list() # we could reopen the dialog with updated data
 

@@ -8,6 +8,7 @@ from anki.utils import is_win, point_version
 
 ANKI_INT_VERSION = point_version()
 ANKI_VERSION_23_10_00 = 231000
+CHUNK_SIZE = 1000
 if ANKI_INT_VERSION >= ANKI_VERSION_23_10_00:
     from anki.collection import AddNoteRequest
     
@@ -18,6 +19,8 @@ from ..importer.import_dialog import ImportConfig
 from ..config.config_settings import ConfigSettings
 from ..utils.constants import UUID_FIELD_NAME
 
+#from .benchmarking import benchmark, BenchmarkStats
+# call with @benchmark before the method you want to benchmark, evaluate on finish with BenchmarkStats.print_stats()
 
 class Note(JsonSerializableAnkiObject):
     export_filter_set = JsonSerializableAnkiObject.export_filter_set | \
@@ -115,54 +118,49 @@ class Note(JsonSerializableAnkiObject):
     def bulk_update_notes(collection, notes, deck_id, import_config):
         if not notes:
             return
-        collection.update_notes([note.anki_object for note in notes])
+        
+        for i in range(0, len(notes), CHUNK_SIZE):
+            chunk = notes[i:i + CHUNK_SIZE]
+            collection.update_notes([note.anki_object for note in chunk])
         
         if not import_config.ignore_deck_movement:
             cards_to_move = []
-            target_deck_id = deck_id
             for note in notes:
                 card_ids = note.anki_object.card_ids()
-                for card_id in card_ids:
-                    card = collection.get_card(card_id)
-                    if card.did != target_deck_id and card.odid == 0: # skip filtered decks 2
-                        cards_to_move.append(card_id)
+                cards_to_move.extend(
+                    card_id for card_id in card_ids
+                    if collection.get_card(card_id).did != deck_id 
+                    and collection.get_card(card_id).odid == 0
+                )
+            
             if cards_to_move:
-                collection.set_deck(cards_to_move, target_deck_id)
+                for i in range(0, len(cards_to_move), CHUNK_SIZE):
+                    chunk = cards_to_move[i:i + CHUNK_SIZE] 
+                    collection.set_deck(chunk, deck_id)
         
     @staticmethod
     def bulk_add_notes(collection, notes, deck_id, import_config):
+        CHUNK_SIZE = 1000
         if ANKI_INT_VERSION >= ANKI_VERSION_23_10_00:
-            add_note_requests = [AddNoteRequest(note.anki_object, deck_id=deck_id) for note in notes]
-            collection.add_notes(add_note_requests)
+            for i in range(0, len(notes), CHUNK_SIZE):
+                chunk = notes[i:i + CHUNK_SIZE]
+                requests = [AddNoteRequest(note.anki_object, deck_id=deck_id) for note in chunk]
+                collection.add_notes(requests)
         else:
-            for note in notes:
-                collection.add_note(note.anki_object, deck_id)
+            for i in range(0, len(notes), CHUNK_SIZE):
+                chunk = notes[i:i + CHUNK_SIZE]
+                for note in chunk:
+                    collection.add_note(note.anki_object, deck_id)
 
-        # Suspend new cards if configured
         if import_config and import_config.suspend_new_cards:
             cards_to_suspend = []
             for note in notes:
                 cards_to_suspend.extend(note.anki_object.card_ids())
             if cards_to_suspend:
-                collection.sched.suspend_cards(cards_to_suspend)                
-
-    #returns True if the note is new
-    def prep_for_update(self, collection, deck, import_config, int_time, fetcher):
-        note_model = deck.metadata.models[self.note_model_uuid]
-
-        self.anki_object = fetcher.get_note(self.get_uuid())
-        new_note = self.anki_object is None
-        if new_note:
-            self.anki_object = AnkiNote(collection, note_model.anki_dict)
-
-        self.handle_import_config_changes(import_config, note_model)
-
-        self.anki_object.__dict__.update(self.anki_object_dict)
-        self.anki_object.mid = note_model.anki_dict["id"]
-        self.anki_object.mod = int_time
+                for i in range(0, len(cards_to_suspend), CHUNK_SIZE):
+                    chunk = cards_to_suspend[i:i + CHUNK_SIZE]
+                    collection.sched.suspend_cards(chunk)              
         
-        return new_note
-            
     def handle_import_config_changes(self, import_config, note_model):
         # Cache field names and indices for faster lookup
         field_name_to_index = {

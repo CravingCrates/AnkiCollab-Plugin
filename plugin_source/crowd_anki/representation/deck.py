@@ -23,8 +23,11 @@ from aqt.operations import QueryOp
 from aqt.emptycards import EmptyCardsDialog
 from aqt.operations.tag import clear_unused_tags
 from aqt.utils import showInfo
+from anki.notes import Note as AnkiNote
 from aqt import mw
 
+CHUNK_SIZE = 1000
+        
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
 
 
@@ -169,10 +172,11 @@ class Deck(JsonSerializableAnkiDict):
         aqt.mw.reset()
     
     def import_progress_cb(self, curr: int, max_i: int):
+        percentage = (curr / max_i) * 100
         aqt.mw.taskman.run_on_main(
             lambda: aqt.mw.progress.update(
                 label=
-                f"Processed {curr} / {max_i} cards...",
+                f"Processed {curr} / {max_i} notes ({percentage:.1f}%)...",
                 value=curr,
                 max=max_i,
             )
@@ -198,7 +202,7 @@ class Deck(JsonSerializableAnkiDict):
             success=self.on_success,
         )
         op.with_progress("Synchronizing...").run_in_background()
-        
+    
     def handle_notetype_changes(self, collection, model_map_cache, note_type_data):
         def on_accepted():
             model_map_cache[old_model_uuid][note.note_model_uuid] = \
@@ -262,42 +266,63 @@ class Deck(JsonSerializableAnkiDict):
                                             mapping.template_map)
             
         self._save_deck(collection, "", home_deck) # We store the root deck in this thread to avoid concurrency issues
-        
+    
     def save_decks_and_notes(self, collection, parent_name, status_cb, status_cur, status_max, import_config: ImportConfig):
-        full_name = self._save_deck(collection, parent_name, import_config.home_deck) # duplicated call for root deck, but thats fine
-            
-        new_notes = []
-        update_notes = []
+        full_name = self._save_deck(collection, parent_name, import_config.home_deck)
+                    
         deck_id = self.anki_dict["id"] if self else None
         if not deck_id:
             return status_cur
         int_time = anki.utils.int_time()
-        uuid_fetcher = UuidFetcher(collection)
         
+        # Batch fetch existing notes
+        note_uuids = [note.get_uuid() for note in self.notes]
+        existing_notes = []
+        for i in range(0, len(note_uuids), CHUNK_SIZE):
+            chunk = note_uuids[i:i+CHUNK_SIZE]
+            placeholders = ','.join('?' * len(chunk))
+            existing_notes += collection.db.all(
+                f"SELECT guid, id FROM notes WHERE guid IN ({placeholders})", *chunk
+            )
+        existing_note_map = {guid: nid for guid, nid in existing_notes}
+        
+        # Pre-process notes in memory
+        new_notes = []
+        update_notes = []
         for note in self.notes:
-            is_new = note.prep_for_update(collection, self, import_config, int_time, uuid_fetcher)
-            (new_notes if is_new else update_notes).append(note)
+            uuid = note.get_uuid()
+            note_model = self.metadata.models[note.note_model_uuid]
+            if uuid not in existing_note_map:
+                note.anki_object = AnkiNote(collection, note_model.anki_dict)
+                new_notes.append(note)
+            else:
+                note.anki_object = AnkiNote(collection, id=existing_note_map[uuid])
+                update_notes.append(note)
+            
+            note.handle_import_config_changes(import_config, note_model)
+            note.anki_object.__dict__.update(note.anki_object_dict)
+            note.anki_object.mid = note_model.anki_dict["id"]
+            note.anki_object.mod = int_time
             
             status_cur += 1
-            status_cb(status_cur, status_max)
-            if mw.progress.want_cancel():
-                return status_cur
-            
+            if status_cur % 100 == 0:
+                status_cb(status_cur, status_max)
+                if mw.progress.want_cancel():
+                    return status_cur
+
+        # Batch process notes
         if new_notes:
             Note.bulk_add_notes(collection, new_notes, deck_id, import_config)
         if update_notes:
             Note.bulk_update_notes(collection, update_notes, deck_id, import_config)
             
         for child in self.children:
-            status_cur = child.save_decks_and_notes(collection=collection,
-                                    parent_name=full_name,
-                                    status_cb=status_cb,
-                                    status_cur=status_cur,
-                                    status_max=status_max,
-                                    import_config=import_config
-                                    )
+            status_cur = child.save_decks_and_notes(
+                collection, full_name, status_cb, status_cur, status_max, import_config
+            )
             if mw.progress.want_cancel():
                 return status_cur
+                
         return status_cur
 
     def _save_deck(self, collection, parent_name, home_deck):        

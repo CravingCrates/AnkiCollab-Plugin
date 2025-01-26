@@ -170,8 +170,9 @@ def submit_deck(deck, did, rationale, commit_text, media_async, upload_media, to
                 from .menu import force_logout # bypass circular import uwu
                 force_logout()
                 token = ""
+                commit_text = ""
                 auto_approve = False
-                aqt.mw.taskman.run_on_main(lambda: aqt.utils.showWarning("Your AnkiCollab Login expired or is invalid. Please renew your Login under AnkiCollab > Login in the menu bar", parent=QApplication.focusWidget()))
+                aqt.mw.taskman.run_on_main(lambda: aqt.utils.showWarning("Your AnkiCollab Login expired or is invalid. Please renew your Login under AnkiCollab > Login in the menu bar. The system will still process your suggestion.", parent=QApplication.focusWidget()))
                 
     
     data = {

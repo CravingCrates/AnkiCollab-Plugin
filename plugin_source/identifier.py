@@ -2,6 +2,8 @@
 import uuid
 import hashlib
 import aqt
+import json
+import requests
 
 # We identify the user by the their ankiweb email. Since I don't want to store their email for privacy reasons, we hash it and use that as the identifier.
 # If the user doesn't have an ankiweb account, we use their MAC address to identify them.
@@ -19,3 +21,33 @@ def get_user_hash():
     user_hash = hashlib.sha256()
     user_hash.update(identifier.encode('utf-8'))
     return user_hash.hexdigest()
+
+# purely aesthetic function to increase the counter on the website
+def subscribe_to_deck(deck_hash):
+    user_hash = get_user_hash()
+    if not user_hash:
+        return False
+    payload = {
+            'deck_hash': deck_hash,
+            'user_hash': user_hash
+        }
+    print(payload)
+    response = requests.post("https://plugin.ankicollab.com/AddSubscription", json=payload, timeout=5)
+    if response.status_code == 200:
+        return True
+    else:
+        return False
+    
+def unsubscribe_from_deck(deck_hash):
+    user_hash = get_user_hash()
+    if not user_hash:
+        return False
+    payload = {
+            'deck_hash': deck_hash,
+            'user_hash': user_hash
+        }
+    response = requests.post("https://plugin.ankicollab.com/RemoveSubscription", json=payload, timeout=5)
+    if response.status_code == 200:
+        return True
+    else:
+        return False
