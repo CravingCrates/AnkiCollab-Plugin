@@ -4,11 +4,11 @@ AnkiCollab is a collaborative tool for sharing Anki decks. It allows you to shar
 
 If you follow this guide, it will take you roughly 5-10 minutes to set up full media support for your deck and you won't have to spend another second thinking about it afterwards.
 
-## Disclaimer: Use at Your Own Risk
+## Disclaimer: Use at Your Own Risk + Not recommended for security reasons
 
-The approach described in this guide involves the use of Google Service Accounts to automate access to Google Drive data. This method requires sharing the private key associated with the service account in a public setting, which poses significant security risks. By exposing the private key, unauthorized parties could potentially gain access to the associated Google Drive data, leading to data breaches, unauthorized modifications, or loss of data.
+The approach described in this guide involves the use of Google Service Accounts to automate access to Google Drive data. This method requires sharing the private key associated with the service account in a public setting, which poses significant security risks. By exposing the private key, unauthorized parties could potentially gain access to the associated Google Drive data, leading to data breaches, unauthorized modifications, or loss of data. Imagine it like sharing your login credentials to the google account with all your subscribers. This is used so all subscribers can upload and download media files automatically, but bad actors could abuse that privilege.
 
-Users are strongly advised to understand the security implications before proceeding. It is currently the only automated media support AnkiCollab offers, but generally speaking not recommended.
+Users are strongly advised to understand the security implications before proceeding. It is currently the only automated media support AnkiCollab offers, but generally speaking not recommended. If you plan on using it, please don't use your personal google account, but create a new one solely for this purpose instead.
 
 Additionally, the use of Google APIs may incur costs depending on the level of usage. Users should review the Google Cloud pricing structure to avoid unexpected charges.
 
