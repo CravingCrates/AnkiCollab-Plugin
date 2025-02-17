@@ -48,7 +48,7 @@ Yes, you can safeguard specific fields within individual cards to prevent them f
 
 - **To protect a specific field:** Use the `AnkiCollab_Protect::` command followed by the field name. For example, if you have a card with fields named `Front` and `Back`, and you wish to keep the `Back` field unchanged, add the following tag to your card: `AnkiCollab_Protect::Back`.
 
-- **Handling fields with spaces:** If the field name includes spaces (e.g., `Question Mark`), replace the spaces with underscores when adding the tag, as tags cannot contain spaces. For instance, use `AnkiCollab_Protect::Question_Mark`.
+- **Handling fields with spaces:** If the field name includes spaces (e.g., `Question Mask`), replace the spaces with underscores when adding the tag, as tags cannot contain spaces. For instance, use `AnkiCollab_Protect::Question_Mask`.
 
   ![Example Image](https://i.imgur.com/Alpi0VJ.png)
 
