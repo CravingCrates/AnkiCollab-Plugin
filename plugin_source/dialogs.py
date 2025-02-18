@@ -284,22 +284,6 @@ class AskShareStatsDialog(QDialog):
 
     def isChecked(self):
         return self.checkbox.isChecked()
-    
-class AskMediaDownloadDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self.setWindowTitle("AnkiCollab - Media Download")
-
-        self.layout = QVBoxLayout(self)
-
-        self.message = QLabel("There are a lot of media files to download, would you rather download them manually from the browser? (This will be a lot faster)")
-        self.layout.addWidget(self.message)
-
-        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No)
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        self.layout.addWidget(self.buttons)
         
 class RateAddonDialog(QDialog):
     def __init__(self, parent=None):

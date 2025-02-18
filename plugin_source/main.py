@@ -3,16 +3,7 @@ import time
 import sys
 import importlib
 
-# Thanks to abdo for this fix
 sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
-google_path = os.path.join(os.path.dirname(__file__), "dist", "google")
-source = os.path.join(google_path, "__init__.py")
-spec = importlib.util.spec_from_file_location(
-    "google", source, submodule_search_locations=[]
-)
-module = importlib.util.module_from_spec(spec)
-sys.modules["google"] = module
-spec.loader.exec_module(module)
 
 from aqt import mw
 from aqt.qt import *

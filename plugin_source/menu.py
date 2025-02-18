@@ -83,7 +83,6 @@ def add_to_table(line_edit, table, dialog):
             'timestamp': '2022-12-31 23:59:59',
             'deckId': 0,
             'optional_tags': {},
-            'gdrive': {},
             'personal_tags': DEFAULT_PROTECTED_TAGS,
         }
         mw.addonManager.writeConfig(__name__, strings_data)
@@ -237,7 +236,6 @@ def on_push_deck_action(self):
                 'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                 'deckId': deck_id,
                 'optional_tags': {},
-                'gdrive': {},
                 'personal_tags': DEFAULT_PROTECTED_TAGS,
             }
             mw.addonManager.writeConfig(__name__, strings_data)
@@ -261,8 +259,8 @@ def on_push_deck_action(self):
 def open_community_site():
     webbrowser.open('https://discord.gg/9x4DRxzqwM')
 
-def open_donation_site():
-    webbrowser.open('https://www.ankicollab.com/donate')
+def open_support_site():
+    webbrowser.open('https://www.ankicollab.com/leavereview')
         
 def open_website():
     webbrowser.open('https://www.ankicollab.com/')
@@ -374,7 +372,7 @@ def menu_init():
     website_action = QAction('Open Website', mw)
     links_menu.addAction(website_action)
 
-    donation_action = QAction('Support us', mw)
+    donation_action = QAction('Leave a review', mw)
     links_menu.addAction(donation_action)
     
     edit_list_action.triggered.connect(on_edit_list)
@@ -382,6 +380,6 @@ def menu_init():
     pull_changes_action.triggered.connect(onProfileLoaded)
     media_import_action.triggered.connect(on_media_btn)
     website_action.triggered.connect(open_website)
-    donation_action.triggered.connect(open_donation_site)
+    donation_action.triggered.connect(open_support_site)
     community_action.triggered.connect(open_community_site)
     login_manager_action.triggered.connect(on_login_manager_btn)

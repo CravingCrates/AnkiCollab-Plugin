@@ -19,7 +19,7 @@ from anki.utils import point_version
 from aqt.qt import *
 from aqt import mw
 
-from .dialogs import AskMediaDownloadDialog, ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
+from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
 from .crowd_anki.representation.note import Note
@@ -33,7 +33,6 @@ from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
 
 from .utils import get_deck_hash_from_did
-from .google_drive_api import GoogleDriveAPI, get_gdrive_data, update_gdrive_data
 
 from .stats import ReviewHistory
 
@@ -81,67 +80,10 @@ class ImportConfig(PersonalFieldsHolder):
 def do_nothing(count: int):
     pass
 
-def media_download_progress_cb(curr: int, max_i: int):
-    aqt.mw.taskman.run_on_main(
-        lambda: aqt.mw.progress.update(
-            label="Downloading missing media...\n" f"{curr} / {max_i}",
-            value=curr,
-            max=max_i,
-        )
-    )
-
-
-def on_media_download_done(count: int) -> None:
-    mw.col.media.check()
-    mw.progress.finish()
-    if count == 0:
-        aqt.utils.showWarning("No new media downloaded.")
-    elif count == -1:
-        aqt.utils.showInfo("Missing media files not found on Google Drive.")
-    elif count == -2:
-        aqt.utils.showInfo("Google API Error.")
-
 def on_stats_upload_done(data) -> None:
     mw.progress.finish()
     #aqt.utils.tooltip("Review History upload done. Thanks for sharing!", parent=QApplication.focusWidget())
      
-def open_gdrive_folder(deckHash) -> None:    
-    gdrive_data = get_gdrive_data(deckHash)
-    if gdrive_data is not None:
-        webbrowser.open(f"https://drive.google.com/drive/u/1/folders/{gdrive_data['folder_id']}")
-    else:
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))
-        
-def handle_media_import(deckHash, media_files, api):
-    if media_files is None:
-        return
-    dir_path = aqt.mw.col.media.dir()
-    missing_files = []
-    for file_name in media_files:
-        if not os.path.exists(os.path.join(dir_path, file_name)):
-            missing_files.append(file_name)
-    # Download the missing files
-    if len(missing_files) > 0:
-        # if there is more than 100 files ask the user if they wouldn't rather download it from the browser because its a lot faster, if they press no, do the queryOp
-        
-        if len(missing_files) > 100:
-            dialog = AskMediaDownloadDialog()
-            choice = dialog.exec()
-            if choice == QDialog.DialogCode.Accepted:
-                open_gdrive_folder(deckHash)
-                return
-        op = QueryOp(
-            parent=mw,
-            op=lambda _: api.download_selected_files_as_zip(
-                missing_files, dir_path, media_download_progress_cb
-            ),
-            success=on_media_download_done
-        )
-        op.with_progress(
-            f"Downloading {len(missing_files)} media files..."
-        ).run_in_background()
-
-
 def update_optional_tag_config(deck_hash, optional_tags):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
@@ -265,8 +207,6 @@ def install_update(subscription, is_new = False):
         )
     subscribed_tags = get_optional_tags(subscription["deck_hash"])
 
-    service_account = subscription["gdrive"]["service_account"]
-    gdrive_folder = subscription["gdrive"]["folder_id"]
     stats_enabled = subscription["stats_enabled"]
 
     deck = deck_initializer.from_json(subscription["deck"])
@@ -280,18 +220,7 @@ def install_update(subscription, is_new = False):
     note_type_data = {}
     deck.handle_notetype_changes(aqt.mw.col, map_cache, note_type_data)
     deck.save_to_collection(aqt.mw.col, map_cache, note_type_data, import_config=config)
-    # Handle Media
-    if gdrive_folder != "":
-        update_gdrive_data(subscription["deck_hash"], subscription["gdrive"])
-        api = GoogleDriveAPI(service_account=service_account, folder_id=gdrive_folder)
-        handle_media_import(subscription["deck_hash"], deck.media_files, api)
-    else:
-        aqt.mw.taskman.run_on_main(
-            lambda: aqt.utils.tooltip(
-                "No Google Drive folder found. Please ask the maintainer to set one up on the website.",
-                parent=QApplication.focusWidget(),
-            )
-        )
+    
     # Handle deleted Notes
     deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
     if deleted_nids:

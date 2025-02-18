@@ -25,7 +25,6 @@ from .var_defs import DEFAULT_PROTECTED_TAGS, PREFIX_PROTECTED_FIELDS
 
 from .dialogs import RateAddonDialog
 
-from .google_drive_api import GoogleDriveAPI, get_gdrive_data
 from .thread import run_function_in_thread
 
 
@@ -61,45 +60,8 @@ def ask_for_rating():
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
 
-def media_upload_progress_cb(curr: int, max_i: int):
-    aqt.mw.taskman.run_on_main(
-        lambda: aqt.mw.progress.update(
-            label=
-             "Uploading missing media...\n"
-            f"{curr} / {max_i}",
-            value=curr,
-            max=max_i,
-        )
-    )
-
-def on_media_upload_done(count: int) -> None:
-    mw.progress.finish()
-    if count == 0:
-        aqt.utils.showWarning("No new media uploaded.")
-    else:
-        aqt.utils.showInfo("Upload done!")
-
-def upload_media_with_progress(deck_hash, media_files):
-    gdrive_data = get_gdrive_data(deck_hash)
-    if gdrive_data is not None:
-        api = GoogleDriveAPI(
-            service_account=gdrive_data['service_account'],
-            folder_id=gdrive_data['folder_id'],
-        )
-        dir_path = aqt.mw.col.media.dir()
-        op = QueryOp(
-            parent=mw,
-            op=lambda _: api.upload_files_to_folder(dir_path, media_files, media_upload_progress_cb),
-            success=on_media_upload_done
-        )
-        if point_version() >= 231000:
-            op.without_collection()
-        op.with_progress(f"Checking {len(media_files)} media files...").run_in_background()
-    else:
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck. Please set one in the AnkiCollab settings.", parent=QApplication.focusWidget()))
-
 def submit_with_progress(deck, did, rationale, commit_text):
-    upload_media = aqt.utils.askUser("Do you want to upload the media to Google Drive?")
+    upload_media = False
     
     op = QueryOp(
         parent=mw,
@@ -109,19 +71,6 @@ def submit_with_progress(deck, did, rationale, commit_text):
     if point_version() >= 231000:
         op.without_collection()
     op.with_progress("Uploading to AnkiCollab...").run_in_background()
-
-def upload_media_to_gdrive(deck_hash, media_files):
-    gdrive_data = get_gdrive_data(deck_hash)
-    if gdrive_data is not None:                
-        api = GoogleDriveAPI(
-            service_account=gdrive_data['service_account'],
-            folder_id=gdrive_data['folder_id'],
-        )
-        dir_path = aqt.mw.col.media.dir()
-        api.upload_files_to_folder(dir_path, media_files)
-    else:
-        if len(media_files) > 0:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip("No Google Drive folder set for this deck.", parent=QApplication.focusWidget()))
 
 def get_maintainer_data():    
     strings_data = mw.addonManager.getConfig(__name__)
@@ -189,15 +138,7 @@ def submit_deck(deck, did, rationale, commit_text, media_async, upload_media, to
     based_data = base64.b64encode(compressed_data)
     headers = {"Content-Type": "application/json"}
     response = requests.post("https://plugin.ankicollab.com/submitCard", data=based_data, headers=headers)
-    
-    # Hacky, but for bulk suggestions we want the progress bar to include media files, 
-    # but for single suggestions we can run it in the background to make it a smoother experience            
-    if upload_media:
-        if media_async: 
-            run_function_in_thread(upload_media_to_gdrive, deckHash, deck.get_media_file_list())
-        else:
-            upload_media_to_gdrive(deckHash, deck.get_media_file_list())    
-            
+                
     if response.status_code == 200:
         aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
         aqt.mw.taskman.run_on_main(lambda: ask_for_rating())
@@ -431,7 +372,7 @@ def handle_export(did, username) -> str:
         if res["status"] == 0:
             msg_box.setText(res["message"])
         else:
-            msg_box.setText("Deck published. Thanks for sharing! Please upload the media manually to Google Drive")
+            msg_box.setText("Deck published. Thanks for sharing! Please share your media files manually.")
         msg_box.exec()
         
         if res["status"] == 1:
