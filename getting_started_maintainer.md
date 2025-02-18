@@ -45,7 +45,7 @@ Congratulations! The deck is ready to be shared. All they need is the subscripti
 
 ## Media Support
 
-Next, if you want to have media supported in your deck, check out the ![Google Drive Guide](https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/google_drive_guide.md#how-to-set-up-google-drive-with-ankicollab) we wrote!
+Unfortunately, there is currently no media support in AnkiCollab. This means, you'll have to distribute your media files manually or host them somewhere. We hope to offer a more polished solution in the future.
 
 ## Handling Suggestions
 
