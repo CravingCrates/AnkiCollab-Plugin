@@ -15,7 +15,6 @@ if ANKI_INT_VERSION >= ANKI_VERSION_23_10_00:
 from ...var_defs import PREFIX_OPTIONAL_TAGS, PREFIX_PROTECTED_FIELDS
 from .json_serializable import JsonSerializableAnkiObject
 from .note_model import NoteModel
-from ..importer.import_dialog import ImportConfig
 from ..config.config_settings import ConfigSettings
 from ..utils.constants import UUID_FIELD_NAME
 

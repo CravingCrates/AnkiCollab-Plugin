@@ -5,6 +5,8 @@ import aqt
 import json
 import requests
 
+from .var_defs import API_BASE_URL
+
 # We identify the user by the their ankiweb email. Since I don't want to store their email for privacy reasons, we hash it and use that as the identifier.
 # If the user doesn't have an ankiweb account, we use their MAC address to identify them.
 # We prefer to use the ankiweb email because it is more stable than the MAC address and it allows us to identify the user across multiple devices.
@@ -32,7 +34,7 @@ def subscribe_to_deck(deck_hash):
             'user_hash': user_hash
         }
     print(payload)
-    response = requests.post("https://plugin.ankicollab.com/AddSubscription", json=payload, timeout=5)
+    response = requests.post(f"{API_BASE_URL}/AddSubscription", json=payload, timeout=5)
     if response.status_code == 200:
         return True
     else:
@@ -46,7 +48,7 @@ def unsubscribe_from_deck(deck_hash):
             'deck_hash': deck_hash,
             'user_hash': user_hash
         }
-    response = requests.post("https://plugin.ankicollab.com/RemoveSubscription", json=payload, timeout=5)
+    response = requests.post(f"{API_BASE_URL}/RemoveSubscription", json=payload, timeout=5)
     if response.status_code == 200:
         return True
     else:

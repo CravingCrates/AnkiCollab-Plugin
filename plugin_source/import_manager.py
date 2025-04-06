@@ -19,6 +19,8 @@ from anki.utils import point_version
 from aqt.qt import *
 from aqt import mw
 
+from .var_defs import API_BASE_URL
+
 from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
@@ -31,51 +33,20 @@ from .crowd_anki.representation import *
 from .crowd_anki.representation import deck_initializer
 from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
+from .crowd_anki.importer.import_dialog import ImportConfig
 
 from .utils import get_deck_hash_from_did
 
 from .stats import ReviewHistory
 
+from . import main
+
 import base64
 import gzip
 
-
-@dataclass
-class ConfigEntry:
-    config_name: str
-    default_value: any
-
-
-@dataclass
-class PersonalFieldsHolder:
-    personal_fields: defaultdict = field(
-        init=False, default_factory=lambda: defaultdict(list)
-    )
-
-    def is_personal_field(self, model_name, field_name):
-        if model_name in self.personal_fields:
-            if field_name in self.personal_fields[model_name]:
-                return True
-        return False
-
-    def add_field(self, model_name, field_name):
-        self.personal_fields[model_name].append(field_name)
-
-
-@dataclass
-class ImportConfig(PersonalFieldsHolder):
-    add_tag_to_cards: List[str]
-
-    optional_tags: List[str]
-    has_optional_tags: bool
-
-    use_notes: bool
-    use_media: bool
-
-    ignore_deck_movement: bool    
-    suspend_new_cards: bool
-    
-    home_deck: str = None
+from .thread import run_function_in_thread, run_async_function_in_thread, sync_run_async
+import logging
+logger = logging.getLogger("ankicollab")
 
 def do_nothing(count: int):
     pass
@@ -152,7 +123,7 @@ def delete_notes(nids):
     if not nids:
         return
     aqt.mw.col.remove_notes(nids)
-    aqt.mw.col.reset()
+    aqt.mw.col.reset() # deprecated
     mw.reset()
     aqt.mw.taskman.run_on_main(
         lambda: aqt.utils.tooltip(
@@ -169,7 +140,6 @@ def update_stats_timestamp(deck_hash):
                 break
         mw.addonManager.writeConfig(__name__, strings_data)
         
-    
 def wants_to_share_stats(deck_hash):
     strings_data = mw.addonManager.getConfig(__name__)
     stats_enabled = False
@@ -195,17 +165,18 @@ def wants_to_share_stats(deck_hash):
     return (stats_enabled, last_stats_timestamp)
 
 def install_update(subscription, is_new = False):
+    deckHash = subscription["deck_hash"]
     if check_optional_tag_changes(
-        subscription["deck_hash"], subscription["optional_tags"]
+        deckHash, subscription["optional_tags"]
     ):
         dialog = OptionalTagsDialog(
-            get_optional_tags(subscription["deck_hash"]), subscription["optional_tags"]
+            get_optional_tags(deckHash), subscription["optional_tags"]
         )
         dialog.exec()
         update_optional_tag_config(
-            subscription["deck_hash"], dialog.get_selected_tags()
+            deckHash, dialog.get_selected_tags()
         )
-    subscribed_tags = get_optional_tags(subscription["deck_hash"])
+    subscribed_tags = get_optional_tags(deckHash)
 
     stats_enabled = subscription["stats_enabled"]
 
@@ -214,8 +185,10 @@ def install_update(subscription, is_new = False):
         subscription["protected_fields"],
         [tag for tag, value in subscribed_tags.items() if value],
         True if subscription["optional_tags"] else False,
+        deckHash
     )
-    config.home_deck = get_home_deck(subscription["deck_hash"])
+    config.home_deck = get_home_deck(deckHash)
+        
     map_cache = defaultdict(dict)
     note_type_data = {}
     deck.handle_notetype_changes(aqt.mw.col, map_cache, note_type_data)
@@ -224,7 +197,7 @@ def install_update(subscription, is_new = False):
     # Handle deleted Notes
     deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
     if deleted_nids:
-        del_notes_dialog = DeletedNotesDialog(deleted_nids, subscription["deck_hash"])
+        del_notes_dialog = DeletedNotesDialog(deleted_nids, deckHash)
         del_notes_choice = del_notes_dialog.exec()
 
         if del_notes_choice == QDialog.DialogCode.Accepted:
@@ -234,9 +207,9 @@ def install_update(subscription, is_new = False):
     # Upload stats if the maintainer wants them, don't bother for new decks
     if stats_enabled and not is_new:
         # Only upload stats if the user wants to share them
-        (share_data, last_stats_timestamp) = wants_to_share_stats( subscription["deck_hash"])
+        (share_data, last_stats_timestamp) = wants_to_share_stats(deckHash)
         if share_data:
-            rh = ReviewHistory(subscription["deck_hash"])
+            rh = ReviewHistory(deckHash)
             op = QueryOp(
                 parent=mw,
                 op=lambda _: rh.upload_review_history(last_stats_timestamp),
@@ -245,7 +218,8 @@ def install_update(subscription, is_new = False):
             op.with_progress(
                 "Uploading Review History..."
             ).run_in_background()
-            update_stats_timestamp(subscription["deck_hash"])
+            update_stats_timestamp(deckHash)
+        
     return deck.anki_dict["name"]
 
 
@@ -257,7 +231,7 @@ def postpone_update():
     pass
 
 
-def prep_config(protected_fields, optional_tags, has_optional_tags):
+def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
     config = ImportConfig(
         add_tag_to_cards=[],
         optional_tags=optional_tags,
@@ -267,6 +241,7 @@ def prep_config(protected_fields, optional_tags, has_optional_tags):
         ignore_deck_movement=get_deck_movement_status(),
         suspend_new_cards=get_card_suspension_status(),
         home_deck=None,
+        deck_hash=deck_hash,
     )
     for protected_field in protected_fields:
         model_name = protected_field["name"]
@@ -313,13 +288,16 @@ def ask_for_rating():
             mw.addonManager.writeConfig(__name__, strings_data)
 
 
-def import_webresult(webresult, input_hash):
-    # if webresult is empty, make popup to tell user that there are no updates
+def import_webresult(webresult, input_hash, silent=False):
+    # if webresult is empty, tell user that there are no updates
     if not webresult:
-        msg_box = QMessageBox()
-        msg_box.setWindowTitle("AnkiCollab")
-        msg_box.setText("You're already up-to-date!")
-        msg_box.exec()
+        if silent:
+            aqt.utils.tooltip("You're already up-to-date!", parent=mw)
+        else:
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle("AnkiCollab")
+            msg_box.setText("You're already up-to-date!")
+            msg_box.exec()
         return
 
     # Create a backup for the user before updating!
@@ -377,16 +355,23 @@ def get_home_deck(deck_hash):
 
 def remove_nonexistent_decks():
     strings_data = mw.addonManager.getConfig(__name__)
+
     if strings_data is not None and len(strings_data) > 0:
-        if "settings" in strings_data:
-            strings_data_copy = strings_data.copy()
+        # Create a copy of the config data
+        strings_data_copy = strings_data.copy()
+        
+        # backwards compatibility
+        if "settings" in strings_data_copy:
             del strings_data_copy["settings"]
-            strings_data_to_send = strings_data_copy
-        else:
-            strings_data_to_send = strings_data
+        
+        if "auth" in strings_data_copy:
+            del strings_data_copy["auth"]
+        
+        # Only include the specific hash if it exists
+        strings_data_to_send = strings_data_copy
 
         payload = {"deck_hashes": list(strings_data_to_send.keys())}
-        response = requests.post("https://plugin.ankicollab.com/CheckDeckAlive", json=payload)
+        response = requests.post(f"{API_BASE_URL}/CheckDeckAlive", json=payload)
         if response.status_code == 200:
             if response.content == "Error":
                 infot = "A Server Error occurred. Please notify us!"
@@ -408,32 +393,38 @@ def remove_nonexistent_decks():
                     print("strings_data is None or empty")
 
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
-def handle_pull(input_hash):
+def handle_pull(input_hash, silent=False):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None and len(strings_data) > 0:
-        if "settings" in strings_data:
-            strings_data_copy = strings_data.copy()
+        # Create a copy of the config data
+        strings_data_copy = strings_data.copy()
+        
+        # backwards compatibility
+        if "settings" in strings_data_copy:
             del strings_data_copy["settings"]
-            strings_data_to_send = (
-                strings_data_copy
-                if input_hash is None
-                else {input_hash: strings_data_copy[input_hash]}
-            )
+        
+        if "auth" in strings_data_copy:
+            del strings_data_copy["auth"]
+        
+        # Create the data to send based on whether input_hash is provided
+        if input_hash is None:
+            strings_data_to_send = strings_data_copy
         else:
+            # Only include the specific hash if it exists
             strings_data_to_send = (
-                strings_data
-                if input_hash is None
-                else {input_hash: strings_data[input_hash]}
+                {input_hash: strings_data_copy[input_hash]} 
+                if input_hash in strings_data_copy 
+                else {}
             )
 
         response = requests.post(
-            "https://plugin.ankicollab.com/pullChanges", json=strings_data_to_send
+            f"{API_BASE_URL}/pullChanges", json=strings_data_to_send
         )
         if response.status_code == 200:
             compressed_data = base64.b64decode(response.content)
             decompressed_data = gzip.decompress(compressed_data)
             webresult = json.loads(decompressed_data.decode("utf-8"))
-            aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash))
+            aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash, silent))
         else:
             infot = "A Server Error occurred. Please notify us!"
             aqt.mw.taskman.run_on_main(

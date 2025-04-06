@@ -7,6 +7,7 @@ import requests
 import gzip
 
 from .identifier import get_user_hash
+from .var_defs import API_BASE_URL
 
 class ReviewHistory:
     def __init__(self, deck_hash):
@@ -102,7 +103,7 @@ class ReviewHistory:
         }
         compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
         based_data = base64.b64encode(compressed_data)
-        response = requests.post("https://plugin.ankicollab.com/UploadDeckStats", data=based_data, headers={'Content-Type': 'application/json'}, timeout=30)
+        response = requests.post(f"{API_BASE_URL}/UploadDeckStats", data=based_data, headers={'Content-Type': 'application/json'}, timeout=30)
         aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(response.text, parent=QApplication.focusWidget()))
         return
 

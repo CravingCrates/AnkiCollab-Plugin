@@ -10,6 +10,9 @@ import requests
 from aqt.qt import *
 from aqt import mw
 
+from .auth_manager import *
+from .var_defs import API_BASE_URL
+
 def get_local_deck_from_hash(input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data:
@@ -18,22 +21,9 @@ def get_local_deck_from_hash(input_hash):
                 return mw.col.decks.name(details["deckId"])
     return "None"
 
-def store_login_token(token):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        if "settings" not in strings_data:
-            strings_data["settings"] = {}
-        strings_data["settings"]["token"] = token
-        strings_data["settings"]["auto_approve"] = False
-    mw.addonManager.writeConfig(__name__, strings_data)
-
+#legacy
 def get_login_token():
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        if "settings" in strings_data:
-            if "token" in strings_data["settings"]:
-                return strings_data["settings"]["token"]
-    return None   
+    return auth_manager.get_token()
 
 def set_rated_true():
     strings_data = mw.addonManager.getConfig(__name__)
@@ -138,20 +128,26 @@ class LoginDialog(QDialog):
         form_layout.addRow("Password:", self.password_input)
 
         layout.addLayout(form_layout)
+        
+        signup_label = QLabel("Don't have an account? <a href='https://ankicollab.com/signup'>Sign up here</a>")
+        signup_label.setOpenExternalLinks(True)
+        layout.addWidget(signup_label)
 
         button_box = QDialogButtonBox()
         login_button = button_box.addButton("Login", QDialogButtonBox.ButtonRole.AcceptRole)
-        button_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+        cancel_button = button_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
 
         layout.addWidget(button_box)
 
         self.setLayout(layout)
 
         login_button.clicked.connect(self.login)
+        cancel_button.clicked.connect(self.reject)
 
     def login(self):
         username = self.username_input.text()
         password = self.password_input.text()
+        
         if not username or not password:
             aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo("Please enter a username and password."))
             return
@@ -160,23 +156,27 @@ class LoginDialog(QDialog):
             'username': username,
             'password': password
         }
-        response = requests.post("https://plugin.ankicollab.com/login", data=payload)
+        
+        try:
+            response = requests.post(f"{API_BASE_URL}/login", data=payload,timeout=10)
 
-        if response.status_code == 200:
-            res = response.text
-            msg_box = QMessageBox()
-            # if res is exactly 32 characters and no spaces, it's a token and we can assume it's a success
-            if len(res) == 32 and " " not in res:
-                store_login_token(res)
-                msg_box.setText("Login successful!")
-                self.done(0)
+            if response.status_code == 200:
+                # Parse the JSON response
+                auth_data = response.json()
+                
+                if auth_manager.store_login_result(auth_data):
+                    self.done(0)
+                else:
+                    msg_box = QMessageBox()
+                    msg_box.setText("Invalid authentication response from server.")
+                    msg_box.exec()
             else:
-                msg_box.setText(res)
-            msg_box.exec()
-        else:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo("An error occurred while logging in. Please try again."))
-            return
-  
+                error_message = f"Login failed: {response.text}"
+                aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo(error_message))
+        except Exception as e:
+            error_message = f"Error connecting to server: {str(e)}"
+            aqt.mw.taskman.run_on_main(lambda: aqt.utils.showInfo(error_message))
+            
 class AddChangelogDialog(QDialog):
     def __init__(self, deck_hash, parent=None):
         super().__init__()
@@ -216,7 +216,7 @@ class AddChangelogDialog(QDialog):
             'token': get_login_token()
         }
 
-        response = requests.post("https://plugin.ankicollab.com/submitChangelog", json=payload)
+        response = requests.post(f"{API_BASE_URL}/submitChangelog", json=payload)
         if response.status_code == 200:
             QMessageBox.information(self, "Information", response.text)
         else:
