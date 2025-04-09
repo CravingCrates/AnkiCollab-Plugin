@@ -1,6 +1,7 @@
 import os
 import time
 import sys
+import platform
 import importlib
 import logging
 
@@ -8,12 +9,24 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
 
 # Pillow specific stuff
 base_path = os.path.dirname(__file__)
+arch = platform.machine()
+
 if sys.platform.startswith("win"):
     sys.path.insert(0, os.path.join(base_path, "dist/windows"))
 elif sys.platform.startswith("linux"):
-    sys.path.insert(0, os.path.join(base_path, "dist/linux"))
-elif sys.platform.startswith("darwin"):  # macOS
-    sys.path.insert(0, os.path.join(base_path, "dist/macos"))
+    if arch == "x86_64":
+        sys.path.insert(0, os.path.join(base_path, "dist/linux/x86_64"))
+    elif arch in ("aarch64", "arm64"):  # Some ARM systems report 'arm64'
+        sys.path.insert(0, os.path.join(base_path, "dist/linux/aarch64"))
+    else:
+        raise RuntimeError(f"Unsupported Linux architecture: {arch}")
+elif sys.platform.startswith("darwin"):
+    if arch == "arm64":
+        sys.path.insert(0, os.path.join(base_path, "dist/macos/arm64"))
+    elif arch == "x86_64":
+        sys.path.insert(0, os.path.join(base_path, "dist/macos/x86_64"))
+    else:
+        raise RuntimeError(f"Unsupported macOS architecture: {arch}")
 
 from aqt import mw
 from aqt.qt import *

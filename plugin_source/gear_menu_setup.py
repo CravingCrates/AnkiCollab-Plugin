@@ -72,6 +72,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
                     details["timestamp"] = (
                         datetime.now(timezone.utc) - timedelta(days=365)
                     ).strftime("%Y-%m-%d %H:%M:%S")
+                    aqt.utils.tooltip("Deck timestamp reset")
                     break
             mw.addonManager.writeConfig(__name__, strings_data)
             
