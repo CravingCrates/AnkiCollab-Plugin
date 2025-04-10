@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 import logging
+import uuid
+import re
 
 import requests
 
@@ -29,6 +31,81 @@ WEBP_QUALITY = 85
 JPEG_QUALITY = 85
 PNG_COMPRESSION = 9
 MAX_IMAGE_SIZE = 1920  # Maximum dimension for resizing
+
+def is_allowed_filename(filename):
+    """
+    Check if a filename meets the required safety criteria.
+    Implements the same logic as the Rust function is_allowed_extension.
+    
+    Args:
+        filename: The filename to check
+        
+    Returns:
+        bool: True if the filename is allowed, False otherwise
+    """
+    # Check length
+    if not filename or len(filename) > 255 or len(filename) < 5:
+        return False
+    
+    # Check for path separators or traversal patterns
+    if '/' in filename or '\\' in filename or '..' in filename or filename.endswith('.') or filename.endswith(' '):
+        return False
+    
+    # Check for empty after trimming
+    if not filename.strip():
+        return False
+    
+    # Check for valid characters
+    allowed_chars = re.compile(r'^[a-zA-Z0-9\.\-_\s\(\)\+\,\%\&]*$')
+    if not allowed_chars.match(filename):
+        return False
+    
+    # Check first character is alphanumeric
+    if not filename[0].isalnum():
+        return False
+    
+    # Check contains at least one alphanumeric
+    if not any(c.isalnum() for c in filename):
+        return False
+    
+    # Check extension
+    path = Path(filename)
+    ext = path.suffix.lower().lstrip('.')
+    if not ext:
+        return False
+    
+    allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff']
+    return ext in allowed_extensions
+
+def sanitize_filename(filename):
+    """
+    Sanitize a filename, replacing invalid filenames with random valid ones
+    while preserving the extension if it's allowed.
+    
+    Args:
+        filename: The original filename
+        
+    Returns:
+        str: A valid filename (either the original or sanitized version)
+    """
+    if is_allowed_filename(filename):
+        return filename
+    
+    # Extract the extension
+    path = Path(filename)
+    ext = path.suffix.lower().lstrip('.')
+    
+    # Check if extension is valid
+    allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff']
+    if ext not in allowed_extensions:
+        return None  # Invalid extension, can't sanitize
+    
+    # Generate a random name with the original extension
+    random_id = str(uuid.uuid4())[:8]  # Use first 8 chars of UUID for readability
+    new_filename = f"img_{random_id}.{ext}"
+    
+    logger.debug(f"Renamed invalid filename '{filename}' to '{new_filename}'")
+    return new_filename
 
 def can_optimize():
     """Check if optimization/pillow is available"""
@@ -121,6 +198,23 @@ async def optimize_media_file(filename, filepath_obj):
     Returns:
         Tuple of (optimized filepath string, new filename, whether optimization occurred)
     """
+    sanitized_name = sanitize_filename(filename)
+    if sanitized_name is None:
+        logger.warning(f"Skipping file with invalid extension: {filename}")
+        return None, None, False
+    
+    if sanitized_name != filename:
+        # Rename the file if it was sanitized
+        new_filepath = filepath_obj.parent / sanitized_name
+        try:
+            filepath_obj.rename(new_filepath)
+            filepath_obj = new_filepath
+            filename = sanitized_name
+            logger.info(f"Renamed file to: {sanitized_name}")
+        except Exception as e:
+            logger.error(f"Failed to rename invalid file {filename}: {str(e)}")
+            return None, None, False
+            
     if not can_optimize():
         return filepath_obj, filename, False
     

@@ -1,3 +1,4 @@
+import sys
 from aqt import gui_hooks, mw
 from aqt.browser import Browser, SidebarTreeView, SidebarItem, SidebarItemType
 from anki.decks import DeckId
@@ -8,7 +9,7 @@ from anki.collection import Collection
 from aqt.utils import askUser, showInfo
 
 import json
-from typing import Sequence, List # Import List
+from typing import Sequence, List, Tuple # Import List
 
 from .export_manager import *
 from .import_manager import *
@@ -245,11 +246,54 @@ def autoUpdate():
     if startup_check_enabled:
         async_update(True)
 
+import struct
+
+original_get_image_dimensions_ioe = None
+ioe_imghdr = None
+def hk_get_image_dimensions(image_path: str) -> Tuple[int, int]:
+    global original_get_image_dimensions_ioe
+    if image_path.endswith(".webp"):
+        height = -1
+        width = -1
+        with open(image_path, 'rb') as fhandle:
+            head = fhandle.read(31)
+            size = len(head)
+            if size >= 12 and head.startswith(b'RIFF') and head[8:12] == b'WEBP':
+                if head[12:16] == b"VP8 ":
+                    width, height = struct.unpack("<HH", head[26:30])
+                elif head[12:16] == b"VP8X":
+                    width = struct.unpack("<I", head[24:27] + b"\0")[0]
+                    height = struct.unpack("<I", head[27:30] + b"\0")[0]
+                elif head[12:16] == b"VP8L":
+                    b = head[21:25]
+                    width = (((b[1] & 63) << 8) | b[0]) + 1
+                    height = (((b[3] & 15) << 10) | (b[2] << 2) | ((b[1] & 192) >> 6)) + 1
+                else:
+                    raise ValueError("Unsupported WebP file")
+                return width, height
+    return original_get_image_dimensions_ioe(image_path)
+    
+def patch_image_occlusion_enhanced():
+    utils_module = "1374772155.utils"
+    add_module = "1374772155.add"
+    ioe_utils = sys.modules.get(utils_module)
+    ioe_add = sys.modules.get(add_module)
+    if ioe_utils is None or ioe_add is None:
+        logger.warning("Image Occlusion Enhanced Add-on not loaded, skipping patch.")
+        return False
+    global original_get_image_dimensions_ioe
+    original_get_image_dimensions_ioe = ioe_utils.get_image_dimensions
+    ioe_utils.get_image_dimensions = hk_get_image_dimensions
+    ioe_add.get_image_dimensions = hk_get_image_dimensions
+    return True
+    
 def onProfileLoaded():
     """Called when the Anki profile finishes loading."""
     from . import main
     main.media_manager.set_media_folder(mw.col.media.dir())
     autoUpdate()
+    patch_successful = patch_image_occlusion_enhanced()
+    print(f"Image Occlusion Enhanced patch: {patch_successful}")
 
 def update_hooks_for_login_state(logged_in: bool):
     #placeholder for future use

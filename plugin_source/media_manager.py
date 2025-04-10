@@ -525,19 +525,28 @@ class MediaManager:
                     json=data,
                 )
                 
-                if response.status_code != 200:
-                    logger.error(f"Error status {response.status_code} getting media manifest")
-                    raise MediaServerError(f"Failed to get get server response for media: {response.status_code}")
-                
+                response.raise_for_status()
                 return response.json()
                 
             except requests.HTTPError as e:
+                if e.response.status_code == 403:
+                    logger.error(f"Permission denied getting media manifest: {str(e)}")
+                    raise MediaServerError(f"Permission denied")
+                if e.response.status_code == 404:
+                    logger.error(f"Deck not found: {str(e)}")
+                    raise MediaServerError(f"404 not found")
+                if e.response.status_code == 429:
+                    logger.error(f"Rate limit exceeded: {str(e)}")
+                    raise MediaServerError(f"Woah this is a lot of requests. Please wait a bit.")
+                if e.response.status_code == 401:
+                    logger.error(f"Unauthorized: {str(e)}")
+                    raise MediaServerError(f"Your Login expired. Please renew it.")
                 logger.error(f"Error getting media manifest: {str(e)}")
-                raise MediaServerError(f"Failed to get get server response for media: {str(e)}")
+                raise MediaServerError(f"Failed to get server response for media: {str(e)}")
                 
             except (requests.RequestException, KeyError) as e:
                 logger.error(f"Error retrieving manifest data: {str(e)}")
-                raise MediaServerError(f"Failed to get get server response for media: {str(e)}")
+                raise MediaServerError(f"Failed to get server response for media: {str(e)}")
     
     @retry(max_tries=3, delay=2)
     async def get_media_manifest_and_download(self, user_token:str, deck_hash: str, filenames, progress_callback=None) -> Dict:
