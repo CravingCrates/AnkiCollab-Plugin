@@ -46,6 +46,8 @@ auto_approve_action.setMenuRole(QAction.MenuRole.NoRole)
 def force_logout():
     auth_manager.logout()
     update_ui_for_login_state() # Update UI after logout
+    showInfo("Your login expired. Please log in again.")
+    mw.reset()
 
 def delete_selected_rows(table):
     strings_data = mw.addonManager.getConfig(__name__)

@@ -149,12 +149,12 @@ def get_maintainer_data(deckHash):
                         if token_check_response.status_code != 200 or token_check_response.text != "true":
                             # If still invalid, force logout
                             from .menu import force_logout  # bypass circular import
-                            force_logout()
+                            mw.taskman.run_on_main(force_logout)
                             token = ""
                     else:
                         # If refresh failed, force logout
                         from .menu import force_logout  # bypass circular import
-                        force_logout()
+                        mw.taskman.run_on_main(force_logout)
                         token = ""
         except Exception as e:
             print(f"Error checking token: {e}")
@@ -257,8 +257,6 @@ def update_media_references(filename_mapping, file_note_pairs):
         mw.col.update_notes(updated_notes)
     
     return len(updated_notes)
-
-from concurrent.futures import Future
 
 # so this is a little hacky, but its not necessarily called from the main thread, but the reference updating should be handled from it, so we do that part on the main thread and wait for it to finish before proceeding
 async def optimize_media_files(media_files: list):    
@@ -455,11 +453,10 @@ def submit_deck(deck, did, rationale, commit_text, media_files_info, media_file_
         commit_text = "" # useless anyway
     else:
         if rationale is None:
-            (rationale, commit_text) = get_commit_info()
-        if rationale is None:
             return
             
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
+    
     data = {
         "remote_deck": deckHash, 
         "deck_path": deckPath, 
@@ -476,8 +473,8 @@ def submit_deck(deck, did, rationale, commit_text, media_files_info, media_file_
     response = requests.post(f"{API_BASE_URL}/submitCard", data=based_data, headers=headers)
                 
     if response.status_code == 200:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
         if media_files_info:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
             return token, deckHash, media_files_info, media_file_paths, False
 
     if response.status_code == 500:
@@ -582,6 +579,7 @@ def suggest_subdeck(did):
         if last_pulled is None:
             last_pulled = 0.0
         deck_initializer.remove_unchanged_notes(deck, last_updated, last_pulled)
+        deck_initializer.trim_empty_children(deck)
     
     personal_tags = get_personal_tags(deckHash)
     if personal_tags:
@@ -620,6 +618,7 @@ def suggest_notes(nids, rationale_id, editor=None):
     
     disambiguate_note_model_uuids(aqt.mw.col)
     deck = deck_initializer.from_collection(aqt.mw.col, deck.name, note_ids=nids)
+    deck_initializer.trim_empty_children(deck)
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck)
     
@@ -628,10 +627,16 @@ def suggest_notes(nids, rationale_id, editor=None):
         deck_initializer.remove_tags_from_notes(deck, personal_tags)
     
     commit_text = ""
-    if rationale_id != 6: # skip the dialog in the new card case
-        (rationale_id, commit_text) = get_commit_info(rationale_id)#
+    token, force_overwrite = get_maintainer_data(deckHash)
+    if not token:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.showWarning("You must be logged in to make this suggestion. Please login under AnkiCollab > Login in the menu bar. And try again", parent=QApplication.focusWidget()))
+        return
+    
+    if rationale_id != 6 and not force_overwrite: # skip the dialog in the new card case
+        (rationale_id, commit_text) = get_commit_info(rationale_id)
         if rationale_id is None:
             return
+    
     submit_with_progress(deck, did, rationale_id, commit_text)
     
     # After editing a note in the editor, we have to reload it, even after jumping through all the loops in the collection db updating. 
@@ -664,6 +669,7 @@ def handle_export(did, username) -> str:
     
     disambiguate_note_model_uuids(aqt.mw.col)
     deck = deck_initializer.from_collection(aqt.mw.col, deck.name)
+    deck_initializer.trim_empty_children(deck)
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck)
 
