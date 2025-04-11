@@ -31,6 +31,7 @@ from aqt.operations.tag import clear_unused_tags
 from aqt.utils import showInfo
 from anki.notes import Note as AnkiNote
 from aqt import mw
+from anki.errors import NotFoundError
 
 from ...var_defs import API_BASE_URL
 
@@ -54,6 +55,7 @@ def silent_clear_unused_tags() -> None:
     
 class Deck(JsonSerializableAnkiDict):
     DECK_NAME_DELIMITER = "::"
+    root_deck_id = None
 
     export_filter_set = JsonSerializableAnkiDict.export_filter_set | \
                         {
@@ -255,14 +257,39 @@ class Deck(JsonSerializableAnkiDict):
         """Wrapper for on_success that unpacks the tuple result"""
         count, media_result = result
         self.on_success(count, media_result) 
-        
+    
+    def delete_empty_subdecks(self):
+        for name, did in aqt.mw.col.decks.children(self.root_deck_id):
+            try:
+                if not aqt.mw.col.decks.is_filtered(did) and aqt.mw.col.decks.card_count(did, include_subdecks=True) == 0:
+                    filtered_children = [
+                        cid for _, cid in aqt.mw.col.decks.children(did)
+                        if aqt.mw.col.decks.is_filtered(cid)
+                    ]
+                    if filtered_children:
+                        parent_name = aqt.mw.col.decks.immediate_parent(name)
+                        parent_did = aqt.mw.col.decks.id_for_name(parent_name) if parent_name else self.root_deck_id
+                        if parent_did:
+                            aqt.mw.col.decks.reparent(filtered_children, parent_did)
+                            
+                    aqt.mw.col.decks.remove([did])
+                    
+            except NotFoundError:
+                continue
+            except Exception as e:
+                print(f"Error while processing deck {name}: {e}")
+                continue
+            
     def on_success(self, count: int, media_result) -> None:
         if count > 0:
             silent_clear_unused_tags()
             silent_clear_empty_cards()
         
-        self.on_media_download_done(media_result)
+        if self.root_deck_id:            
+            self.delete_empty_subdecks()
             
+        self.on_media_download_done(media_result)
+                    
         mw.progress.finish()
         # Reset window without blocking main thread
         aqt.mw.reset()
@@ -320,7 +347,6 @@ class Deck(JsonSerializableAnkiDict):
                     )
                 )
             else:
-                print("No missing media files to download")
                 return {
                     "success": True, 
                     "message": f"No missing media files to download",
@@ -522,6 +548,9 @@ class Deck(JsonSerializableAnkiDict):
         self.anki_dict["name"] = full_name
         
         collection.decks.save(deck_dict)
+        
+        if not parent_name: # Only set root deck id for root deck
+            self.root_deck_id = collection.decks.id(full_name, create=False)
         return full_name
 
     @staticmethod

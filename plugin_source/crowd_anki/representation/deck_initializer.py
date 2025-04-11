@@ -1,3 +1,4 @@
+from typing import Optional
 from functional import seq
 
 from .deck import Deck
@@ -12,6 +13,9 @@ def from_collection(collection, name, deck_metadata=None, is_child=False, note_i
     by_name = decks.by_name
     anki_dict = by_name(name)
 
+    if anki_dict is None:
+        return None
+    
     if AnkiDeck(anki_dict).is_dynamic:
         return None
 
@@ -64,6 +68,25 @@ def remove_tags_from_notes(deck, tags) -> None:
     
     for child in deck.children:
         remove_tags_from_notes(child, tags)
+
+def _is_deck_empty_recursive(deck: Deck) -> bool:
+    if deck is None:
+        return True # Treat None as empty
+
+    non_empty_children = []
+    for child in deck.children:
+        if not _is_deck_empty_recursive(child):
+            non_empty_children.append(child)
+
+    deck.children = non_empty_children
+
+    is_empty = not deck.notes and not deck.children
+    return is_empty
+
+def trim_empty_children(deck: Optional[Deck]) -> None:    
+    if deck is None:
+        return
+    _is_deck_empty_recursive(deck)
 
 def from_json(json_dict, deck_metadata=None) -> Deck:
     """load metadata, load notes, load children"""
