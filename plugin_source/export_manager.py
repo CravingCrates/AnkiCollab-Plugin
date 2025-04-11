@@ -98,19 +98,21 @@ def submit_with_progress(deck, did, rationale, commit_text):
     media_files = []
     protected_fields = deck.get_protected_fields(get_deck_hash_from_did(did))
     media_files = deck.get_media_file_note_map(protected_fields)
-        
-    files_info, file_paths = sync_run_async(optimize_media_files, media_files)
-    # We need to recollect the notes after media optimization
-    deck.refresh_notes(media_files)
-    
-    op = QueryOp(
-        parent=QApplication.focusWidget(),
-        op=lambda _: submit_deck(deck, did, rationale, commit_text, files_info, file_paths),
-        success=upload_media_pre,
-    )
-    if point_version() >= 231000:
-        op.without_collection()
-    op.with_progress("Uploading to AnkiCollab...").run_in_background()
+    if media_files:
+        files_info, file_paths = sync_run_async(optimize_media_files, media_files)
+        # We need to recollect the notes after media optimization
+        deck.refresh_notes(media_files)
+
+        op = QueryOp(
+            parent=QApplication.focusWidget(),
+            op=lambda _: submit_deck(deck, did, rationale, commit_text, files_info, file_paths),
+            success=upload_media_pre,
+        )
+        if point_version() >= 231000:
+            op.without_collection()
+        op.with_progress("Uploading to AnkiCollab...").run_in_background()
+    else:
+        submit_deck(deck, did, rationale, commit_text, None, None)
 
 def get_maintainer_data(deckHash):
     token = auth_manager.get_token()
@@ -476,8 +478,8 @@ def submit_deck(deck, did, rationale, commit_text, media_files_info, media_file_
     response = requests.post(f"{API_BASE_URL}/submitCard", data=based_data, headers=headers)
                 
     if response.status_code == 200:
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
         if media_files_info:
-            aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(f"AnkiCollab Upload:\n{response.text}\n", parent=QApplication.focusWidget()))
             return token, deckHash, media_files_info, media_file_paths, False
 
     if response.status_code == 500:
@@ -628,10 +630,6 @@ def suggest_notes(nids, rationale_id, editor=None):
         deck_initializer.remove_tags_from_notes(deck, personal_tags)
     
     commit_text = ""
-    if rationale_id != 6: # skip the dialog in the new card case
-        (rationale_id, commit_text) = get_commit_info(rationale_id)#
-        if rationale_id is None:
-            return
     submit_with_progress(deck, did, rationale_id, commit_text)
     
     # After editing a note in the editor, we have to reload it, even after jumping through all the loops in the collection db updating. 
