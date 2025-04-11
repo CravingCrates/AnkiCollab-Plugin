@@ -265,8 +265,8 @@ async def optimize_media_files(media_files: list):
     filename_mapping, files_info, file_paths = await main.media_manager.optimize_media_for_upload(media_files)
 
     # Create a Future to wait for the main thread operation to complete
-    loop = asyncio.get_running_loop()
-    future = loop.create_future()
+    from concurrent.futures import Future
+    future = Future()
     
     def update_and_complete():
         try:
@@ -279,7 +279,8 @@ async def optimize_media_files(media_files: list):
     mw.taskman.run_on_main(update_and_complete)
 
     try:
-        result = await future
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, future.result)
         print(f"Updated {result} notes with new media references")
     except Exception as e:
         logger.error(f"Failed while waiting for media reference update: {str(e)}")
