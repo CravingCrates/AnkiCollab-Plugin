@@ -456,7 +456,7 @@ def submit_deck(deck, did, rationale, commit_text, media_files_info, media_file_
         rationale = 10 #rationale = Other
         commit_text = "" # useless anyway
     else:
-        if rationale is None:
+        if rationale != 6: #skip add note
             (rationale, commit_text) = get_commit_info()
         if rationale is None:
             return
