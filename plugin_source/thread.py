@@ -17,7 +17,7 @@ def thread_exception_handler(args):
     logger.error("".join(traceback.format_tb(exc_traceback)))
     
     aqt.mw.taskman.run_on_main(
-            lambda: aqt.utils.showWarning(f"Error in operation: {exc_value}",
+            lambda: aqt.utils.showWarning(f"An Error has occurred! That's not good!",
                 title="AnkiCollab Error",
                 parent=mw
             )
@@ -32,7 +32,7 @@ def run_function_in_thread(function, *args, **kwargs):
             logger.error(f"Exception in thread function {function.__name__}: {str(e)}")
             logger.error(traceback.format_exc())
             aqt.mw.taskman.run_on_main(
-                lambda: aqt.utils.showWarning(f"Error in operation: {str(e)}",
+                lambda: aqt.utils.showWarning(f"An Error has occurred! That's not good!",
                     title="AnkiCollab Error",
                     parent=mw
                 )
@@ -56,7 +56,7 @@ def run_async_function_in_thread(async_function, *args, **kwargs):
             logger.error(f"Exception in async thread function {async_function.__name__}: {str(e)}")
             logger.error(traceback.format_exc())
             aqt.mw.taskman.run_on_main(
-                lambda: aqt.utils.showWarning(f"Error in operation: {str(e)}",
+                lambda: aqt.utils.showWarning(f"An Error has occurred! That's not good!",
                     title="AnkiCollab Error",
                     parent=mw
                 )

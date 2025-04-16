@@ -21,6 +21,20 @@ from aqt import mw
 
 logger = logging.getLogger("ankicollab")
 
+# # --- Add File Logging  ---
+# log_file_path = os.path.join(os.path.dirname(__file__), 'ankicollab_media_errors.log')
+# file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+# file_handler.setLevel(logging.NOTSET)
+# formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# file_handler.setFormatter(formatter)
+
+# # Check if the handler is already added to avoid duplicates during reloads
+# if not any(isinstance(h, logging.FileHandler) and h.baseFilename == file_handler.baseFilename for h in logger.handlers):
+#     logger.addHandler(file_handler)
+    
+# # --- Add File Logging  ---
+
+
 MAX_REQUESTS_PER_MINUTE = 50
 REQUEST_TRACKING_WINDOW = 60  # seconds
 MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB max file size
@@ -667,12 +681,12 @@ class MediaManager:
                 return response.json()
                 
             except requests.HTTPError as e:
-                message = f"HTTP error {e.response.status_code}: {e.response.text}"
+                message = f"Check Media Bulk: HTTP error {e.response.status_code}: {e.response.text}"
                 logger.error(message)
                 raise MediaServerError(e.response.text)
                 
             except requests.RequestException as e:
-                logger.error(f"Network error: {str(e)}")
+                logger.error(f"Check Media Bulk: Network error: {str(e)}")
                 raise MediaServerError(f"Network error: {str(e)}")
     
     async def optimize_media_for_upload(self, file_note_pairs):
@@ -862,16 +876,32 @@ class MediaManager:
             
             # Process this batch
             if upload_tasks:
-                batch_results = await asyncio.gather(*[task for _, task in upload_tasks], return_exceptions=True)
-                
-                for i, result in enumerate(batch_results):
-                    file_hash, _ = upload_tasks[i]
-                    if isinstance(result, Exception) or not result:
-                        logger.error(f"Failed to upload file {file_hash}: {result}")
-                        failed_files.append(file_hash)
-                    else:
-                        uploaded_files.append(file_hash)
-                
+                hashes_in_batch = [h for h, t in upload_tasks]
+                logger.info(f"Attempting to upload batch of {len(upload_tasks)} files. Hashes: {hashes_in_batch}")
+                try:
+                    batch_results = await asyncio.gather(*[task for _, task in upload_tasks], return_exceptions=True)
+                    logger.info(f"Completed S3 upload sub-batch for hashes: {hashes_in_batch}")
+                    for i, result in enumerate(batch_results):
+                        file_hash, _ = upload_tasks[i]
+                        if isinstance(result, ConnectionResetError):
+                            logger.error(f"!!! ConnectionResetError during S3 PUT for file {file_hash}: {result}")
+                            failed_files.append(file_hash)
+                        elif isinstance(result, Exception):
+                            logger.error(f"Failed to upload file {file_hash} (non-reset error): {result}")
+                            failed_files.append(file_hash)
+                        elif not result:
+                            logger.error(f"Upload function returned False for file {file_hash}")
+                            failed_files.append(file_hash)
+                        else:
+                            logger.debug(f"Successfully uploaded file {file_hash}")
+                            uploaded_files.append(file_hash)
+                except ConnectionResetError as e:
+                    logger.error(f"!!! ConnectionResetError raised by asyncio.gather during S3 upload batch for hashes {hashes_in_batch}: {e}")
+                    failed_files.extend(hashes_in_batch) # Mark all in this gather as failed
+                except Exception as e:
+                    logger.error(f"Unexpected error during asyncio.gather for S3 uploads (hashes {hashes_in_batch}): {e}")
+                    failed_files.extend(hashes_in_batch) # Mark all as failed
+                    
             # Update progress (50% - 80% of total progress)
             if progress_callback:
                 progress_value = 0.5 + (0.3 * (i+len(batch)) / len(missing_files))
@@ -951,18 +981,18 @@ class MediaManager:
                 if response.status_code == 200:
                     return
                 else:
-                    message = f"Server returned an error: {response.text}"
+                    message = f"Confirm Media Bulk: Server returned an error: {response.text}"
                     logger.error(message)
                     raise MediaServerError(message)
 
             except requests.exceptions.Timeout:
-                logger.error("Timeout during Media Upload")
+                logger.error("Confirm Media Bulk: Timeout during Media Upload")
                 
             except requests.HTTPError as e:
-                message = f"HTTP error {e.response.status_code} during bulk confirm: {e.response.text}"
+                message = f"Confirm Media Bulk: HTTP error {e.response.status_code} during bulk confirm: {e.response.text}"
                 logger.error(message)
                 raise MediaServerError(f"Error communicating with the server")
                 
             except requests.RequestException as e:
-                logger.error(f"Network error during bulk confirmation: {str(e)}")
+                logger.error(f"Confirm Media Bulk: Network error during bulk confirmation: {str(e)}")
                 raise MediaServerError(f"Network error: {str(e)}")

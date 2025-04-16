@@ -302,7 +302,7 @@ class Deck(JsonSerializableAnkiDict):
                 f"Processed {curr} / {max_i} notes ({percentage:.1f}%)...",
                 value=curr,
                 max=max_i,
-            )
+            ) if aqt.mw.progress.busy() else None
         )
         
     def on_media_download_done(self, result=None) -> None:
@@ -343,7 +343,7 @@ class Deck(JsonSerializableAnkiDict):
                             value=int(p * 100),
                             max=100,
                             label=f"Downloading media files... {int(p * 100)}%"
-                        )
+                        ) if mw.progress.busy() else None
                     )
                 )
             else:

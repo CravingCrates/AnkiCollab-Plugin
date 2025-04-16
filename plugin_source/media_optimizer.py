@@ -3,9 +3,9 @@ import os
 import sys
 from pathlib import Path
 import logging
+import shutil
 import uuid
 import re
-
 import requests
 
 import aqt
@@ -19,18 +19,38 @@ logger = logging.getLogger("ankicollab")
 from .main import media_manager
 
 try:
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
+    # Newer Pillow versions use Resampling enums
+    try:
+        PIL_Resampling = Image.Resampling
+    except AttributeError:
+        # Fallback for older Pillow versions
+        PIL_Resampling = Image
     OPTIMIZATION_AVAILABLE = True
 except ImportError as e:
     print(e)
     logger.warning("Pillow not available - image optimization disabled")
     OPTIMIZATION_AVAILABLE = False
+    PIL_Resampling = None # Define it as None if Pillow isn't available
 
 # Configuration
 WEBP_QUALITY = 85
 JPEG_QUALITY = 85
 PNG_COMPRESSION = 9
 MAX_IMAGE_SIZE = 1920  # Maximum dimension for resizing
+
+ALLOWED_INPUT_EXTENSIONS = [
+        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tif', '.tiff'
+    ]
+   
+FORMAT_TO_EXTENSION = {
+    'JPEG': '.jpg', # Standardize to .jpg
+    'PNG': '.png',
+    'GIF': '.gif',
+    'WEBP': '.webp',
+    'BMP': '.bmp',
+    'TIFF': '.tif', # Standardize to .tif
+}
 
 def is_allowed_filename(filename):
     """
@@ -121,72 +141,167 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
         convert_to_webp: Whether to convert to WebP format
         
     Returns:
-        Path to the optimized file, or original if optimization failed
+        Tuple[Path, bool]:
+            - Path: The path to the file that should be used (original or optimized/converted).
+            - bool: True if the intended `destination` file was successfully created and is the returned path, False otherwise.
     """
     if not OPTIMIZATION_AVAILABLE:
-        return filepath
+        logger.warning("Optimization skipped: Pillow not available.")
+        return Path(filepath), False
         
     filepath = Path(filepath)
     
-    if filepath.suffix.lower() not in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-        return filepath
-        
-    if destination is None:
-        if convert_to_webp:
-            destination = filepath.with_suffix('.webp')
-        else:
-            destination = filepath.with_name(f"{filepath.stem}_optimized{filepath.suffix}")
-    
-    # if destination already exists, we just use it bc we probably already optimized it
-    des_path = Path(destination)
-    if des_path.exists():
-        return destination
-    
+    if not filepath.is_file():
+        logger.error(f"Source file not found or is not a file: {filepath}")
+        return filepath, False
     try:
-        img = Image.open(filepath)
-        
-        if img.mode == 'RGBA' and not convert_to_webp:
-            background = Image.new('RGB', img.size, (255, 255, 255))
-            background.paste(img, mask=img.split()[3])
-            img = background
-        
-        # Resize if too large
-        if max(img.size) > MAX_IMAGE_SIZE:
-            ratio = MAX_IMAGE_SIZE / max(img.size)
-            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-            img = img.resize(new_size, Image.LANCZOS)
-        
-        if convert_to_webp:
-            if filepath.suffix.lower() == '.gif':
-                img.save(des_path, 'WEBP', quality=WEBP_QUALITY, save_all=True)
+        original_size = filepath.stat().st_size
+    except OSError as e:
+        logger.error(f"Could not get stats for source file {filepath}: {e}")
+        return filepath, False
+    
+    if filepath.suffix.lower() not in ALLOWED_INPUT_EXTENSIONS:
+        logger.debug(f"Skipping optimization for file type Pillow likely doesn't handle: {filepath.name}")
+        return filepath, False
+
+    des_path = Path(destination) if destination else None
+
+    if not des_path:
+         logger.error("Optimize_image called without a destination path.")
+         return filepath, False
+     
+    # Avoid redundant work if source and destination are identical and no format change is intended
+    # (convert_to_webp=True implies format change unless source is already webp)
+    will_change_format = (
+        convert_to_webp and filepath.suffix.lower() != '.webp'
+    ) or (
+        not convert_to_webp and des_path.suffix.lower() != filepath.suffix.lower() # Explicit format change goal
+    )
+
+    if des_path == filepath and not will_change_format:
+         logger.debug(f"Skipping optimization: Destination same as source, and no format change intended for {filepath.name}.")
+         # Technically destination exists, but wasn't *created* by this optimization run.
+         return filepath, False
+     
+    try:
+        with Image.open(filepath) as img:
+            original_format = img.format
+            original_mode = img.mode
+            resized = False
+
+            # Convert RGBA to RGB with white background if saving to JPEG
+            if img.mode in ('RGBA', 'LA') and (not convert_to_webp and des_path.suffix.lower() not in ['.png', '.webp', '.tif']):
+                logger.debug(f"Converting {img.mode} to RGB for {filepath.name} before saving to {des_path.suffix}")
+                try:
+                    # Create a white background and paste the image onto it
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    # Paste using alpha channel as mask if available
+                    alpha_channel = img.getchannel('A')
+                    background.paste(img, mask=alpha_channel)
+                    img = background # Replace img with the RGB version
+                except Exception as bg_err:
+                    logger.warning(f"Could not apply alpha mask for {filepath.name}, converting directly to RGB: {bg_err}")
+                    img = img.convert('RGB')
+
+
+            # Resize if too large
+            if max(img.size) > MAX_IMAGE_SIZE:
+                ratio = MAX_IMAGE_SIZE / max(img.size)
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                logger.debug(f"Resizing {filepath.name} from {img.size} to {new_size}")
+                resample_filter = PIL_Resampling.LANCZOS if PIL_Resampling else Image.LANCZOS
+                img = img.resize(new_size, resample=resample_filter)
+                resized = True
+
+            save_options = {}
+            target_format = None
+
+            if convert_to_webp:
+                target_format = 'WEBP'
+                save_options['quality'] = WEBP_QUALITY
+                if original_format == 'GIF' and getattr(img, 'is_animated', False):
+                    try:
+                        save_options['save_all'] = True
+                        img.seek(0)
+                        save_options['duration'] = img.info.get('duration', 100)
+                        save_options['loop'] = img.info.get('loop', 0)
+                        logger.debug(f"Attempting animated WebP conversion for {filepath.name}")
+                    except Exception as anim_err:
+                         logger.warning(f"Could not fully configure animated WebP save for {filepath.name}: {anim_err}. Saving first frame.")
+                         if 'save_all' in save_options: del save_options['save_all']
+                         img.seek(0) # Ensure first frame is selected
+                         
+            elif des_path.suffix.lower() in ['.jpg', '.jpeg']:
+                target_format = 'JPEG'
+                save_options['quality'] = JPEG_QUALITY
+                save_options['optimize'] = True
+            elif des_path.suffix.lower() == '.png':
+                target_format = 'PNG'
+                save_options['optimize'] = True
+                save_options['compress_level'] = PNG_COMPRESSION
+            elif des_path.suffix.lower() == '.gif':
+                target_format = 'GIF'
+                if getattr(img, 'is_animated', False):
+                     save_options['save_all'] = True
+                     img.seek(0)
+                     save_options['duration'] = img.info.get('duration', 100)
+                     save_options['loop'] = img.info.get('loop', 0)
             else:
-                img.save(des_path, 'WEBP', quality=WEBP_QUALITY)
-        elif filepath.suffix.lower() in ['.jpg', '.jpeg']:
-            img.save(des_path, 'JPEG', quality=JPEG_QUALITY, optimize=True)
-        elif filepath.suffix.lower() == '.png':
-            img.save(des_path, 'PNG', optimize=True, compress_level=PNG_COMPRESSION)
-        else:
-            img.save(des_path, optimize=True)
-            
-        if des_path.exists() and des_path.stat().st_size < filepath.stat().st_size:
-            logger.debug(f"Optimized {filepath.name}: {filepath.stat().st_size} → {des_path.stat().st_size} bytes")
-            return des_path
-        else:
-            logger.debug(f"Optimization didn't reduce size for {filepath.name}, using original")
-            if des_path.exists():
-                os.unlink(des_path)
-            return filepath
-            
-    except Exception as e:
-        logger.error(f"Error optimizing {filepath.name}: {str(e)}")
-        # Clean up failed optimization attempt
+                 target_format = Image.registered_extensions().get(des_path.suffix.lower()) or original_format
+                 logger.debug(f"Using fallback target format '{target_format}' for {des_path.name}")
+
+            if target_format:
+                des_path.parent.mkdir(parents=True, exist_ok=True)
+                img.save(des_path, format=target_format, **save_options)
+            else:
+                logger.warning(f"No target format determined for saving {filepath.name}. Skipping save.")
+                # If we didn't save, the destination wasn't created by us.
+                return filepath, False
+
         if des_path.exists():
             try:
-                os.unlink(des_path)
-            except:
-                pass
-        return filepath
+                optimized_size = des_path.stat().st_size
+            except OSError as e:
+                 logger.error(f"Could not get stats for destination file {des_path}: {e}")
+                 # Treat as failure if we can't verify the result
+                 return filepath, False
 
+            # Determine if the destination file should be used
+            use_destination = (
+                optimized_size < original_size or # Smaller size
+                resized or                      # Image dimensions changed
+                will_change_format              # Format is different
+            )
+
+            if use_destination:
+                 logger.debug(f"Optimization successful for {filepath.name}. Using {des_path.name} ({original_size} -> {optimized_size} bytes)")
+                 return des_path, True
+            else:
+                 logger.debug(f"Optimization did not improve {filepath.name} sufficiently ({original_size} -> {optimized_size} bytes). Using original.")
+                 if filepath != des_path: # Remove the generated file if it's not the source
+                     try:
+                         os.unlink(des_path)
+                     except OSError as e:
+                         logger.warning(f"Could not remove ineffective optimized file {des_path}: {e}")
+                 return filepath, False
+        else:
+             logger.error(f"Destination file {des_path.name} not found after save attempt.")
+             return filepath, False
+
+    except UnidentifiedImageError:
+        logger.warning(f"Pillow could not identify image file: {filepath.name}. Skipping optimization.")
+        return filepath, False
+    except Exception as e:
+        logger.error(f"Error optimizing {filepath.name}: {str(e)}", exc_info=False)
+        # Clean up potentially partially created destination file
+        if des_path and des_path.exists() and des_path != filepath:
+            try:
+                os.unlink(des_path)
+                logger.debug(f"Cleaned up failed optimization file: {des_path.name}")
+            except OSError as unlink_err:
+                 logger.error(f"Error cleaning up failed optimization file {des_path.name}: {unlink_err}")
+        return filepath, False
+ 
 async def optimize_media_file(filename, filepath_obj):
     """
     Optimize a media file if it's an image, converting to WebP if possible.
@@ -204,41 +319,115 @@ async def optimize_media_file(filename, filepath_obj):
         return None, None, False
     
     if sanitized_name != filename:
-        # Rename the file if it was sanitized
         new_filepath = filepath_obj.parent / sanitized_name
         try:
-            filepath_obj.rename(new_filepath)
-            filepath_obj = new_filepath
-            filename = sanitized_name
-            logger.info(f"Renamed file to: {sanitized_name}")
+            # Check for collision before rename
+            if new_filepath.exists() and not filepath_obj.samefile(new_filepath):
+                 logger.warning(f"Sanitized filename {sanitized_name} already exists. Skipping rename/processing for {filename}.")
+                 return None, None, False
+            elif not new_filepath.exists():
+                 shutil.move(str(filepath_obj), str(new_filepath))
+                 filepath_obj = new_filepath
+                 filename = sanitized_name
+                 logger.info(f"Renamed invalid file '{filename}' to '{sanitized_name}'")
+
         except Exception as e:
-            logger.error(f"Failed to rename invalid file {filename}: {str(e)}")
+            logger.error(f"Failed to rename invalid file '{filename}' to '{sanitized_name}': {str(e)}")
             return None, None, False
+    
+    current_filepath_obj = filepath_obj
+    current_filename = filename
+
+    # fix mislabeled .webp files (caused by a previous bug lol)
+    if OPTIMIZATION_AVAILABLE and current_filename.lower().endswith('.webp'):
+        actual_format = None
+        try:
+            with Image.open(current_filepath_obj) as img:
+                img.load()
+                actual_format = img.format # e.g., 'JPEG', 'PNG', 'WEBP', None
+        except UnidentifiedImageError:
+             logger.warning(f"File '{current_filename}' has .webp extension, but Pillow cannot identify it as a valid image. It might be corrupt or not an image.")
+             actual_format = None
+        except Exception as img_err:
+            logger.warning(f"Could not open file '{current_filename}' with Pillow to verify format: {img_err}. Skipping correction check.")
+            actual_format = None
+
+        if actual_format and actual_format != 'WEBP':
+            logger.warning(f"File '{current_filename}' has .webp extension but Pillow identified format as {actual_format}. Attempting auto-correction.")
+
+            correct_extension = FORMAT_TO_EXTENSION.get(actual_format)
+
+            if correct_extension:
+                correct_filename_path = current_filepath_obj.with_suffix(correct_extension)
+                logger.info(f"Attempting rename: '{current_filename}' -> '{correct_filename_path.name}'.")
+                try:
+                    # Handle collision before renaming
+                    target_path_str = str(correct_filename_path)
+                    final_target_path = correct_filename_path # Store the final intended path obj
+
+                    if os.path.exists(target_path_str) and not current_filepath_obj.samefile(correct_filename_path):
+                         base = correct_filename_path.stem
+                         counter = 1
+                         # Find a unique name like file_fix1.jpg, file_fix2.jpg etc.
+                         while True:
+                             temp_name = f"{base}_fix{counter}{correct_extension}"
+                             temp_path = current_filepath_obj.with_name(temp_name)
+                             if not temp_path.exists():
+                                 final_target_path = temp_path
+                                 break
+                             counter += 1
+                             if counter > 10: # Safety break
+                                 raise OSError("Could not find a unique filename after 10 attempts.")
+                         logger.warning(f"Target '{correct_filename_path.name}' existed. Renaming to '{final_target_path.name}'.")
+
+                    # Perform the rename using the final determined path
+                    shutil.move(str(current_filepath_obj), str(final_target_path))
+
+                    # Update variables to reflect the corrected file
+                    current_filepath_obj = final_target_path
+                    current_filename = final_target_path.name
+                    logger.info(f"Successfully auto-corrected mislabeled WebP to '{current_filename}'.")
+
+                except Exception as rename_err:
+                    logger.error(f"Failed to auto-correct mislabeled file '{filename}' to '{correct_filename_path.name}': {rename_err}. Proceeding with original problematic file.")
+                    # Keep original current_filepath_obj and current_filename
+            else:
+                logger.warning(f"Unknown format '{actual_format}' identified by Pillow for '{current_filename}'. Cannot map to extension for auto-correction.")
+                # Proceed with the file as-is (still mislabeled .webp)
+
+        elif actual_format == 'WEBP':
+            logger.debug(f"File '{current_filename}' confirmed as WEBP by Pillow.")
+
+    current_filepath_str = str(current_filepath_obj)
             
     if not can_optimize():
-        return filepath_obj, filename, False
+        logger.debug("Optimization skipped: Pillow not available.")
+        return str(filepath_obj), filename, False
     
-    filepath = str(filepath_obj)
-    file_extension = filepath_obj.suffix.lower()
-    is_image = file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+    file_extension = current_filepath_obj.suffix.lower()
+    is_optimizable_input = file_extension in ALLOWED_INPUT_EXTENSIONS # Reuse list from optimize_image
     
-    if is_image:
-        
-        optimized_filename = f"{filepath_obj.stem}.webp"
-        optimized_filepath = os.path.join(os.path.dirname(filepath), optimized_filename)
-        
-        result_path = optimize_image(
-            filepath, 
-            destination=optimized_filepath,
+    if is_optimizable_input:        
+        intended_webp_filename = f"{current_filepath_obj.stem}.webp"
+        intended_webp_filepath = current_filepath_obj.with_name(intended_webp_filename)
+
+        final_path_obj, used_webp_destination = optimize_image(
+            current_filepath_obj,
+            destination=intended_webp_filepath,
             convert_to_webp=True
         )
-        
-        filepath = str(result_path)
-        current_filename = Path(filepath).name
-        return filepath, current_filename, True
+
+        final_filepath_str = str(final_path_obj)
+        final_filename = final_path_obj.name
+
+        optimization_occurred = used_webp_destination
+
+        return final_filepath_str, final_filename, optimization_occurred
     
-    # Return original file info if no optimization occurred
-    return filepath, filename, False
+    else:
+        # Not an image type we attempt to optimize
+        logger.debug(f"Skipping optimization for non-image or unsupported type: {current_filename}")
+        return current_filepath_str, current_filename, False
 
 def sanitize_svg_files(svg_file_list):
     """
