@@ -30,6 +30,7 @@ elif sys.platform.startswith("darwin"):
 
 from aqt import mw
 from aqt.qt import *
+from anki.utils import point_version
 
 from .menu import *
 from .hooks import *
@@ -52,6 +53,10 @@ media_manager = MediaManager(
     media_folder=""
 )
 
+if point_version() < 50:
+    logger.error("Anki version unsupported.")
+    raise RuntimeError("AnkiCollab does not run on this version. Please update to a newer version.")
+
 try:
     menu_init()
     logger.info("Menu initialized.")
@@ -65,7 +70,6 @@ except Exception as e:
     logger.error(f"Failed to initialize hooks: {e}", exc_info=True)
 
 logger.info("AnkiCollab Add-on Loaded Successfully.")
-
 
 # Force update check
 aqt.mw.pm.set_last_addon_update_check(int(time.time()) - (60 * 60 * 25))

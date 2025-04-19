@@ -332,25 +332,9 @@ def on_push_deck_action():
             showInfo(f"Could not find deck ID for '{selected_deck_name}'.", parent=dialog)
             return
 
-        #mw.progress.start(label="Publishing deck...", immediate=True)
         try:
-            uuid = handle_export(deck_id, username) # This should ideally run in a background thread but oh well
-            #mw.progress.finish()
-
-            if uuid:
-                strings_data = mw.addonManager.getConfig(__name__)
-                if strings_data is None: strings_data = {} # Initialize if None
-
-                strings_data[uuid] = {
-                    'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
-                    'deckId': deck_id,
-                    'optional_tags': {},
-                    'personal_tags': DEFAULT_PROTECTED_TAGS,
-                }
-                mw.addonManager.writeConfig(__name__, strings_data)
-                dialog.accept() # Close dialog on success
-            else:
-                showInfo("Failed to publish deck. Check logs for details.", parent=dialog)
+            handle_export(deck_id, username)            
+            dialog.accept()
         except Exception as e:
             #mw.progress.finish()
             showInfo(f"An error occurred during publishing: {e}", parent=dialog)

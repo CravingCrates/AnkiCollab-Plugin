@@ -9,6 +9,8 @@ import gzip
 from .identifier import get_user_hash
 from .var_defs import API_BASE_URL
 
+from anki.errors import NotFoundError
+
 class ReviewHistory:
     def __init__(self, deck_hash):
         self.deck_hash = deck_hash
@@ -27,9 +29,13 @@ class ReviewHistory:
         if deck_id is None or deck_id == -1 or deck_id == 0:
             return []
         deck_ids = [deck_id]
-        for subdeck in mw.col.decks.children(deck_id):
-            # Assuming the deck id is the first element in the subdeck tuple
-            deck_ids.extend(self.get_deck_and_subdecks(subdeck[1]))
+        try:
+            for subdeck in mw.col.decks.children(deck_id):
+                deck_ids.extend(self.get_deck_and_subdecks(subdeck[1]))                    
+        except NotFoundError:
+            return deck_ids
+        except Exception as e:
+            return deck_ids
         return deck_ids
 
     def get_card_data(self, last_upload_date):

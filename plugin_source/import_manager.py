@@ -35,7 +35,7 @@ from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
 from .crowd_anki.importer.import_dialog import ImportConfig
 
-from .utils import get_deck_hash_from_did
+from .utils import create_backup, get_deck_hash_from_did
 
 from .stats import ReviewHistory
 
@@ -299,13 +299,9 @@ def import_webresult(webresult, input_hash, silent=False):
             msg_box.setText("You're already up-to-date!")
             msg_box.exec()
         return
-
-    # Create a backup for the user before updating!
-    QueryOp(
-            parent=mw,
-            op=lambda _: aqt.mw.create_backup_now(),
-            success=lambda _: 1,
-        ).with_progress().run_in_background()
+    
+    # Create backup before doing anything
+    create_backup(background=True) # run in background
 
     for subscription in webresult:
         if input_hash:  # New deck
