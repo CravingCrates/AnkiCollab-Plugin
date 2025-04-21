@@ -1,6 +1,7 @@
 from aqt import mw
 from aqt.utils import askUser, showInfo
 from aqt.qt import *
+from aqt.theme import theme_manager
 from datetime import datetime, timezone
 import requests
 import webbrowser
@@ -252,42 +253,43 @@ def on_push_deck_action():
     disclaimer_checkbox = QCheckBox("I declare under penalty of perjury that the material I am sharing is\n"
                                 "entirely my own work, or I have obtained a license from the\n"
                                 "intellectual property holder(s) to share it on AnkiCollab.")
-
+    is_darkmode = theme_manager.night_mode
+    
     disclaimer_checkbox.setMaximumWidth(600)
-    disclaimer_checkbox.setStyleSheet("""
-        QCheckBox::indicator {
+    disclaimer_checkbox.setStyleSheet(f"""
+        QCheckBox::indicator {{
             width: 13px;
             height: 13px;
-        }
-        QCheckBox {
+        }}
+        QCheckBox {{
             background: transparent;
-            color: black;  /* Set text color */
-        }
-        QCheckBox:hover, QCheckBox:checked {
-            color: black;  /* Maintain text color on hover/check */
-        }
-        QCheckBox:focus {
+            color: {"white" if is_darkmode else "black"};  /* Set text color based on theme */
+        }}
+        QCheckBox:hover, QCheckBox:checked {{
+            color: {"white" if is_darkmode else "black"};
+        }}
+        QCheckBox:focus {{
             outline: none;  /* Remove focus outline */
-        }
+        }}
     """)
 
     # Terms Checkbox with Links
     terms_checkbox = QCheckBox()
-    terms_checkbox.setStyleSheet("""
-        QCheckBox::indicator {
+    terms_checkbox.setStyleSheet(f"""
+        QCheckBox::indicator {{
             width: 13px;
             height: 13px;
-        }
-        QCheckBox {
+        }}
+        QCheckBox {{
             background: transparent;
-            color: black;
-        }
-        QCheckBox:hover, QCheckBox:checked {
-            color: black;
-        }
-        QCheckBox:focus {
+            color: {"white" if is_darkmode else "black"};
+        }}
+        QCheckBox:hover, QCheckBox:checked {{
+            color: {"white" if is_darkmode else "black"};
+        }}
+        QCheckBox:focus {{
             outline: none;  /* Remove focus outline */
-        }
+        }}
     """)
     terms_link = QLabel('<a href="https://ankicollab.com/terms">Terms of Service</a>')
     terms_link.setOpenExternalLinks(True)

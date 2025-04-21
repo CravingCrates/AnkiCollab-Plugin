@@ -14,7 +14,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union, cast
 from concurrent.futures import ThreadPoolExecutor
-from asyncio import Lock as AsyncLock # Use asyncio Lock
+from asyncio import Lock as AsyncLock, get_running_loop # Use asyncio Lock
 
 import anki
 import aqt
@@ -134,17 +134,28 @@ class MediaManager:
 
         self.semaphore: Optional[asyncio.Semaphore] = None
         self._semaphore_lock = AsyncLock() # Use asyncio's Lock
+        self._semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
         max_worker = min(32, (os.cpu_count() or 1) + 2)
         self.thread_executor = ThreadPoolExecutor(max_workers=max_worker)
         mimetypes.add_type('image/webp', '.webp') # how the fuck is this not a default
 
     async def _get_semaphore(self) -> asyncio.Semaphore:
         """Lazily initializes the semaphore for the current event loop."""
-        if self.semaphore is None:
+        try:
+            current_loop = get_running_loop()
+        except RuntimeError:
+            # This should ideally not happen if called from within an async context
+            logger.error("_get_semaphore called without a running event loop!")
+            raise RuntimeError("Cannot get semaphore without a running event loop")
+
+        # Check if semaphore is None OR if it belongs to a different loop
+        if self.semaphore is None or self._semaphore_loop is not current_loop:
             async with self._semaphore_lock:
-                if self.semaphore is None:
-                    logger.debug("Initializing asyncio.Semaphore for MediaManager")
+                # Double-check after acquiring lock
+                if self.semaphore is None or self._semaphore_loop is not current_loop:
+                    logger.debug(f"Initializing asyncio.Semaphore for loop {id(current_loop)}")
                     self.semaphore = asyncio.Semaphore(5)
+                    self._semaphore_loop = current_loop # Store the loop it's associated with
         return cast(asyncio.Semaphore, self.semaphore)
 
     async def async_request(self, method, url, **kwargs):

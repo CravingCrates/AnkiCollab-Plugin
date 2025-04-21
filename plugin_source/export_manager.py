@@ -891,7 +891,7 @@ def _create_deck_op(deck_repr: Deck, username: str) -> Dict[str, Any]:
         status_code = e.response.status_code if e.response else 500
         error_text = e.response.text if e.response else str(e)
         # Re-raise a more informative error if possible
-        if status_code == 413:
+        if status_code == 413 or "Payload Too Large" in error_text:
             raise RuntimeError("Deck export failed: Deck is too large. Please reach out via Discord.") from e
         else:
             raise RuntimeError(f"Deck creation failed: {error_text} (Status: {status_code})") from e
