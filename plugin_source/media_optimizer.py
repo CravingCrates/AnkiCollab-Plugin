@@ -75,11 +75,19 @@ def is_allowed_filename(filename):
     if not filename.strip():
         return False
     
-    # Check for valid characters
-    allowed_chars = re.compile(r'^[a-zA-Z0-9\.\-_\s\(\)\+\,\%\&]*$')
+    # Check for valid characters (ASCII only)
+    # Replace \s with a literal space to avoid matching unicode whitespace like U+202F
+    allowed_chars = re.compile(r'^[a-zA-Z0-9\.\-_ \(\)\+\,\%\&]*$')
     if not allowed_chars.match(filename):
+        # Additionally check if all characters are within the basic ASCII range
+        # This catches characters not explicitly listed but still potentially problematic
+        if not all(ord(c) < 128 for c in filename):
+             return False
+        # If the regex failed but all chars are ASCII, it means an unlisted but valid ASCII char was used.
+        # This case *shouldn't* happen with the current regex, but added as a safeguard.
+        # If it *does* fail the regex but *is* all ASCII, we still reject it based on the regex.
         return False
-    
+
     # Check first character is alphanumeric
     if not filename[0].isalnum():
         return False
