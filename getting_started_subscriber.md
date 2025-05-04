@@ -10,7 +10,11 @@
     - [Check for New Content Manually](#check-for-new-content-manually)
     - [Check for New Content Automatically](#check-for-new-content-automatically)
 
-If you don't want to maintain or publish decks, you **do not** need an account. The **subscription key** 🔑 is all you need!
+If you don't want to maintain or publish decks, you'll still need an account. To create one, go to [AnkiCollab.com/Login](https://www.ankicollab.com/login) and click **Sign Up Here**.
+
+![The sign up page for AnkiCollab website.](https://i.imgur.com/z4I11Wm.png)
+
+After that, the **subscription key** 🔑 is all you need!
 
 The key will be a series of words separated by dashes. Example:
 
@@ -21,6 +25,8 @@ pip-item-hawaii-skylark-network-rugby
 ## Video Guide
 
 If you prefer to watch a video, check out our latest Video Guide that walks you through the necessary steps to subscribe to a deck!
+
+(Note: the video guide was created using a previous version of the plugin, which didn't require login.)
 [![AnkiCollab Subscriber Video](https://img.youtube.com/vi/-INzy3mF06I/0.jpg)](https://www.youtube.com/watch?v=-INzy3mF06I)
 
 ## Getting a Key
@@ -37,7 +43,7 @@ Click on the deck and the subscription key will be on the top in blue. Copy it.
 
 ## Adding the Key to Anki
 
-Open Anki.
+Open Anki and make sure you're logged in to AnkiCollab.
 
 On the toolbar, click `AnkiCollab → Edit Subscriptions`.
 
@@ -113,7 +119,7 @@ Now you just need to wait for the maintainer to approve your card!
 
 ## Downloading Updates
 
-To download any changes or new content for your subscribed deck, you can manually check for new content or automatically check for updates on startup. 
+To download any changes or new content for your subscribed deck, you can manually check for new content or automatically check for updates on startup.
 
 ### Check for New Content Manually
 
