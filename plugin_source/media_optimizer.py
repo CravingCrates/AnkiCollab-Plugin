@@ -39,11 +39,14 @@ JPEG_QUALITY = 85
 PNG_COMPRESSION = 9
 MAX_IMAGE_SIZE = 1920  # Maximum dimension for resizing
 
-ALLOWED_INPUT_EXTENSIONS = [
+OPTIMIZABLE_INPUT_EXTENSIONS = [
         '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tif', '.tiff'
+        # We do not optimize svgs, or audio files
     ]
+
+ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff', 'mp3', 'ogg']
    
-FORMAT_TO_EXTENSION = {
+FORMAT_TO_EXTENSION = { # the bugfix we use this for does not apply to audio files so we don't need to include them
     'JPEG': '.jpg', # Standardize to .jpg
     'PNG': '.png',
     'GIF': '.gif',
@@ -82,7 +85,7 @@ def is_allowed_filename(filename):
         # Additionally check if all characters are within the basic ASCII range
         # This catches characters not explicitly listed but still potentially problematic
         if not all(ord(c) < 128 for c in filename):
-             return False
+            return False
         # If the regex failed but all chars are ASCII, it means an unlisted but valid ASCII char was used.
         # This case *shouldn't* happen with the current regex, but added as a safeguard.
         # If it *does* fail the regex but *is* all ASCII, we still reject it based on the regex.
@@ -95,15 +98,8 @@ def is_allowed_filename(filename):
     # Check contains at least one alphanumeric
     if not any(c.isalnum() for c in filename):
         return False
-    
-    # Check extension
-    path = Path(filename)
-    ext = path.suffix.lower().lstrip('.')
-    if not ext:
-        return False
-    
-    allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff']
-    return ext in allowed_extensions
+        
+    return True
 
 def sanitize_filename(filename):
     """
@@ -115,18 +111,23 @@ def sanitize_filename(filename):
         
     Returns:
         str: A valid filename (either the original or sanitized version)
-    """
-    if is_allowed_filename(filename):
-        return filename
-    
+    """    
     # Extract the extension
+    if not filename:
+        return False
+    
     path = Path(filename)
     ext = path.suffix.lower().lstrip('.')
     
+    if not ext:
+        return False
+    
     # Check if extension is valid
-    allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff']
-    if ext not in allowed_extensions:
+    if ext not in ALLOWED_EXTENSIONS:
         return None  # Invalid extension, can't sanitize
+    
+    if is_allowed_filename(filename):
+        return filename
     
     # Generate a random name with the original extension
     random_id = str(uuid.uuid4())[:8]  # Use first 8 chars of UUID for readability
@@ -168,7 +169,7 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
         logger.error(f"Could not get stats for source file {filepath}: {e}")
         return filepath, False
     
-    if filepath.suffix.lower() not in ALLOWED_INPUT_EXTENSIONS:
+    if filepath.suffix.lower() not in OPTIMIZABLE_INPUT_EXTENSIONS:
         logger.debug(f"Skipping optimization for file type Pillow likely doesn't handle: {filepath.name}")
         return filepath, False
 
@@ -413,7 +414,7 @@ async def optimize_media_file(filename, filepath_obj):
         return str(filepath_obj), filename, False
     
     file_extension = current_filepath_obj.suffix.lower()
-    is_optimizable_input = file_extension in ALLOWED_INPUT_EXTENSIONS # Reuse list from optimize_image
+    is_optimizable_input = file_extension in OPTIMIZABLE_INPUT_EXTENSIONS # Reuse list from optimize_image
     
     if is_optimizable_input:        
         intended_webp_filename = f"{current_filepath_obj.stem}.webp"

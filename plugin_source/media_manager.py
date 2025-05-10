@@ -42,7 +42,7 @@ VERIFY_SSL = True
 
 ALLOWED_EXTENSIONS = {
     "image": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff"},
-    # "audio": {".mp3", ".ogg"},
+    "audio": {".mp3", ".ogg"},
 }
 ALL_ALLOWED_EXTENSIONS = set().union(*ALLOWED_EXTENSIONS.values())
 
@@ -70,14 +70,13 @@ class RateLimiter:
             oldest_call = self.calls[0]
             wait_time = self.period - (now - oldest_call)
             if wait_time > 0:
-                logger.debug(f"Rate limit reached. Waiting for {wait_time:.2f} seconds") # Changed to debug
+                logger.debug(f"Rate limit reached. Waiting for {wait_time:.2f} seconds")
                 await asyncio.sleep(wait_time)
-                # No need for recursive call here, loop will re-evaluate
         self.calls.append(now)
 # --- End RateLimiter Class ---
 
 # --- retry decorator  ---
-def retry(max_tries=3, delay=1, backoff=2, exceptions=(requests.RequestException, TimeoutError, MediaServerError)): # Added MediaServerError
+def retry(max_tries=3, delay=1, backoff=2, exceptions=(requests.RequestException, TimeoutError, MediaServerError)):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
@@ -302,6 +301,12 @@ class MediaManager:
                 elif ext == '.webp' and not header.startswith(b'RIFF'):
                     logger.warning(f"Invalid WebP signature for file: {filepath}")
                     return False
+                elif ext == '.mp3' and not header.startswith(b'ID3') and not header.startswith(b'\xFF\xFB') and not header.startswith(b'\xFF\xF3') and not header.startswith(b'\xFF\xF2'):
+                    logger.warning(f"Invalid MP3 signature for file: {filepath}")
+                    return False
+                elif ext == '.ogg' and not header.startswith(b'OggS'):
+                    logger.warning(f"Invalid OGG signature for file: {filepath}")
+                    return False
             return True
         except Exception as e:
             logger.error(f"Error validating file {filepath}: {str(e)}")
@@ -325,7 +330,8 @@ class MediaManager:
                 content_type_map = {
                     '.webp': 'image/webp', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
                     '.png': 'image/png', '.gif': 'image/gif', '.svg': 'image/svg+xml',
-                    '.bmp': 'image/bmp', '.tif': 'image/tiff', '.tiff': 'image/tiff'
+                    '.bmp': 'image/bmp', '.tif': 'image/tiff', '.tiff': 'image/tiff',
+                    '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg'
                 }
                 content_type = content_type_map.get(file_ext, mimetypes.guess_type(str(filepath))[0] or "application/octet-stream")
 
@@ -732,9 +738,10 @@ class MediaManager:
         # Process regular files
         for filename, filepath_obj, note_guid in regular_files:
             try:
+                # audio files dont get optimized         
                 opt_filepath, current_filename, was_optimized = await media_optimizer.optimize_media_file(filename, filepath_obj)
 
-                if was_optimized and filename != current_filename:
+                if filename != current_filename:
                     filename_mapping[filename] = current_filename
                     # Use the new filename for hash calculation etc.
                     filename = current_filename

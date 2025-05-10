@@ -53,9 +53,23 @@ from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timesta
 from . import main
 logger = logging.getLogger("ankicollab")
 
-IMG_NAME_IN_IMG_TAG_REGEX = re.compile(
-    r"<img.*?src=[\"'](?!http://|https://)(.+?)[\"']"
-)
+# Define and compile regexes for various media types
+SOUND_REGEX_STRINGS = [r"(?i)(\[sound:(?P<fname>[^]]+)\])"]
+HTML_MEDIA_REGEX_STRINGS = [
+    # src element quoted case for img, audio, source
+    r"(?i)(<(?:img|audio|source)\b[^>]* src=(?P<str>[\"'])(?P<fname>[^>]+?)(?P=str)[^>]*>)",
+    # unquoted case for img, audio, source
+    r"(?i)(<(?:img|audio|source)\b[^>]* src=(?!['\"])(?P<fname>[^ >]+)[^>]*?>)",
+    # data element quoted case for object
+    r"(?i)(<object\b[^>]* data=(?P<str>[\"'])(?P<fname>[^>]+?)(?P=str)[^>]*>)",
+    # unquoted case for object
+    r"(?i)(<object\b[^>]* data=(?!['\"])(?P<fname>[^ >]+)[^>]*?>)",
+]
+
+COMPILED_SOUND_REGEXES = [re.compile(r_str) for r_str in SOUND_REGEX_STRINGS]
+COMPILED_HTML_MEDIA_REGEXES = [re.compile(r_str) for r_str in HTML_MEDIA_REGEX_STRINGS]
+ALL_COMPILED_MEDIA_REGEXES = COMPILED_SOUND_REGEXES + COMPILED_HTML_MEDIA_REGEXES
+
 
 def do_nothing(count: int):
     pass
@@ -175,16 +189,20 @@ def update_media_references(filename_mapping: Dict[str, str], file_note_pairs: L
                 if not note:
                     continue
 
-                modified = False
+                modified_note = False # Flag to track if the current note was modified
                 for i, field_content in enumerate(note.fields):
-                    new_content = IMG_NAME_IN_IMG_TAG_REGEX.sub(
-                        lambda m: m.group(0).replace(old_filename, new_filename),
-                        field_content,
-                    )
-                    if new_content != field_content:
-                        note.fields[i] = new_content
-                        modified = True
-                if modified:
+                    # Iterate through all compiled media regexes
+                    for media_regex in ALL_COMPILED_MEDIA_REGEXES:
+                        # Apply the regex to the original content of the field for this pass
+                        new_content = media_regex.sub(
+                            lambda m: m.group(0).replace(old_filename, new_filename),
+                            field_content, # Use the original field_content for each regex check
+                        )
+                        if new_content != field_content:
+                            note.fields[i] = new_content
+                            modified_note = True
+                    
+                if modified_note:
                     updated_notes.append(note)
 
             except Exception as e:
