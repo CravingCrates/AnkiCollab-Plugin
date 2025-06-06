@@ -105,6 +105,7 @@ def get_maintainer_data(deckHash):
             if token_check_response.status_code == 200:
                 token_res = token_check_response.text
                 if token_res != "true":
+                    from .menu import force_logout # bypass circular import
                     if auth_manager.refresh_token():
                         token = auth_manager.get_token()
                         token_info['token'] = token
@@ -114,11 +115,9 @@ def get_maintainer_data(deckHash):
                             headers={"Content-Type": "application/json"}
                         )
                         if token_check_response.status_code != 200 or token_check_response.text != "true":
-                            from .menu import force_logout # bypass circular import
                             mw.taskman.run_on_main(force_logout) # Schedule UI action on main thread
                             token = ""
                     else:
-                        from .menu import force_logout # bypass circular import
                         mw.taskman.run_on_main(force_logout) # Schedule UI action on main thread
                         token = ""
         except Exception as e:
@@ -445,18 +444,34 @@ def _submit_deck_op(deck: Deck, did: int, rationale: int, commit_text: str, medi
             # Also pass back the success message text
             return None # Explicitly return None if no media upload needed
 
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.HTTPError as e:
         logger.error(f"Network error during deck submission: {e}")
         # Check for specific server error messages if possible
-        error_text = e.response.text if e.response else str(e)
-        if e.response and e.response.status_code == 500 and "Notetype Error: " in error_text:
-             missing_note_uuid = error_text.split("Notetype Error: ")[1]
-             # Cannot easily get notetype name here without collection access issues
-             # Raise a specific error message for the failure handler
-             logger.error(f"Notetype not allowed by maintianer. UUID: {missing_note_uuid}")
-             raise ValueError(f"Notetype Error: A notetype used in your suggestion does not exist on the cloud deck. Please only use notetypes added by the maintainer.")
+        if e.response is None:
+            raise RuntimeError("Network error: No response from server.") from e
+        
+        error_text = e.response.text
+        status_code = e.response.status_code
+        print(f"Error: {error_text}") # Debugging output
+        
+        if status_code == 500 and error_text:
+            if "Notetype Error: " in error_text:
+                missing_note_uuid = error_text.split("Notetype Error: ")[1]
+                # Cannot easily get notetype name here without collection access issues
+                # Raise a specific error message for the failure handler
+                logger.error(f"Notetype not allowed by maintainer. UUID: {missing_note_uuid}")
+                raise ValueError(f"Notetype Error: A notetype used in your suggestion does not exist on the cloud deck. Please only use notetypes added by the maintainer.")
+            elif "Subdecks are not allowed" == error_text:
+                logger.error("Subdecks are not allowed in suggestions.")
+                raise ValueError("The maintainer does not allow new subdecks in suggestions. Please only suggest changes to existing decks.")
+            elif "Deck does not exist" == error_text:
+                logger.error(f"Deck not found on server")
+                raise ValueError(f"Deck Error: The deck used in your suggestion does not exist on the cloud. Please only use decks added by the maintainer.")
+            else:
+                logger.error(f"Deck submission failed with unknown error: {error_text}")
+                raise RuntimeError(f"Submission failed: {error_text}") from e
         else:
-             raise RuntimeError(f"Deck submission failed: {error_text}") from e
+             raise RuntimeError(f"Unknown submission error!") from e
     except Exception as e:
         logger.error(f"Unexpected error during deck submission: {e}")
         logger.error(traceback.format_exc())
@@ -738,9 +753,9 @@ def suggest_subdeck(did: int):
         
         # --- Preparation (Main Thread) ---
         disambiguate_note_model_uuids(mw.col)
-        deck_repr = deck_initializer.from_collection(mw.col, deck_name) # Export whole deck
+        deck_repr = deck_initializer.from_collection(mw.col, deck_name) # Export whole deck. laggy on large decks, maybe we can move this to a background thread?
 
-        #  could be moved to an initial QueryOp if slow.
+        #  could also be moved to an initial QueryOp
         try:
             response = requests.get(f"{API_BASE_URL}/GetDeckTimestamp/" + deckHash)
             response.raise_for_status()
@@ -752,7 +767,7 @@ def suggest_subdeck(did: int):
         except Exception as e:
             logger.error(f"Error processing deck timestamps: {e}")
             aqt.utils.showWarning(f"Failed to process deck!", parent=parent_widget)
-            return # Stop here
+            return
 
         deck_initializer.trim_empty_children(deck_repr)
         personal_tags = get_personal_tags(deckHash)
