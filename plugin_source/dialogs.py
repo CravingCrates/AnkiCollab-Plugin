@@ -265,13 +265,13 @@ class DeletedNotesDialog(QDialog):
         self.adjustSize()
         
 class AskShareStatsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, deck_name, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Help Improve the Deck!")
 
         self.layout = QVBoxLayout(self)
-
-        self.message = QLabel("The deck maintainers would like to use anonymized review data to improve the deck. Would you like to share your stats?")
+        self.deck_name = deck_name
+        self.message = QLabel(f"The maintainers of '{self.deck_name}' would like to use anonymized review data to improve the deck. Would you like to share your stats?")
         self.layout.addWidget(self.message)
 
         self.checkbox = QCheckBox("Remember my decision")

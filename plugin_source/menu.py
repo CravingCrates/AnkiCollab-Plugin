@@ -22,7 +22,8 @@ links_menu = QMenu('Links', mw)
 
 # Main Actions
 edit_list_action = QAction('Edit Subscriptions', mw)
-push_deck_action = QAction('Publish new Deck', mw)
+push_deck_action = QAction('Publish New Deck', mw)
+push_all_stats_action = QAction('Submit All Review History', mw)
 pull_changes_action = QAction('Check for New Content', mw)
 login_manager_action = QAction('Login', mw) # Default text is Login
 media_import_action = QAction('Import Media from Folder', mw)
@@ -134,17 +135,14 @@ def on_edit_list():
     # table.setColumnWidth(1, int(dialog.width() * 0.45))
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows) # Select whole rows
 
-    if strings_data is not None:
-        row = 0
-        for string, data in strings_data.items():
-            if string == "settings" or string == "auth":
-                continue
-
-            item1 = QTableWidgetItem(string)
+    row = 0
+    with DeckConfigManager() as decks:
+        for deck_hash, details in decks:
+            item1 = QTableWidgetItem(deck_hash)
             item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 0, item1)
 
-            local_deck_name = get_local_deck_from_hash(string)
+            local_deck_name = get_local_deck_from_hash(deck_hash)
             item2 = QTableWidgetItem(local_deck_name if local_deck_name else "Not Set")
             item2.setFlags(item2.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 1, item2)
@@ -357,6 +355,22 @@ def on_push_deck_action():
 
     dialog.exec()
 
+def on_push_all_stats_action():
+    with DeckConfigManager() as decks:
+        for deck_hash, details in decks:
+            if details['stats_enabled']:
+                # Only upload stats if the user wants to share them
+                share_data, _ = wants_to_share_stats(details)
+                if share_data:
+                    rh = ReviewHistory(deck_hash)
+                    op = QueryOp(
+                        parent=mw,
+                        op=lambda _: rh.upload_review_history(0),
+                        success=lambda _: on_stats_upload_done(show_tooltip=True)
+                    )
+                    op.with_progress(
+                        "Uploading Review History..."
+                    ).run_in_background()
 
 def open_community_site():
     webbrowser.open('https://discord.gg/9x4DRxzqwM')
@@ -456,6 +470,7 @@ def menu_init():
     collab_menu.addSeparator()
     collab_menu.addAction(edit_list_action)
     collab_menu.addAction(push_deck_action)
+    collab_menu.addAction(push_all_stats_action)
     collab_menu.addSeparator()
     collab_menu.addMenu(settings_menu)
     collab_menu.addMenu(links_menu)
@@ -476,6 +491,7 @@ def menu_init():
 
     edit_list_action.triggered.connect(on_edit_list)
     push_deck_action.triggered.connect(on_push_deck_action)
+    push_all_stats_action.triggered.connect(on_push_all_stats_action)
     pull_changes_action.triggered.connect(async_update)
     media_import_action.triggered.connect(on_media_btn)
     website_action.triggered.connect(open_website)
