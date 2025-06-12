@@ -119,7 +119,7 @@ def update_stats() -> None:
     for deck_hash, details in decks:
         if details['stats_enabled']:
             # Only upload stats if the user wants to share them
-            (share_data, last_stats_timestamp) = wants_to_share_stats(details)
+            (share_data, last_stats_timestamp) = wants_to_share_stats(deck_hash)
             if share_data:
                 rh = ReviewHistory(deck_hash)
                 op = QueryOp(

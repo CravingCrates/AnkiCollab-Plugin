@@ -136,18 +136,18 @@ def on_edit_list():
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows) # Select whole rows
 
     row = 0
-    with DeckManager() as decks:
-        for deck_hash, details in decks:
-            item1 = QTableWidgetItem(deck_hash)
-            item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(row, 0, item1)
+    decks = DeckManager()
+    for deck_hash, details in decks:
+        item1 = QTableWidgetItem(deck_hash)
+        item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        table.setItem(row, 0, item1)
 
-            local_deck_name = get_local_deck_from_hash(deck_hash)
-            item2 = QTableWidgetItem(local_deck_name if local_deck_name else "Not Set")
-            item2.setFlags(item2.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(row, 1, item2)
+        local_deck_name = get_local_deck_from_hash(deck_hash)
+        item2 = QTableWidgetItem(local_deck_name if local_deck_name else "Not Set")
+        item2.setFlags(item2.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        table.setItem(row, 1, item2)
 
-            row += 1
+        row += 1
 
     layout.addWidget(table)
 
@@ -356,21 +356,22 @@ def on_push_deck_action():
     dialog.exec()
 
 def on_push_all_stats_action():
-    with DeckManager() as decks:
-        for deck_hash, details in decks:
-            if details['stats_enabled']:
-                # Only upload stats if the user wants to share them
-                share_data, _ = wants_to_share_stats(details)
-                if share_data:
-                    rh = ReviewHistory(deck_hash)
-                    op = QueryOp(
-                        parent=mw,
-                        op=lambda _: rh.upload_review_history(0),
-                        success=on_stats_upload_done
-                    )
-                    op.with_progress(
-                        "Uploading Review History..."
-                    ).run_in_background()
+    decks = DeckManager()
+
+    for deck_hash, details in decks:
+        if details['stats_enabled']:
+            # Only upload stats if the user wants to share them
+            share_data, _ = wants_to_share_stats(details)
+            if share_data:
+                rh = ReviewHistory(deck_hash)
+                op = QueryOp(
+                    parent=mw,
+                    op=lambda _: rh.upload_review_history(0),
+                    success=on_stats_upload_done
+                )
+                op.with_progress(
+                    "Uploading Review History..."
+                ).run_in_background()
 
 def open_community_site():
     webbrowser.open('https://discord.gg/9x4DRxzqwM')
