@@ -1,5 +1,5 @@
+from __future__ import annotations
 import datetime
-import inspect
 from datetime import datetime
 import aqt
 import aqt.utils
@@ -8,10 +8,12 @@ from aqt.operations import QueryOp
 from anki.collection import Collection
 from aqt import mw
 import aqt.utils
-from typing import Optional
+from contextlib import AbstractContextManager
+from typing import Dict, Iterator, Optional, Tuple
+
 
 def get_timestamp(given_deck_hash):
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
         if details is None:
@@ -24,7 +26,7 @@ def get_timestamp(given_deck_hash):
 
 
 def get_hash_from_local_id(deck_id) -> Optional[str]:
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         for deck_hash, details in decks:
             if details.get("deckId") == deck_id:
                 return deck_hash
@@ -47,7 +49,7 @@ def get_deck_hash_from_did(did):
 
 
 def get_did_from_hash(given_deck_hash):
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
         return details and details.get("deckId")
@@ -61,8 +63,10 @@ def get_local_deck_from_hash(input_hash):
 
     return mw.col.decks.name(deck_id)
 
+
 def get_local_deck_from_id(deck_id):
     return mw.col.decks.name(deck_id)
+
 
 def create_backup(background: bool = False):
     print("Creating backup...")
@@ -86,16 +90,13 @@ def create_backup(background: bool = False):
     else:
         do_backup(aqt.mw.col)
 
-from contextlib import AbstractContextManager
-from typing import Dict, Iterator, Optional, Tuple
 
-class DeckConfigManager(AbstractContextManager):
+class DeckManager(AbstractContextManager):
     def __init__(self):
         self._raw_data: Dict[str, Dict] = {}
         self._filtered_items: Dict[str, Dict] = {}
 
-
-    def __enter__(self) -> "DeckConfigManager":
+    def __enter__(self) -> DeckManager:
         self._raw_data = mw.addonManager.getConfig(__name__) or {}
 
         self._filtered_items = {
@@ -114,7 +115,6 @@ class DeckConfigManager(AbstractContextManager):
 
     def __iter__(self) -> Iterator[Tuple[str, Dict]]:
         return iter(self._filtered_items.items())
-
 
 
 def get_deck_and_subdecks(deck_id):

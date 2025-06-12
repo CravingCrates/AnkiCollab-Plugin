@@ -18,7 +18,7 @@ from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, As
 from .crowd_anki.representation import deck_initializer
 from .crowd_anki.importer.import_dialog import ImportConfig
 
-from .utils import create_backup, get_local_deck_from_id, DeckConfigManager
+from .utils import create_backup, get_local_deck_from_id, DeckManager
 
 from .stats import ReviewHistory
 
@@ -39,14 +39,15 @@ def on_stats_upload_done(data) -> None:
 
 
 def update_optional_tag_config(given_deck_hash, optional_tags):
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
+        print(details)
         if details:
             details["optional_tags"] = optional_tags
 
 
 def get_optional_tags(given_deck_hash) -> dict:
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
         if details is None:
             return {}
@@ -61,7 +62,7 @@ def check_optional_tag_changes(deck_hash, optional_tags):
 
 
 def update_timestamp(given_deck_hash):
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
         if details:
             details["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -111,7 +112,7 @@ def delete_notes(nids):
 
 
 def update_stats() -> None:
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         for deck_hash, details in decks:
             if details['stats_enabled']:
                 # Only upload stats if the user wants to share them
@@ -270,6 +271,7 @@ def import_webresult(webresult, input_hash, silent=False):
             msg_box.setWindowTitle("AnkiCollab")
             msg_box.setText("You're already up-to-date!")
             msg_box.exec()
+        print("before")
 
         update_stats()
         return
@@ -277,7 +279,7 @@ def import_webresult(webresult, input_hash, silent=False):
     # Create backup before doing anything
     create_backup(background=True)  # run in background
 
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         for subscription in webresult:
             if input_hash:  # New deck
                 deck_name = install_update(subscription)
@@ -320,7 +322,7 @@ def get_deck_movement_status():
 
 
 def get_home_deck(given_deck_hash):
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
         if details and details["deckId"] != 0:
@@ -398,6 +400,7 @@ def handle_pull(input_hash, silent=False):
         if response.status_code == 200:
             compressed_data = base64.b64decode(response.content)
             decompressed_data = gzip.decompress(compressed_data)
+            print(decompressed_data)
             webresult = json.loads(decompressed_data.decode("utf-8"))
             aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash, silent))
         else:

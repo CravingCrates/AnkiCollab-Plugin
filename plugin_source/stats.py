@@ -1,8 +1,7 @@
 import base64
 import json
-import pprint
 
-from aqt import QApplication, mw
+from aqt import mw
 from collections import defaultdict
 import aqt
 import requests
@@ -96,7 +95,6 @@ class ReviewHistory:
             'deck_hash': self.deck_hash,
             'review_history': review_history
         }
-        pprint.pprint(json.dumps(data))
         compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
         based_data = base64.b64encode(compressed_data)
         response = requests.post(f"{API_BASE_URL}/UploadDeckStats",
