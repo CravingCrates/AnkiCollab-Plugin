@@ -16,13 +16,12 @@ def get_timestamp(given_deck_hash):
     with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
-        if details is None:
-            return None
+        if details is not None:
 
-        date_string = details["timestamp"]
-        datetime_obj = datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
-        unix_timestamp = datetime_obj.timestamp()
-        return unix_timestamp
+            date_string = details["timestamp"]
+            datetime_obj = datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
+            unix_timestamp = datetime_obj.timestamp()
+            return unix_timestamp
 
 
 def get_hash_from_local_id(deck_id) -> Optional[str]:
@@ -30,8 +29,6 @@ def get_hash_from_local_id(deck_id) -> Optional[str]:
         for deck_hash, details in decks:
             if details.get("deckId") == deck_id:
                 return deck_hash
-
-    return None
 
 
 def get_deck_hash_from_did(did):
@@ -93,10 +90,6 @@ def create_backup(background: bool = False):
 
 class DeckManager(AbstractContextManager):
     def __init__(self):
-        self._raw_data: Dict[str, Dict] = {}
-        self._filtered_items: Dict[str, Dict] = {}
-
-    def __enter__(self) -> DeckManager:
         self._raw_data = mw.addonManager.getConfig(__name__) or {}
 
         self._filtered_items = {
@@ -105,9 +98,13 @@ class DeckManager(AbstractContextManager):
             if deck_hash not in ['settings', 'auth']
         }
 
+    def __enter__(self) -> DeckManager:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.save()
+
+    def save(self):
         mw.addonManager.writeConfig(__name__, self._raw_data)
 
     def get_by_hash(self, deck_hash: str) -> Optional[Dict]:

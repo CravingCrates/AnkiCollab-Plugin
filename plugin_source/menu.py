@@ -8,7 +8,7 @@ import webbrowser
 
 from .identifier import subscribe_to_deck, unsubscribe_from_deck
 from .var_defs import DEFAULT_PROTECTED_TAGS
-from .utils import get_local_deck_from_hash
+from .utils import get_local_deck_from_hash, DeckManager
 from .import_manager import *
 from .export_manager import handle_export
 from .media_import import on_media_btn
@@ -136,7 +136,7 @@ def on_edit_list():
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows) # Select whole rows
 
     row = 0
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         for deck_hash, details in decks:
             item1 = QTableWidgetItem(deck_hash)
             item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -356,7 +356,7 @@ def on_push_deck_action():
     dialog.exec()
 
 def on_push_all_stats_action():
-    with DeckConfigManager() as decks:
+    with DeckManager() as decks:
         for deck_hash, details in decks:
             if details['stats_enabled']:
                 # Only upload stats if the user wants to share them

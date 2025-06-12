@@ -41,18 +41,19 @@ def on_stats_upload_done(data) -> None:
 def update_optional_tag_config(given_deck_hash, optional_tags):
     with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
-        print(details)
+
         if details:
             details["optional_tags"] = optional_tags
 
 
 def get_optional_tags(given_deck_hash) -> dict:
-    with DeckManager() as decks:
-        details = decks.get_by_hash(given_deck_hash)
-        if details is None:
-            return {}
+    decks = DeckManager()
+    details = decks.get_by_hash(given_deck_hash)
 
-        return details.get("optional_tags", {})
+    if details is None:
+        return {}
+
+    return details.get("optional_tags", {})
 
 
 def check_optional_tag_changes(deck_hash, optional_tags):
@@ -64,6 +65,7 @@ def check_optional_tag_changes(deck_hash, optional_tags):
 def update_timestamp(given_deck_hash):
     with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
+
         if details:
             details["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -112,44 +114,54 @@ def delete_notes(nids):
 
 
 def update_stats() -> None:
+    decks = DeckManager()
+
+    for deck_hash, details in decks:
+        if details['stats_enabled']:
+            # Only upload stats if the user wants to share them
+            (share_data, last_stats_timestamp) = wants_to_share_stats(details)
+            if share_data:
+                rh = ReviewHistory(deck_hash)
+                op = QueryOp(
+                    parent=mw,
+                    op=lambda _: rh.upload_review_history(last_stats_timestamp),
+                    success=on_stats_upload_done
+                )
+                op.with_progress(
+                    "Uploading Review History..."
+                ).run_in_background()
+                update_stats_timestamp(deck_hash)
+
+
+def update_stats_timestamp(deck_hash: str) -> None:
     with DeckManager() as decks:
-        for deck_hash, details in decks:
-            if details['stats_enabled']:
-                # Only upload stats if the user wants to share them
-                (share_data, last_stats_timestamp) = wants_to_share_stats(details)
-                if share_data:
-                    rh = ReviewHistory(deck_hash)
-                    op = QueryOp(
-                        parent=mw,
-                        op=lambda _: rh.upload_review_history(last_stats_timestamp),
-                        success=on_stats_upload_done
-                    )
-                    op.with_progress(
-                        "Uploading Review History..."
-                    ).run_in_background()
-                    update_stats_timestamp(details)
+        details = decks.get_by_hash(deck_hash)
+
+        if details:
+            details["last_stats_timestamp"] = int(datetime.now(timezone.utc).timestamp())
 
 
-def update_stats_timestamp(details) -> None:
-    details["last_stats_timestamp"] = int(datetime.now(timezone.utc).timestamp())
+def wants_to_share_stats(deck_hash) -> (bool, int):
+    with DeckManager() as decks:
+        details = decks.get_by_hash(deck_hash)
+        if details is None:
+            raise Exception
 
+        last_stats_timestamp = details.get("last_stats_timestamp", 0)
+        stats_enabled = details.get("share_stats")
 
-def wants_to_share_stats(details) -> (bool, int):
-    last_stats_timestamp = details.get("last_stats_timestamp", 0)
-    stats_enabled = details.get("share_stats")
+        if stats_enabled is None:
+            deck = get_local_deck_from_id(details["deckId"])
+            dialog = AskShareStatsDialog(deck)
+            choice = dialog.exec()
+            if choice == QDialog.DialogCode.Accepted:
+                stats_enabled = True
+            else:
+                stats_enabled = False
+            if dialog.isChecked():
+                details["share_stats"] = stats_enabled
 
-    if stats_enabled is None:
-        deck = get_local_deck_from_id(details["deckId"])
-        dialog = AskShareStatsDialog(deck)
-        choice = dialog.exec()
-        if choice == QDialog.DialogCode.Accepted:
-            stats_enabled = True
-        else:
-            stats_enabled = False
-        if dialog.isChecked():
-            details["share_stats"] = stats_enabled
-
-    return stats_enabled, last_stats_timestamp
+        return stats_enabled, last_stats_timestamp
 
 
 def install_update(subscription):
@@ -271,7 +283,6 @@ def import_webresult(webresult, input_hash, silent=False):
             msg_box.setWindowTitle("AnkiCollab")
             msg_box.setText("You're already up-to-date!")
             msg_box.exec()
-        print("before")
 
         update_stats()
         return
@@ -279,28 +290,29 @@ def import_webresult(webresult, input_hash, silent=False):
     # Create backup before doing anything
     create_backup(background=True)  # run in background
 
-    with DeckManager() as decks:
-        for subscription in webresult:
-            if input_hash:  # New deck
-                deck_name = install_update(subscription)
-                for deck_hash, details in decks:
-                    if (
-                            deck_hash == input_hash and details["deckId"] == 0
-                    ):  # should only be the case once when they add a new subscription and never ambiguous
-                        details["deckId"] = aqt.mw.col.decks.id(deck_name)
-                        # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
-                        details["timestamp"] = (
-                                datetime.now(timezone.utc) - timedelta(days=1)
-                        ).strftime("%Y-%m-%d %H:%M:%S")
-                        details["stats_enabled"] = subscription["stats_enabled"]
+    for subscription in webresult:
+        if input_hash:  # New deck
+            deck_name = install_update(subscription)
+
+            with DeckManager() as decks:
+                details = decks.get_by_hash(input_hash)
+
+                if details["deckId"] == 0:  # should only be the case once when they add a new subscription and never ambiguous
+                    details["deckId"] = aqt.mw.col.decks.id(deck_name)
+                    # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
+                    details["timestamp"] = (
+                            datetime.now(timezone.utc) - timedelta(days=1)
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                    details["stats_enabled"] = subscription["stats_enabled"]
+
         else:  # Update deck
             show_changelog_popup(subscription)
 
     if not input_hash:  # Only ask for a rating if they are updating a deck and not adding a new deck to avoid spam popups
         ask_for_rating()
-        info = "AnkiCollab: Updated deck(s) successfully!"
+        _info = "AnkiCollab: Updated deck(s) successfully!"
         aqt.mw.taskman.run_on_main(
-            lambda: aqt.utils.tooltip(info, parent=mw)
+            lambda: aqt.utils.tooltip(_info, parent=mw)
         )
     update_stats()
 
@@ -322,11 +334,11 @@ def get_deck_movement_status():
 
 
 def get_home_deck(given_deck_hash):
-    with DeckManager() as decks:
-        details = decks.get_by_hash(given_deck_hash)
+    decks = DeckManager()
+    details = decks.get_by_hash(given_deck_hash)
 
-        if details and details["deckId"] != 0:
-            return mw.col.decks.name_if_exists(details["deckId"])
+    if details and details["deckId"] != 0:
+        return mw.col.decks.name_if_exists(details["deckId"])
 
 
 def remove_nonexistent_decks():
@@ -400,7 +412,6 @@ def handle_pull(input_hash, silent=False):
         if response.status_code == 200:
             compressed_data = base64.b64decode(response.content)
             decompressed_data = gzip.decompress(compressed_data)
-            print(decompressed_data)
             webresult = json.loads(decompressed_data.decode("utf-8"))
             aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash, silent))
         else:
