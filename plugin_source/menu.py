@@ -366,7 +366,7 @@ def on_push_all_stats_action():
                     op = QueryOp(
                         parent=mw,
                         op=lambda _: rh.upload_review_history(0),
-                        success=lambda _: on_stats_upload_done(show_tooltip=True)
+                        success=on_stats_upload_done
                     )
                     op.with_progress(
                         "Uploading Review History..."

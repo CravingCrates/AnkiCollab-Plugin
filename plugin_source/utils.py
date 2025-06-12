@@ -1,4 +1,5 @@
 import datetime
+import inspect
 from datetime import datetime
 import aqt
 import aqt.utils
@@ -93,6 +94,7 @@ class DeckConfigManager(AbstractContextManager):
         self._raw_data: Dict[str, Dict] = {}
         self._filtered_items: Dict[str, Dict] = {}
 
+
     def __enter__(self) -> "DeckConfigManager":
         self._raw_data = mw.addonManager.getConfig(__name__) or {}
 
@@ -105,7 +107,6 @@ class DeckConfigManager(AbstractContextManager):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        print('saved')
         mw.addonManager.writeConfig(__name__, self._raw_data)
 
     def get_by_hash(self, deck_hash: str) -> Optional[Dict]:

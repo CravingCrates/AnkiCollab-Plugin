@@ -34,11 +34,8 @@ def do_nothing(count: int):
     pass
 
 
-def on_stats_upload_done(show_tooltip: bool = False) -> None:
+def on_stats_upload_done(data) -> None:
     mw.progress.finish()
-
-    if show_tooltip:
-        aqt.utils.tooltip("Review History upload done. Thanks for sharing!", parent=mw.focusWidget())
 
 
 def update_optional_tag_config(given_deck_hash, optional_tags):
@@ -264,7 +261,6 @@ def ask_for_rating():
 
 
 def import_webresult(webresult, input_hash, silent=False):
-    print(webresult)
     # if webresult is empty, tell user that there are no updates
     if not webresult:
         if silent:
@@ -281,13 +277,13 @@ def import_webresult(webresult, input_hash, silent=False):
     # Create backup before doing anything
     create_backup(background=True)  # run in background
 
-    for subscription in webresult:
-        if input_hash:  # New deck
-            deck_name = install_update(subscription)
-            with DeckConfigManager() as decks:
+    with DeckConfigManager() as decks:
+        for subscription in webresult:
+            if input_hash:  # New deck
+                deck_name = install_update(subscription)
                 for deck_hash, details in decks:
                     if (
-                            hash == input_hash and details["deckId"] == 0
+                            deck_hash == input_hash and details["deckId"] == 0
                     ):  # should only be the case once when they add a new subscription and never ambiguous
                         details["deckId"] = aqt.mw.col.decks.id(deck_name)
                         # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
@@ -304,7 +300,6 @@ def import_webresult(webresult, input_hash, silent=False):
         aqt.mw.taskman.run_on_main(
             lambda: aqt.utils.tooltip(info, parent=mw)
         )
-
     update_stats()
 
 

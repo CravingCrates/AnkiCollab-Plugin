@@ -49,6 +49,7 @@ class ReviewHistory:
             notes_by_deck_and_note_guid[deck_name][note_guid]['lapses'].append(lapses)
             notes_by_deck_and_note_guid[deck_name][note_guid]['reps'].append(reps)
 
+
         for deck_name, notes in notes_by_deck_and_note_guid.items():
             note_guids_to_remove = []
 
@@ -66,7 +67,7 @@ class ReviewHistory:
 
         return notes_by_deck_and_note_guid
 
-    def calc_retention(self, card_id):
+    def calc_retention(self, card_id) -> int:
         flunked, passed = mw.col.db.first("""
         select
         sum(case when ease = 1 and type == 1 then 1 else 0 end), /* flunked */
@@ -74,14 +75,21 @@ class ReviewHistory:
         from revlog where cid = ?""", card_id)
         flunked = flunked or 0
         passed = passed or 0
-        try:
-            temp = int(passed / float(passed + flunked) * 100)
-        except ZeroDivisionError:
-            temp = -1
-        return temp
 
-    def upload_review_history(self, last_upload_date):
+        total = passed + flunked
+
+        if total == 0:
+            return -1
+
+        return int(passed / total) * 100
+
+    def upload_review_history(self, last_upload_date: int) -> None:
         review_history = self.get_card_data(last_upload_date)
+
+        if len(review_history) == 0:
+            aqt.mw.taskman.run_on_main(lambda:aqt.utils.tooltip('No review history to upload', parent=mw))
+            return
+
         user_hash = get_user_hash()
         data = {
             'user_hash': user_hash,
@@ -95,8 +103,7 @@ class ReviewHistory:
                                  data=based_data,
                                  headers={'Content-Type': 'application/json'},
                                  timeout=30)
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(response.text, parent=QApplication.focusWidget()))
-        return
+        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(response.text, parent=mw))
 
     def dump_review_history(self):
         review_history = self.get_card_data(0)
