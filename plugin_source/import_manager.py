@@ -20,7 +20,7 @@ from .crowd_anki.importer.import_dialog import ImportConfig
 
 from .utils import create_backup, get_local_deck_from_id, DeckManager
 
-from .stats import ReviewHistory
+from .stats import ReviewHistory, on_stats_upload_done, update_stats_timestamp
 
 import base64
 import gzip
@@ -32,11 +32,6 @@ logger = logging.getLogger("ankicollab")
 
 def do_nothing(count: int):
     pass
-
-
-def on_stats_upload_done(data) -> None:
-    mw.progress.finish()
-
 
 def update_optional_tag_config(given_deck_hash, optional_tags):
     with DeckManager() as decks:
@@ -69,6 +64,14 @@ def update_timestamp(given_deck_hash):
         if details:
             details["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
+def update_deck_stats_enabled(given_deck_hash, stats_enabled):
+    with DeckManager() as decks:
+        details = decks.get_by_hash(given_deck_hash)
+
+        if details:
+            details["stats_enabled"] = stats_enabled
+            if not stats_enabled:
+                details["last_stats_timestamp"] = 0  # Reset last stats timestamp if stats are disabled
 
 def get_noteids_from_uuids(guids):
     noteids = []
@@ -117,7 +120,7 @@ def update_stats() -> None:
     decks = DeckManager()
 
     for deck_hash, details in decks:
-        if details['stats_enabled']:
+        if details.get("stats_enabled", False):
             # Only upload stats if the user wants to share them
             (share_data, last_stats_timestamp) = wants_to_share_stats(deck_hash)
             if share_data:
@@ -131,14 +134,6 @@ def update_stats() -> None:
                     "Uploading Review History..."
                 ).run_in_background()
                 update_stats_timestamp(deck_hash)
-
-
-def update_stats_timestamp(deck_hash: str) -> None:
-    with DeckManager() as decks:
-        details = decks.get_by_hash(deck_hash)
-
-        if details:
-            details["last_stats_timestamp"] = int(datetime.now(timezone.utc).timestamp())
 
 
 def wants_to_share_stats(deck_hash) -> (bool, int):
@@ -160,7 +155,7 @@ def wants_to_share_stats(deck_hash) -> (bool, int):
                 stats_enabled = False
             if dialog.isChecked():
                 details["share_stats"] = stats_enabled
-
+                
         return stats_enabled, last_stats_timestamp
 
 
@@ -239,6 +234,8 @@ def show_changelog_popup(subscription):
     changelog = subscription["changelog"]
     deck_hash = subscription["deck_hash"]
 
+    update_deck_stats_enabled(deck_hash, subscription["stats_enabled"])
+    
     if changelog:
         dialog = ChangelogDialog(changelog, deck_hash)
         choice = dialog.exec()

@@ -1,4 +1,5 @@
 import base64
+from datetime import datetime, timedelta, timezone
 import json
 
 from aqt import mw
@@ -7,7 +8,7 @@ import aqt
 import requests
 import gzip
 
-from .utils import get_did_from_hash, get_deck_and_subdecks
+from .utils import DeckManager, get_did_from_hash, get_deck_and_subdecks
 from .identifier import get_user_hash
 from .var_defs import API_BASE_URL
 
@@ -83,10 +84,11 @@ class ReviewHistory:
         return int(passed / total) * 100
 
     def upload_review_history(self, last_upload_date: int) -> None:
+        
         review_history = self.get_card_data(last_upload_date)
 
         if len(review_history) == 0:
-            aqt.mw.taskman.run_on_main(lambda:aqt.utils.tooltip('No review history to upload', parent=mw))
+            #aqt.mw.taskman.run_on_main(lambda:aqt.utils.tooltip('No review history to upload', parent=mw))
             return
 
         user_hash = get_user_hash()
@@ -97,11 +99,12 @@ class ReviewHistory:
         }
         compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
         based_data = base64.b64encode(compressed_data)
-        response = requests.post(f"{API_BASE_URL}/UploadDeckStats",
+        _ = requests.post(f"{API_BASE_URL}/UploadDeckStats",
                                  data=based_data,
                                  headers={'Content-Type': 'application/json'},
                                  timeout=30)
-        aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(response.text, parent=mw))
+        #aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(response.text, parent=mw))
+        return
 
     def dump_review_history(self):
         review_history = self.get_card_data(0)
@@ -119,3 +122,13 @@ class ReviewHistory:
             average_retention_rate = int(sum(retention_rates) / len(retention_rates))
             print(f'{deck_name}: {average_retention_rate}%')
         return data
+
+def update_stats_timestamp(deck_hash: str) -> None:
+    with DeckManager() as decks:
+        details = decks.get_by_hash(deck_hash)
+
+        if details:
+            details["last_stats_timestamp"] = int(datetime.now(timezone.utc).timestamp())
+
+def on_stats_upload_done(done) -> None:
+    mw.progress.finish()

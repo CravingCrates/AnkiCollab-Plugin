@@ -359,9 +359,9 @@ def on_push_all_stats_action():
     decks = DeckManager()
 
     for deck_hash, details in decks:
-        if details['stats_enabled']:
+        if details.get("stats_enabled", False):
             # Only upload stats if the user wants to share them
-            share_data, _ = wants_to_share_stats(details)
+            share_data, _ = wants_to_share_stats(deck_hash)
             if share_data:
                 rh = ReviewHistory(deck_hash)
                 op = QueryOp(
@@ -372,6 +372,7 @@ def on_push_all_stats_action():
                 op.with_progress(
                     "Uploading Review History..."
                 ).run_in_background()
+                update_stats_timestamp(deck_hash)
 
 def open_community_site():
     webbrowser.open('https://discord.gg/9x4DRxzqwM')
