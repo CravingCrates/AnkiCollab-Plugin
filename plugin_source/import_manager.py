@@ -1,16 +1,20 @@
 from collections import defaultdict
 import json
+from typing import List, Sequence
 
+import msgspec
 import requests
 from datetime import datetime, timedelta, timezone
 
 import aqt
 import aqt.utils
+from anki.notes import NoteId
 from aqt.operations import QueryOp
 
 from aqt.qt import *
 from aqt import mw
 
+from .models import UpdateInfoResponse
 from .var_defs import API_BASE_URL
 
 from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
@@ -28,12 +32,10 @@ import gzip
 import logging
 
 logger = logging.getLogger("ankicollab")
+update_info_decoder = msgspec.json.Decoder(type=List[UpdateInfoResponse])
 
 
-def do_nothing(count: int):
-    pass
-
-def update_optional_tag_config(given_deck_hash, optional_tags):
+def update_optional_tag_config(given_deck_hash: str, optional_tags):
     with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
@@ -41,7 +43,7 @@ def update_optional_tag_config(given_deck_hash, optional_tags):
             details["optional_tags"] = optional_tags
 
 
-def get_optional_tags(given_deck_hash) -> dict:
+def get_optional_tags(given_deck_hash: str) -> dict:
     decks = DeckManager()
     details = decks.get_by_hash(given_deck_hash)
 
@@ -51,13 +53,13 @@ def get_optional_tags(given_deck_hash) -> dict:
     return details.get("optional_tags", {})
 
 
-def check_optional_tag_changes(deck_hash, optional_tags):
+def check_optional_tag_changes(deck_hash: str, optional_tags: List[str]) -> bool:
     sorted_old = sorted(get_optional_tags(deck_hash).keys())
     sorted_new = sorted(optional_tags)
     return sorted_old != sorted_new
 
 
-def update_timestamp(given_deck_hash):
+def update_timestamp(given_deck_hash: str) -> None:
     with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
@@ -73,7 +75,7 @@ def update_deck_stats_enabled(given_deck_hash, stats_enabled):
             if not stats_enabled:
                 details["last_stats_timestamp"] = 0  # Reset last stats timestamp if stats are disabled
 
-def get_noteids_from_uuids(guids):
+def get_noteids_from_uuids(guids) -> Sequence[NoteId]:
     noteids = []
     for guid in guids:
         query = "select id from notes where guid=?"
@@ -103,7 +105,7 @@ def open_browser_with_nids(nids):
     browser.onSearchActivated()
 
 
-def delete_notes(nids):
+def delete_notes(nids: Sequence[NoteId]):
     if not nids:
         return
     aqt.mw.col.remove_notes(nids)
@@ -136,7 +138,7 @@ def update_stats() -> None:
                 update_stats_timestamp(deck_hash)
 
 
-def wants_to_share_stats(deck_hash) -> (bool, int):
+def wants_to_share_stats(deck_hash: str) -> (bool, int):
     with DeckManager() as decks:
         details = decks.get_by_hash(deck_hash)
         if details is None:
@@ -159,13 +161,14 @@ def wants_to_share_stats(deck_hash) -> (bool, int):
         return stats_enabled, last_stats_timestamp
 
 
-def install_update(subscription):
-    deck_hash = subscription["deck_hash"]
+def install_update(subscription: UpdateInfoResponse):
+    deck_hash = subscription.deck_hash
+
     if check_optional_tag_changes(
-            deck_hash, subscription["optional_tags"]
+            deck_hash, subscription.optional_tags
     ):
         dialog = OptionalTagsDialog(
-            get_optional_tags(deck_hash), subscription["optional_tags"]
+            get_optional_tags(deck_hash), subscription.optional_tags
         )
         dialog.exec()
         update_optional_tag_config(
@@ -173,11 +176,11 @@ def install_update(subscription):
         )
     subscribed_tags = get_optional_tags(deck_hash)
 
-    deck = deck_initializer.from_json(subscription["deck"])
+    deck = deck_initializer.from_json(subscription.deck)
     config = prep_config(
-        subscription["protected_fields"],
+        subscription.protected_fields,
         [tag for tag, value in subscribed_tags.items() if value],
-        True if subscription["optional_tags"] else False,
+        True if subscription.optional_tags else False,
         deck_hash
     )
     config.home_deck = get_home_deck(deck_hash)
@@ -188,9 +191,9 @@ def install_update(subscription):
     deck.save_to_collection(aqt.mw.col, map_cache, note_type_data, import_config=config)
 
     # Handle deleted Notes
-    deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
+    deleted_nids = get_noteids_from_uuids(subscription.deleted_notes)
     if deleted_nids:
-        del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash)
+        del_notes_dialog = DeletedNotesDialog(deleted_nids, subscription.deck_hash)
         del_notes_choice = del_notes_dialog.exec()
 
         if del_notes_choice == QDialog.DialogCode.Accepted:
@@ -203,10 +206,6 @@ def install_update(subscription):
 
 def abort_update(deck_hash):
     update_timestamp(deck_hash)
-
-
-def postpone_update():
-    pass
 
 
 def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
@@ -230,21 +229,18 @@ def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
     return config
 
 
-def show_changelog_popup(subscription):
-    changelog = subscription["changelog"]
-    deck_hash = subscription["deck_hash"]
+def show_changelog_popup(subscription: UpdateInfoResponse) -> None:
+    deck_hash = subscription.deck_hash
 
-    update_deck_stats_enabled(deck_hash, subscription["stats_enabled"])
-    
-    if changelog:
-        dialog = ChangelogDialog(changelog, deck_hash)
+    if subscription.changelog:
+        dialog = ChangelogDialog(subscription.changelog, deck_hash)
         choice = dialog.exec()
 
         if choice == QDialog.DialogCode.Accepted:
             install_update(subscription)
             update_timestamp(deck_hash)
         elif choice == QDialog.DialogCode.Rejected:
-            postpone_update()
+            pass
         else:
             abort_update(deck_hash)
     else:  # Skip changelog window if there is no message for the user
@@ -270,7 +266,7 @@ def ask_for_rating():
             mw.addonManager.writeConfig(__name__, strings_data)
 
 
-def import_webresult(webresult, input_hash, silent=False):
+def import_webresult(webresult: List[UpdateInfoResponse], input_hash, silent=False):
     # if webresult is empty, tell user that there are no updates
     if not webresult:
         if silent:
@@ -300,7 +296,7 @@ def import_webresult(webresult, input_hash, silent=False):
                     details["timestamp"] = (
                             datetime.now(timezone.utc) - timedelta(days=1)
                     ).strftime("%Y-%m-%d %H:%M:%S")
-                    details["stats_enabled"] = subscription["stats_enabled"]
+                    details["stats_enabled"] = subscription.stats_enabled
 
         else:  # Update deck
             show_changelog_popup(subscription)
@@ -409,7 +405,8 @@ def handle_pull(input_hash, silent=False):
         if response.status_code == 200:
             compressed_data = base64.b64decode(response.content)
             decompressed_data = gzip.decompress(compressed_data)
-            webresult = json.loads(decompressed_data.decode("utf-8"))
+
+            webresult = update_info_decoder.decode(decompressed_data.decode("utf-8"))
             aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash, silent))
         else:
             infot = "A Server Error occurred. Please notify us!"

@@ -1,5 +1,7 @@
 
 import webbrowser
+from typing import Dict
+
 import aqt
 import aqt.utils
 import anki
@@ -97,7 +99,7 @@ class OptionalTagsDialog(QDialog):
         self.setLayout(layout)
         self.show()
 
-    def get_selected_tags(self):
+    def get_selected_tags(self) -> Dict[str, bool]:
         result = {}
         for item in self.checkboxes:
             result[item] = self.checkboxes[item].isChecked()
