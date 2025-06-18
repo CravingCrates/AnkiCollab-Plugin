@@ -87,10 +87,6 @@ class ReviewHistory:
         
         review_history = self.get_card_data(last_upload_date)
 
-        if len(review_history) == 0:
-            #aqt.mw.taskman.run_on_main(lambda:aqt.utils.tooltip('No review history to upload', parent=mw))
-            return
-
         user_hash = get_user_hash()
         data = {
             'user_hash': user_hash,
@@ -99,12 +95,11 @@ class ReviewHistory:
         }
         compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
         based_data = base64.b64encode(compressed_data)
-        _ = requests.post(f"{API_BASE_URL}/UploadDeckStats",
+        requests.post(f"{API_BASE_URL}/UploadDeckStats",
                                  data=based_data,
                                  headers={'Content-Type': 'application/json'},
                                  timeout=30)
-        #aqt.mw.taskman.run_on_main(lambda: aqt.utils.tooltip(response.text, parent=mw))
-        return
+
 
     def dump_review_history(self):
         review_history = self.get_card_data(0)

@@ -155,7 +155,7 @@ def wants_to_share_stats(deck_hash) -> (bool, int):
                 stats_enabled = False
             if dialog.isChecked():
                 details["share_stats"] = stats_enabled
-                
+
         return stats_enabled, last_stats_timestamp
 
 
