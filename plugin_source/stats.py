@@ -87,6 +87,9 @@ class ReviewHistory:
         
         review_history = self.get_card_data(last_upload_date)
 
+        if len(review_history) == 0:
+            return
+
         user_hash = get_user_hash()
         data = {
             'user_hash': user_hash,
