@@ -1,3 +1,5 @@
 .vscode/
 plugin_source/dist/
 __pycache__/
+plugin_source/meta.json
+.idea/
