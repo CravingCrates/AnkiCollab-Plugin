@@ -226,7 +226,6 @@ def request_update(silent) -> None:
         aqt.utils.tooltip("Log in to AnkiCollab to check for updates.")
         return
 
-    remove_nonexistent_decks()
     handle_pull(None, silent)
 
 def async_update(silent: bool = False) -> None:
@@ -235,8 +234,7 @@ def async_update(silent: bool = False) -> None:
         aqt.utils.tooltip("Log in to AnkiCollab to check for updates.")
         return
 
-    aqt.utils.tooltip("AnkiCollab: Checking for updates...")
-    run_function_in_thread(request_update, silent)
+    request_update(silent)
 
 def autoUpdate():
     config = mw.addonManager.getConfig(__name__)
