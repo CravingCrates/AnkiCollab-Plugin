@@ -338,13 +338,14 @@ class Deck(JsonSerializableAnkiDict):
                     user_token=user_token,
                     deck_hash=deck_hash,
                     filenames=missing_files,
-                    progress_callback=lambda p: mw.taskman.run_on_main(
-                        lambda: mw.progress.update(
-                            value=int(p * 100),
-                            max=100,
-                            label=f"Downloading media files... {int(p * 100)}%"
-                        ) if mw.progress.busy() else None
-                    )
+                    progress_callback=None,  # Uncomment if you want to show progress
+                    # progress_callback=lambda p: mw.taskman.run_on_main(
+                    #     lambda: mw.progress.update(
+                    #         value=int(p * 100),
+                    #         max=100,
+                    #         label=f"Downloading media files... {int(p * 100)}%"
+                    #     ) if mw.progress.busy() else None
+                    # )
                 )
             else:
                 return {
