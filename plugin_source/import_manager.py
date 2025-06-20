@@ -1,6 +1,6 @@
 from collections import defaultdict
 import json
-from typing import List, Sequence
+from typing import List, Sequence, Tuple, Optional
 
 import msgspec
 import requests
@@ -32,7 +32,6 @@ import gzip
 import logging
 
 logger = logging.getLogger("ankicollab")
-update_info_decoder = msgspec.json.Decoder(type=List[UpdateInfoResponse])
 
 
 def update_optional_tag_config(given_deck_hash: str, optional_tags):
@@ -266,7 +265,7 @@ def ask_for_rating():
             mw.addonManager.writeConfig(__name__, strings_data)
 
 
-def import_webresult(data):
+def import_webresult(data: Tuple[Optional[List[UpdateInfoResponse]], Optional[str], bool]) -> None:
     (webresult, input_hash, silent) = data # gotta unpack the tuple
 
     # if webresult is empty, tell user that there are no updates
@@ -312,7 +311,7 @@ def import_webresult(data):
     update_stats()
 
 
-def get_card_suspension_status():
+def get_card_suspension_status() -> bool:
     strings_data = mw.addonManager.getConfig(__name__)
     val = False
     if strings_data is not None and strings_data["settings"] is not None:
@@ -320,7 +319,7 @@ def get_card_suspension_status():
     return val
 
 
-def get_deck_movement_status():
+def get_deck_movement_status() -> bool:
     strings_data = mw.addonManager.getConfig(__name__)
     val = True
     if strings_data is not None and strings_data["settings"] is not None:
@@ -328,7 +327,7 @@ def get_deck_movement_status():
     return val
 
 
-def get_home_deck(given_deck_hash):
+def get_home_deck(given_deck_hash) -> Optional[str]:
     decks = DeckManager()
     details = decks.get_by_hash(given_deck_hash)
 
@@ -336,7 +335,7 @@ def get_home_deck(given_deck_hash):
         return mw.col.decks.name_if_exists(details["deckId"])
 
 
-def remove_nonexistent_decks():
+def remove_nonexistent_decks() -> None:
     strings_data = mw.addonManager.getConfig(__name__)
 
     if strings_data is not None and len(strings_data) > 0:
@@ -376,7 +375,9 @@ def remove_nonexistent_decks():
                     print("strings_data is None or empty")
 
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
-def async_start_pull(input_hash, silent=False):
+def async_start_pull(input_hash: str, silent: bool = False) \
+        -> Tuple[Optional[List[UpdateInfoResponse]], Optional[str], bool]:
+
     remove_nonexistent_decks()
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None and len(strings_data) > 0:
@@ -408,14 +409,14 @@ def async_start_pull(input_hash, silent=False):
             compressed_data = base64.b64decode(response.content)
             decompressed_data = gzip.decompress(compressed_data)
 
-            webresult = update_info_decoder.decode(decompressed_data.decode("utf-8"))
-            return (webresult, input_hash, silent)
+            webresult = msgspec.json.decode(decompressed_data.decode("utf-8"), type=List[UpdateInfoResponse])
+            return webresult, input_hash, silent
         else:
             infot = "A Server Error occurred. Please notify us!"
             aqt.mw.taskman.run_on_main(
                 lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
             )
-            return (None, None, silent)
+            return None, None, silent
 
 def handle_pull(input_hash, silent=False):
     QueryOp(

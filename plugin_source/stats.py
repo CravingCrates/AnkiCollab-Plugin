@@ -1,10 +1,9 @@
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 
 from aqt import mw
 from collections import defaultdict
-import aqt
 import requests
 import gzip
 
