@@ -266,7 +266,9 @@ def ask_for_rating():
             mw.addonManager.writeConfig(__name__, strings_data)
 
 
-def import_webresult(webresult: List[UpdateInfoResponse], input_hash, silent=False):
+def import_webresult(data):
+    (webresult, input_hash, silent) = data # gotta unpack the tuple
+
     # if webresult is empty, tell user that there are no updates
     if not webresult:
         if silent:
@@ -373,9 +375,9 @@ def remove_nonexistent_decks():
                 else:
                     print("strings_data is None or empty")
 
-
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
-def handle_pull(input_hash, silent=False):
+def async_start_pull(input_hash, silent=False):
+    remove_nonexistent_decks()
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None and len(strings_data) > 0:
         # Create a copy of the config data
@@ -407,9 +409,18 @@ def handle_pull(input_hash, silent=False):
             decompressed_data = gzip.decompress(compressed_data)
 
             webresult = update_info_decoder.decode(decompressed_data.decode("utf-8"))
-            aqt.mw.taskman.run_on_main(lambda: import_webresult(webresult, input_hash, silent))
+            return (webresult, input_hash, silent)
         else:
             infot = "A Server Error occurred. Please notify us!"
             aqt.mw.taskman.run_on_main(
                 lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
             )
+            return (None, None, silent)
+
+def handle_pull(input_hash, silent=False):
+    QueryOp(
+        parent=mw,
+        op=lambda _: async_start_pull(input_hash, silent),
+        success=import_webresult,
+    ).with_progress("Fetching Changes from AnkiCollab...").run_in_background()
+
