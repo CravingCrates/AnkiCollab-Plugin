@@ -94,7 +94,7 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
         showInfo("Could not retrieve unique identifiers for the selected notes.", parent=window if window is not None else mw)
         return
 
-    (rationale, commit_text) = get_commit_info(11)
+    rationale, commit_text = get_commit_info(11)
     if rationale is None:
         return # User cancelled
 

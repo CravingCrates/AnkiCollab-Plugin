@@ -1,6 +1,7 @@
 import base64
 from datetime import datetime, timezone
 import json
+from statistics import mean
 
 from aqt import mw
 from collections import defaultdict
@@ -48,23 +49,22 @@ class ReviewHistory:
             notes_by_deck_and_note_guid[deck_name][note_guid]['lapses'].append(lapses)
             notes_by_deck_and_note_guid[deck_name][note_guid]['reps'].append(reps)
 
+        averages = defaultdict(lambda: defaultdict(lambda: {
+            'retention': 0,
+            'lapses': 0,
+            'reps': 0
+        }))
 
         for deck_name, notes in notes_by_deck_and_note_guid.items():
-            note_guids_to_remove = []
-
             for note_guid, note_data in notes.items():
-                for key, values in note_data.items():
-                    if values:
-                        note_data[key] = int(sum(values) / len(values))
 
-                # Remove the note if it has no valid true retentions
-                if not note_data['retention']:
-                    note_guids_to_remove.append(note_guid)
+                if note_data['retention']:
+                    for key, values in note_data.items():
+                        if values:
+                            averages[deck_name][note_guid][key] = mean(values)
 
-            for note_guid in note_guids_to_remove:
-                del notes[note_guid]
+        return averages
 
-        return notes_by_deck_and_note_guid
 
     def calc_retention(self, card_id) -> int:
         flunked, passed = mw.col.db.first("""

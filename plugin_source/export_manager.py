@@ -10,6 +10,7 @@ import functools
 import aqt
 import aqt.utils
 import anki
+from anki.notes import NoteId
 from anki.utils import point_version
 
 from aqt.qt import *
@@ -25,7 +26,7 @@ import gzip
 import logging
 from concurrent.futures import Future # Keep for main thread sync
 
-from typing import Callable, cast, Tuple, Dict, List, Any, Optional
+from typing import Callable, cast, Tuple, Dict, List, Any, Optional, Sequence
 
 from .crowd_anki.representation.note_model import NoteModel
 
@@ -556,7 +557,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, List[Dict], 
     op.with_progress("Uploading media files...") # Basic progress bar
     op.run_in_background()
 
-def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = None):
+def suggest_notes(nids: Sequence[NoteId], rationale_id: int, editor: Optional[Any] = None):
     """Suggest changes for specific notes."""
     assert mw is not None and mw.col is not None, "Anki environment not ready"
     parent_widget = QApplication.focusWidget() or mw

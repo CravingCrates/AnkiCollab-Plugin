@@ -1,6 +1,6 @@
 from collections import defaultdict
 import json
-from typing import List, Sequence, Tuple, Optional
+from typing import List, Sequence, Tuple, Optional, Any
 
 import msgspec
 import requests
@@ -34,7 +34,7 @@ import logging
 logger = logging.getLogger("ankicollab")
 
 
-def update_optional_tag_config(given_deck_hash: str, optional_tags):
+def update_optional_tag_config(given_deck_hash: str, optional_tags: dict[Any, Any]):
     with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
@@ -42,7 +42,7 @@ def update_optional_tag_config(given_deck_hash: str, optional_tags):
             details["optional_tags"] = optional_tags
 
 
-def get_optional_tags(given_deck_hash: str) -> dict:
+def get_optional_tags(given_deck_hash: str) -> dict[Any, Any]:
     decks = DeckManager()
     details = decks.get_by_hash(given_deck_hash)
 
@@ -65,7 +65,7 @@ def update_timestamp(given_deck_hash: str) -> None:
         if details:
             details["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-def update_deck_stats_enabled(given_deck_hash, stats_enabled):
+def update_deck_stats_enabled(given_deck_hash: str, stats_enabled: bool) -> None:
     with DeckManager() as decks:
         details = decks.get_by_hash(given_deck_hash)
 
@@ -84,7 +84,7 @@ def get_noteids_from_uuids(guids) -> Sequence[NoteId]:
     return noteids
 
 
-def get_guids_from_noteids(nids):
+def get_guids_from_noteids(nids: Sequence[NoteId]) -> List[str]:
     guids = []
     for nid in nids:
         query = "select guid from notes where id=?"
@@ -94,7 +94,7 @@ def get_guids_from_noteids(nids):
     return guids
 
 
-def open_browser_with_nids(nids):
+def open_browser_with_nids(nids: Sequence[NoteId]) -> None:
     if not nids:
         return
     browser = aqt.dialogs.open("Browser", aqt.mw)
@@ -104,7 +104,7 @@ def open_browser_with_nids(nids):
     browser.onSearchActivated()
 
 
-def delete_notes(nids: Sequence[NoteId]):
+def delete_notes(nids: Sequence[NoteId]) -> None:
     if not nids:
         return
     aqt.mw.col.remove_notes(nids)
@@ -137,7 +137,7 @@ def update_stats() -> None:
                 update_stats_timestamp(deck_hash)
 
 
-def wants_to_share_stats(deck_hash: str) -> (bool, int):
+def wants_to_share_stats(deck_hash: str) -> Tuple[bool, int]:
     with DeckManager() as decks:
         details = decks.get_by_hash(deck_hash)
         if details is None:
@@ -203,11 +203,11 @@ def install_update(subscription: UpdateInfoResponse):
     return deck.anki_dict["name"]
 
 
-def abort_update(deck_hash):
+def abort_update(deck_hash: str) -> None:
     update_timestamp(deck_hash)
 
 
-def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
+def prep_config(protected_fields, optional_tags, has_optional_tags: bool, deck_hash: str):
     config = ImportConfig(
         add_tag_to_cards=[],
         optional_tags=optional_tags,
@@ -247,7 +247,7 @@ def show_changelog_popup(subscription: UpdateInfoResponse) -> None:
         update_timestamp(deck_hash)
 
 
-def ask_for_rating():
+def ask_for_rating() -> None:
     strings_data = mw.addonManager.getConfig(__name__)
     if strings_data is not None and "settings" in strings_data:
         if "pull_counter" in strings_data["settings"]:
@@ -291,7 +291,7 @@ def import_webresult(data: Tuple[Optional[List[UpdateInfoResponse]], Optional[st
             with DeckManager() as decks:
                 details = decks.get_by_hash(input_hash)
 
-                if details["deckId"] == 0:  # should only be the case once when they add a new subscription and never ambiguous
+                if details is not None and details["deckId"] == 0:  # should only be the case once when they add a new subscription and never ambiguous
                     details["deckId"] = aqt.mw.col.decks.id(deck_name)
                     # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
                     details["timestamp"] = (
@@ -418,7 +418,7 @@ def async_start_pull(input_hash: str, silent: bool = False) \
             )
             return None, None, silent
 
-def handle_pull(input_hash, silent=False):
+def handle_pull(input_hash: str, silent: bool =False) -> None:
     QueryOp(
         parent=mw,
         op=lambda _: async_start_pull(input_hash, silent),
