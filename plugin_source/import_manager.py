@@ -14,7 +14,7 @@ from aqt.operations import QueryOp
 from aqt.qt import *
 from aqt import mw
 
-from .models import UpdateInfoResponse
+from .models import UpdateInfoResponse, NoteModel
 from .var_defs import API_BASE_URL
 
 from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
@@ -207,7 +207,7 @@ def abort_update(deck_hash: str) -> None:
     update_timestamp(deck_hash)
 
 
-def prep_config(protected_fields, optional_tags, has_optional_tags: bool, deck_hash: str) -> ImportConfig:
+def prep_config(protected_fields: List[NoteModel], optional_tags: List[str], has_optional_tags: bool, deck_hash: str) -> ImportConfig:
     config = ImportConfig(
         add_tag_to_cards=[],
         optional_tags=optional_tags,
@@ -220,9 +220,9 @@ def prep_config(protected_fields, optional_tags, has_optional_tags: bool, deck_h
         deck_hash=deck_hash,
     )
     for protected_field in protected_fields:
-        model_name = protected_field["name"]
-        for field in protected_field["fields"]:
-            field_name = field["name"]
+        model_name = protected_field.name
+        for field in protected_field.fields:
+            field_name = field.name
             config.add_field(model_name, field_name)
 
     return config
@@ -291,7 +291,7 @@ def import_webresult(data: Tuple[Optional[List[UpdateInfoResponse]], Optional[st
             with DeckManager() as decks:
                 details = decks.get_by_hash(input_hash)
 
-                if details is not None and details["deckId"] == 0:  # should only be the case once when they add a new subscription and never ambiguous
+                if details and details["deckId"] == 0:  # should only be the case once when they add a new subscription and never ambiguous
                     details["deckId"] = aqt.mw.col.decks.id(deck_name)
                     # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
                     details["timestamp"] = (
