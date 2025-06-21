@@ -207,7 +207,7 @@ def abort_update(deck_hash: str) -> None:
     update_timestamp(deck_hash)
 
 
-def prep_config(protected_fields, optional_tags, has_optional_tags: bool, deck_hash: str):
+def prep_config(protected_fields, optional_tags, has_optional_tags: bool, deck_hash: str) -> ImportConfig:
     config = ImportConfig(
         add_tag_to_cards=[],
         optional_tags=optional_tags,
