@@ -9,6 +9,8 @@ from anki.decks import DeckId
 from aqt import gui_hooks, mw
 from aqt.operations import QueryOp
 
+from .export_manager import get_server_missing_media, start_suggest_missing_media
+
 from .auth_manager import auth_manager
 from .utils import get_deck_hash_from_did
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
@@ -76,14 +78,33 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
                     break
             mw.addonManager.writeConfig(__name__, strings_data)
             
+    def upload_missing_media():
+        if did is None:
+            aqt.utils.tooltip("No valid deck!")
+            return
+        deck_hash = get_deck_hash_from_did(did)
+        if deck_hash is None:
+            aqt.utils.tooltip("No valid deck!")
+            return
+        op = QueryOp(
+            parent=mw,
+            op=lambda _: get_server_missing_media(deck_hash),
+            success= lambda result: start_suggest_missing_media(result),
+        )
+        op.with_progress(
+            "Checking for missing media..."
+        ).run_in_background()
+            
     links_menu = QMenu('AnkiCollab', mw)
     menu.addMenu(links_menu)
     action = links_menu.addAction("Export Media to Disk")
     action2 = links_menu.addAction("Download Missing Media")
+    action4 = links_menu.addAction("Upload Missing Media")
     action3 = links_menu.addAction("Reset Deck Timestamp")
     qconnect(action.triggered, export_media)
     qconnect(action2.triggered, download_missing_media)
     qconnect(action3.triggered, reset_deck_timestamp)
+    qconnect(action4.triggered, upload_missing_media)
         
 
 def add_browser_menu_item(browser: Browser) -> None:

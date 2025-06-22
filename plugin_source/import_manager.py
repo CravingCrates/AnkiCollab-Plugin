@@ -160,6 +160,7 @@ def wants_to_share_stats(deck_hash) -> (bool, int):
 
 
 def install_update(subscription):
+    print(f"Installing update for deck: {subscription['deck_hash']}")
     deck_hash = subscription["deck_hash"]
     if check_optional_tag_changes(
             deck_hash, subscription["optional_tags"]
@@ -172,8 +173,9 @@ def install_update(subscription):
             deck_hash, dialog.get_selected_tags()
         )
     subscribed_tags = get_optional_tags(deck_hash)
-
+    print("Optional Tags done.")
     deck = deck_initializer.from_json(subscription["deck"])
+    print("Deck initialized.")
     config = prep_config(
         subscription["protected_fields"],
         [tag for tag, value in subscribed_tags.items() if value],
@@ -181,11 +183,13 @@ def install_update(subscription):
         deck_hash
     )
     config.home_deck = get_home_deck(deck_hash)
-
+    print("Config prepared.")
     map_cache = defaultdict(dict)
     note_type_data = {}
     deck.handle_notetype_changes(aqt.mw.col, map_cache, note_type_data)
+    print("Handling note type changes.")
     deck.save_to_collection(aqt.mw.col, map_cache, note_type_data, import_config=config)
+    print("Deck saved to collection.")
 
     # Handle deleted Notes
     deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])

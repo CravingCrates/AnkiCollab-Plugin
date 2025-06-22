@@ -528,6 +528,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, List[Dict], 
     """
     Starts the media upload process using QueryOp.
     Called from the success callback of the deck submission/creation Op.
+    Also called from the gear menu to upload missig files
     """
     if media_upload_data is None:
         # This means deck submission/creation was successful, but no media needed uploading.
@@ -647,23 +648,7 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
         logger.error(traceback.format_exc())
         show_exception(parent=parent_widget, exception=e)
 
-def _on_suggest_media_optimized(
-    opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]], # Result from _sync_optimize...
-    deck_repr: Deck,
-    media_files: List[Tuple[str, str]],
-    did: int,
-    rationale_id: int,
-    commit_text: str,
-    editor: Optional[Any]
-):
-    """Success callback after media optimization for suggestions."""
-    # Runs on Main Thread
-    parent_widget = QApplication.focusWidget() or mw
-    filename_mapping, files_info, file_paths = opt_result # Unpack result
-
-    # Create a backup before updating the fields in the collection?
-    #create_backup()
-
+def handle_media_references(parent_widget: QWidget, deck_repr: Deck, filename_mapping: Dict[str, str], media_files: List[Tuple[str, str]], editor: Optional[Any] = None):
     if filename_mapping:
         logger.info(f"Updating media references in {len(filename_mapping)} notes on main thread...")
         try:
@@ -687,11 +672,12 @@ def _on_suggest_media_optimized(
             show_exception(parent=parent_widget, exception=e)
             # Abort the rest of the process if references couldn't be updated
             mw.progress.finish() # Ensure any progress bar is closed
-            return # Stop here
+            return
     else:
         logger.info("No media references needed updating.")
 
     logger.info(f"Refreshing deck representation notes from collection...")
+    
     try:
         deck_repr.refresh_notes(media_files)
     except Exception as e:
@@ -700,9 +686,28 @@ def _on_suggest_media_optimized(
         # Or abort here too? Aborting might be safer.
         aqt.utils.showWarning(f"Failed to refresh note data before submission: {e}\n\nAborting suggestion.", parent=parent_widget)
         mw.progress.finish()
-        return # Stop here
+        return
+    
+def _on_suggest_media_optimized(
+    opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]], # Result from _sync_optimize...
+    deck_repr: Deck,
+    media_files: List[Tuple[str, str]],
+    did: int,
+    rationale_id: int,
+    commit_text: str,
+    editor: Optional[Any]
+):
+    """Success callback after media optimization for suggestions."""
+    # Runs on Main Thread
+    parent_widget = QApplication.focusWidget() or mw
+    filename_mapping, files_info, file_paths = opt_result # Unpack result
 
-    # --- Step 2: Submit Deck (Background Op) ---
+    # Create a backup before updating the fields in the collection?
+    #create_backup()
+
+    handle_media_references(parent_widget, deck_repr, filename_mapping, media_files, editor)
+
+    # Submit Deck (Background Op)
     logger.info("Starting deck submission QueryOp.")
     op_submit = QueryOp(
         parent=parent_widget,
@@ -716,6 +721,31 @@ def _on_suggest_media_optimized(
         op_submit.with_progress("Submitting suggestion to AnkiCollab...")
     op_submit.run_in_background()
 
+def _on_suggest_media_only_optimized(
+    opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]], # Result from _sync_optimize...
+    deck_repr: Deck,
+    media_files: List[Tuple[str, str]],
+    did: int):
+    """Queries Media upload, without a deck Upload."""
+    
+    parent_widget = QApplication.focusWidget() or mw
+    filename_mapping, media_files_info, media_file_paths = opt_result # Unpack result
+
+    deckHash = get_deck_hash_from_did(did)
+    if not deckHash:
+         # This case should ideally be caught earlier, but handle defensively.
+         raise ValueError("Could not determine deck hash for submission.")
+
+    token, _ = get_maintainer_data(deckHash)
+
+    if media_files_info and not token:
+        # We raise an exception to be caught by QueryOp's failure handler
+        raise ValueError("Login required to upload media with suggestion.")
+    
+    handle_media_references(parent_widget, deck_repr, filename_mapping, media_files, None)
+    submit_result = (token, deckHash, media_files_info, media_file_paths, False)
+    _start_media_upload(submit_result, success_callback=_on_suggest_media_uploaded)
+    
 
 def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
     """Success callback after deck submission for suggestions."""
@@ -733,6 +763,78 @@ def _on_suggest_media_uploaded(upload_result: Dict[str, Any]):
     _handle_media_upload_result(upload_result)
     # ask_for_rating() is called inside _handle_media_upload_result if not silent
 
+def get_server_missing_media(deck_hash: str) -> List[str]:
+    """
+    Fetches the list of media files that are missing on the server for the given deck hash.
+    Returns a list of filenames that are missing.
+    """
+    try:
+        response = requests.get(f"{API_BASE_URL}/media/missing/{deck_hash}")
+        response.raise_for_status()
+        return (deck_hash, response.json())
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching missing media from server: {e}")
+        return (deck_hash, [])  # Return empty list on error
+
+def start_suggest_missing_media(webresult):
+    # Pretty expensive operation. We gather all notes from the deck, and then run only the media upload instead of the note suggestions, too
+    assert mw is not None and mw.col is not None, "Anki environment not ready"
+    parent_widget = QApplication.focusWidget() or mw
+    
+    deck_hash, missing_files = webresult
+    
+    try:
+        if not missing_files:
+            aqt.utils.showInfo("No missing media files to upload.", parent=parent_widget)
+            return
+        
+        print(f"Missing files for deck {deck_hash}: {missing_files}")
+    
+        did = get_did_from_hash(deck_hash)
+        if did is None:
+            aqt.utils.showWarning("Config Error: Could not find the local Anki deck associated with this cloud deck. Please check the Subscriptions window.", parent=parent_widget)
+            return
+        
+        deck_obj = mw.col.decks.get(did, default=False)
+        if not deck_obj or deck_obj.get('dyn', False):
+            return
+
+        deck_name = mw.col.decks.name(did)
+        
+        # Preparation
+        disambiguate_note_model_uuids(mw.col)
+        deck_repr = deck_initializer.from_collection(mw.col, deck_name) # Export whole deck. laggy on large decks, maybe we can move this to a background thread?
+        deck_initializer.trim_empty_children(deck_repr)
+
+        # Fix name to be relative
+        deck_repr.anki_dict["name"] = deck_name.split("::")[-1]
+
+        # Media Preparation
+        protected_fields = deck_repr.get_protected_fields(deck_hash)
+        media_files = deck_repr.get_media_file_note_map(protected_fields)
+
+        # remove all entries from media_files that are not in the missing_files list
+        media_files = [
+            (filename, note_guid) for filename, note_guid in media_files
+            if filename in missing_files
+        ]
+        
+        # --- Start Background Operations ---
+        logger.info("Starting media upload process...")
+
+        # Step 1: Optimize Media (Background Op)
+        op_optimize = QueryOp(
+            parent=parent_widget,
+            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
+            success=lambda result: _on_suggest_media_only_optimized(result, deck_repr, media_files, did)
+        )
+        op_optimize.with_progress("Optimizing media files...")
+        op_optimize.run_in_background()
+
+    except Exception as e:
+        logger.error(f"Error uploading missing media: {e}")
+        logger.error(traceback.format_exc())
+        show_exception(parent=parent_widget, exception=e)
 
 def suggest_subdeck(did: int):
     """Suggest an entire subdeck."""
