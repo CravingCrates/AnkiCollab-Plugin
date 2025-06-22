@@ -167,45 +167,53 @@ def update_media_references(filename_mapping: Dict[str, str], file_note_pairs: L
     assert mw.col is not None, "Collection must be available for media reference update"
     if not filename_mapping:
         return 0, None
-    notes_by_filename: Dict[str, List[str]] = {}
+    
+    # Group by note GUID only
+    notes_to_update: Dict[str, List[str]] = {}  # note_guid -> [old_filenames]
     for filename, note_guid in file_note_pairs:
         if filename in filename_mapping:
-            notes_by_filename.setdefault(filename, []).append(note_guid)
+            notes_to_update.setdefault(note_guid, []).append(filename)
 
     updated_notes = []
-    for old_filename, new_filename in filename_mapping.items():
-        if old_filename not in notes_by_filename:
-            continue
+    for note_guid, old_filenames in notes_to_update.items():
+        try:
+            note_id = get_note_id_from_guid(note_guid)
+            if not note_id:
+                continue
 
-        note_guids = notes_by_filename[old_filename]
-        for note_guid in note_guids:
-            try:
-                note_id = get_note_id_from_guid(note_guid)
-                if not note_id:
-                    continue
+            note = mw.col.get_note(note_id)
+            if not note:
+                continue
 
-                note = mw.col.get_note(note_id)
-                if not note:
-                    continue
-
-                modified_note = False # Flag to track if the current note was modified
-                for i, field_content in enumerate(note.fields):
-                    # Iterate through all compiled media regexes
-                    for media_regex in ALL_COMPILED_MEDIA_REGEXES:
-                        # Apply the regex to the original content of the field for this pass
-                        new_content = media_regex.sub(
-                            lambda m: m.group(0).replace(old_filename, new_filename),
-                            field_content, # Use the original field_content for each regex check
-                        )
-                        if new_content != field_content:
-                            note.fields[i] = new_content
-                            modified_note = True
+            modified_note = False
+            for i, field_content in enumerate(note.fields):
+                updated_content = field_content
+                
+                for old_filename in old_filenames:
+                    if old_filename not in filename_mapping:
+                        continue
+                    new_filename = filename_mapping[old_filename]
                     
-                if modified_note:
-                    updated_notes.append(note)
+                    def make_replacer(old_name, new_name):
+                        return lambda m: m.group(0).replace(old_name, new_name)
+                    
+                    replacer = make_replacer(old_filename, new_filename)
+                    
+                    # Apply all regex patterns for this filename
+                    for media_regex in ALL_COMPILED_MEDIA_REGEXES:
+                        new_content = media_regex.sub(replacer, updated_content)
+                        if new_content != updated_content:
+                            updated_content = new_content
+                            modified_note = True
+                
+                if updated_content != field_content:
+                    note.fields[i] = updated_content
+            
+            if modified_note:
+                updated_notes.append(note)
 
-            except Exception as e:
-                logger.error(f"Error updating references for note {note_guid}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error updating references for note {note_guid}: {str(e)}")
 
     if updated_notes:
         opchanges = mw.col.update_notes(notes=updated_notes)
