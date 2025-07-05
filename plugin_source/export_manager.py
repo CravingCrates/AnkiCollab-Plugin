@@ -602,54 +602,18 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
         if not deck_obj or deck_obj.get('dyn', False):
             aqt.utils.showInfo("Filtered decks are not supported for suggestions.", parent=parent_widget)
             return
-        
-        # --- Preparation (Main Thread) ---
-        disambiguate_note_model_uuids(mw.col)
-        deck_repr = deck_initializer.from_collection(mw.col, mw.col.decks.name(did), note_ids=nids)
-        deck_initializer.trim_empty_children(deck_repr)
-        note_sorter = NoteSorter(ConfigSettings.get_instance())
-        note_sorter.sort_deck(deck_repr)
-
-        personal_tags = get_personal_tags(deckHash)
-        if personal_tags:
-            deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
-
-        # --- Get Commit Info (Main Thread - UI Interaction) ---
-        commit_text = ""
-        final_rationale_id = rationale_id
-        token, force_overwrite = get_maintainer_data(deckHash) # Check login status early
-
-        if not token:
-            aqt.utils.showWarning("You must be logged in to make this suggestion. Please login under AnkiCollab > Login in the menu bar and try again.", parent=parent_widget)
-            return
-
-        if rationale_id != 6 and not force_overwrite: # Skip dialog for 'New Card' unless maintainer
-            result = get_commit_info(rationale_id)
-            if result is None or result[0] is None:
-                aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
-                return
-            final_rationale_id, commit_text = result
-        elif force_overwrite:
-             final_rationale_id = 10 # Force 'Other' for maintainer overwrite
-             commit_text = ""
-            
-        # --- Media Preparation (Main Thread) ---
-        protected_fields = deck_repr.get_protected_fields(deckHash)
-        media_files = deck_repr.get_media_file_note_map(protected_fields)
 
         # --- Start Background Operations ---
         logger.info("Starting suggestion process...")
 
-        # Step 1: Optimize Media (Background Op)
-        op_optimize = QueryOp(
+        # Step 1: Deck Preparation (Background Op)
+        op_prepare = QueryOp(
             parent=parent_widget,
-            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
-            success=lambda result: _on_suggest_media_optimized(result, deck_repr, media_files, did, final_rationale_id, commit_text, editor)
+            op=lambda col: _prepare_deck_for_suggestion(did, nids, deckHash),
+            success=lambda result: _on_suggest_deck_prepared(result, did, deckHash, rationale_id, editor)
         )
-        silent_on_new_cards = final_rationale_id == 6 # New Card rationale should be silent
-        if not silent_on_new_cards:
-            op_optimize.with_progress("Optimizing media files...")
-        op_optimize.run_in_background()
+        op_prepare.with_progress("Preparing deck data...")
+        op_prepare.run_in_background()
 
     except Exception as e:
         logger.error(f"Error preparing suggestion: {e}")
@@ -705,7 +669,7 @@ def _on_suggest_media_optimized(
     commit_text: str,
     editor: Optional[Any]
 ):
-    """Success callback after media optimization for suggestions."""
+    """Update media references AND FINALLY UPLOAD THE DECK ."""
     # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
     filename_mapping, files_info, file_paths = opt_result # Unpack result
@@ -860,64 +824,18 @@ def suggest_subdeck(did: int):
         if deckHash is None:
             aqt.utils.showWarning("Config Error: Could not find the cloud deck hash for this local deck. Please check the Subscriptions window.", parent=parent_widget)
             return
-        
-        # --- Preparation (Main Thread) ---
-        disambiguate_note_model_uuids(mw.col)
-        deck_repr = deck_initializer.from_collection(mw.col, deck_name) # Export whole deck. laggy on large decks, maybe we can move this to a background thread?
-
-        #  could also be moved to an initial QueryOp
-        try:
-            response = requests.get(f"{API_BASE_URL}/GetDeckTimestamp/" + deckHash)
-            response.raise_for_status()
-            last_updated = float(response.text)
-            last_pulled = get_timestamp(deckHash) or 0.0
-            deck_initializer.remove_unchanged_notes(deck_repr, last_updated, last_pulled)
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"Could not get deck timestamp: {e}. Proceeding with full deck suggestion.")
-        except Exception as e:
-            logger.error(f"Error processing deck timestamps: {e}")
-            aqt.utils.showWarning(f"Failed to process deck!", parent=parent_widget)
-            return
-
-        deck_initializer.trim_empty_children(deck_repr)
-        personal_tags = get_personal_tags(deckHash)
-        if personal_tags:
-            deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
-
-        # Fix name to be relative
-        deck_repr.anki_dict["name"] = deck_name.split("::")[-1]
-
-        # --- Get Commit Info (Main Thread - UI Interaction) ---
-        
-        token, force_overwrite = get_maintainer_data(deckHash) # Check login status early
-        if not token:
-            aqt.utils.showWarning("You must be logged in to make this suggestion. Please login under AnkiCollab > Login in the menu bar and try again.", parent=parent_widget)
-            return
-
-        if not force_overwrite:
-            result = get_commit_info(9) # Default to Bulk Suggestion
-            if result is None or result[0] is None:
-                aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
-                return
-            rationale_id, commit_text = result
-        else:
-            rationale_id = 10
-            commit_text = ""
-        # --- Media Preparation (Main Thread) ---
-        protected_fields = deck_repr.get_protected_fields(deckHash)
-        media_files = deck_repr.get_media_file_note_map(protected_fields)
 
         # --- Start Background Operations ---
         logger.info("Starting subdeck suggestion process...")
 
-        # Step 1: Optimize Media (Background Op)
-        op_optimize = QueryOp(
+        # Step 1: Deck Preparation (Background Op)
+        op_prepare = QueryOp(
             parent=parent_widget,
-            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
-            success=lambda result: _on_suggest_media_optimized(result, deck_repr, media_files, did, rationale_id, commit_text, None) # No editor for subdeck
+            op=lambda col: _prepare_subdeck_for_suggestion(did, deck_name, deckHash),
+            success=lambda result: _on_suggest_subdeck_prepared(result, did, deckHash)
         )
-        op_optimize.with_progress("Optimizing media files...")
-        op_optimize.run_in_background()
+        op_prepare.with_progress("Preparing subdeck data...")
+        op_prepare.run_in_background()
 
     except Exception as e:
         logger.error(f"Error preparing subdeck suggestion: {e}")
@@ -1168,3 +1086,157 @@ def get_commit_info(default_opt = 0):
 
     aqt.utils.tooltip("Aborting suggestion.", parent=QApplication.focusWidget() or mw)
     return None, None
+
+def _prepare_deck_for_suggestion(did: Any, nids: List[int], deckHash: str) -> Tuple[Deck, List[Tuple[str, str]]]:
+    """
+    Background operation to prepare deck representation for suggestion.
+    Returns (deck_repr, media_files).
+    """
+    assert mw.col is not None, "Collection must be available for deck preparation"
+    
+    # --- Preparation (Background Thread) ---
+    disambiguate_note_model_uuids(mw.col)
+    deck_repr = deck_initializer.from_collection(mw.col, mw.col.decks.name(did), note_ids=nids)
+    deck_initializer.trim_empty_children(deck_repr)
+    note_sorter = NoteSorter(ConfigSettings.get_instance())
+    note_sorter.sort_deck(deck_repr)
+
+    personal_tags = get_personal_tags(deckHash)
+    if personal_tags:
+        deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
+
+    # --- Media Preparation (Background Thread) ---
+    protected_fields = deck_repr.get_protected_fields(deckHash)
+    media_files = deck_repr.get_media_file_note_map(protected_fields)
+    
+    return deck_repr, media_files
+
+
+def _on_suggest_deck_prepared(
+    prepare_result: Tuple[Deck, List[Tuple[str, str]]],
+    did: Any,
+    deckHash: str,
+    rationale_id: int,
+    editor: Optional[Any]
+):
+    """Success callback after deck preparation for suggestions."""
+    # Runs on Main Thread
+    parent_widget = QApplication.focusWidget() or mw
+    deck_repr, media_files = prepare_result  # Unpack result
+
+    try:
+        # --- Get Commit Info (Main Thread - UI Interaction) ---
+        commit_text = ""
+        final_rationale_id = rationale_id
+        token, force_overwrite = get_maintainer_data(deckHash)  # Check login status
+
+        if not token:
+            aqt.utils.showWarning("You must be logged in to make this suggestion. Please login under AnkiCollab > Login in the menu bar and try again.", parent=parent_widget)
+            return
+
+        if rationale_id != 6 and not force_overwrite:  # Skip dialog for 'New Card' unless maintainer
+            result = get_commit_info(rationale_id)
+            if result is None or result[0] is None:
+                aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
+                return
+            final_rationale_id, commit_text = result
+        elif force_overwrite:
+            final_rationale_id = 10  # Force 'Other' for maintainer overwrite
+            commit_text = ""
+
+        # Step 2: Optimize Media (Background Op)
+        op_optimize = QueryOp(
+            parent=parent_widget,
+            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
+            success=lambda result: _on_suggest_media_optimized(result, deck_repr, media_files, did, final_rationale_id, commit_text, editor)
+        )
+        silent_on_new_cards = final_rationale_id == 6 # New Card rationale should be silent
+        if not silent_on_new_cards:
+            op_optimize.with_progress("Optimizing media files...")
+        op_optimize.run_in_background()
+
+    except Exception as e:
+        logger.error(f"Error in deck preparation callback: {e}")
+        logger.error(traceback.format_exc())
+        show_exception(parent=parent_widget, exception=e)
+
+def _prepare_subdeck_for_suggestion(did: Any, deck_name: str, deckHash: str) -> Tuple[Deck, List[Tuple[str, str]]]:
+    """
+    Background operation to prepare subdeck representation for suggestion.
+    Returns (deck_repr, media_files).
+    """
+    assert mw.col is not None, "Collection must be available for subdeck preparation"
+    
+    # --- Preparation (Background Thread) ---
+    disambiguate_note_model_uuids(mw.col)
+    deck_repr = deck_initializer.from_collection(mw.col, deck_name) # Export whole deck
+
+    # Get deck timestamp and remove unchanged notes
+    try:
+        response = requests.get(f"{API_BASE_URL}/GetDeckTimestamp/" + deckHash)
+        response.raise_for_status()
+        last_updated = float(response.text)
+        last_pulled = get_timestamp(deckHash) or 0.0
+        deck_initializer.remove_unchanged_notes(deck_repr, last_updated, last_pulled)
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Could not get deck timestamp: {e}. Proceeding with full deck suggestion.")
+    except Exception as e:
+        logger.error(f"Error processing deck timestamps: {e}")
+        # Re-raise to be caught by QueryOp error handler
+        raise RuntimeError(f"Failed to process deck timestamps: {e}") from e
+
+    deck_initializer.trim_empty_children(deck_repr)
+    personal_tags = get_personal_tags(deckHash)
+    if personal_tags:
+        deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
+
+    # Fix name to be relative
+    deck_repr.anki_dict["name"] = deck_name.split("::")[-1]
+
+    # --- Media Preparation (Background Thread) ---
+    protected_fields = deck_repr.get_protected_fields(deckHash)
+    media_files = deck_repr.get_media_file_note_map(protected_fields)
+    
+    return deck_repr, media_files
+
+
+def _on_suggest_subdeck_prepared(
+    prepare_result: Tuple[Deck, List[Tuple[str, str]]],
+    did: Any,
+    deckHash: str
+):
+    """Success callback after subdeck preparation for suggestions."""
+    # Runs on Main Thread
+    parent_widget = QApplication.focusWidget() or mw
+    deck_repr, media_files = prepare_result  # Unpack result
+
+    try:
+        # --- Get Commit Info (Main Thread - UI Interaction) ---
+        token, force_overwrite = get_maintainer_data(deckHash)  # Check login status
+        if not token:
+            aqt.utils.showWarning("You must be logged in to make this suggestion. Please login under AnkiCollab > Login in the menu bar and try again.", parent=parent_widget)
+            return
+
+        if not force_overwrite:
+            result = get_commit_info(9)  # Default to Bulk Suggestion
+            if result is None or result[0] is None:
+                aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
+                return
+            rationale_id, commit_text = result
+        else:
+            rationale_id = 10
+            commit_text = ""
+
+        # Step 2: Optimize Media (Background Op)
+        op_optimize = QueryOp(
+            parent=parent_widget,
+            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
+            success=lambda result: _on_suggest_media_optimized(result, deck_repr, media_files, did, rationale_id, commit_text, None)  # No editor for subdeck
+        )
+        op_optimize.with_progress("Optimizing media files...")
+        op_optimize.run_in_background()
+
+    except Exception as e:
+        logger.error(f"Error in subdeck preparation callback: {e}")
+        logger.error(traceback.format_exc())
+        show_exception(parent=parent_widget, exception=e)

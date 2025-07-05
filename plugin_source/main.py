@@ -10,21 +10,22 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
 # Pillow specific stuff
 base_path = os.path.dirname(__file__)
 arch = platform.machine()
+pyver = f"py{sys.version_info.major}{sys.version_info.minor}"
 
 if sys.platform.startswith("win"):
-    sys.path.insert(0, os.path.join(base_path, "dist/windows"))
+    sys.path.insert(0, os.path.join(base_path, "dist", "windows", pyver))
 elif sys.platform.startswith("linux"):
     if arch == "x86_64":
-        sys.path.insert(0, os.path.join(base_path, "dist/linux/x86_64"))
+        sys.path.insert(0, os.path.join(base_path, "dist", "linux", "x86_64", pyver))
     elif arch in ("aarch64", "arm64"):  # Some ARM systems report 'arm64'
-        sys.path.insert(0, os.path.join(base_path, "dist/linux/aarch64"))
+        sys.path.insert(0, os.path.join(base_path, "dist", "linux", "aarch64", pyver))
     else:
         raise RuntimeError(f"Unsupported Linux architecture: {arch}")
 elif sys.platform.startswith("darwin"):
     if arch == "arm64":
-        sys.path.insert(0, os.path.join(base_path, "dist/macos/arm64"))
+        sys.path.insert(0, os.path.join(base_path, "dist", "macos", "arm64", pyver))
     elif arch == "x86_64":
-        sys.path.insert(0, os.path.join(base_path, "dist/macos/x86_64"))
+        sys.path.insert(0, os.path.join(base_path, "dist", "macos", "x86_64", pyver))
     else:
         raise RuntimeError(f"Unsupported macOS architecture: {arch}")
 

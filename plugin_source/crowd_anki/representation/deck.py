@@ -391,43 +391,124 @@ class Deck(JsonSerializableAnkiDict):
         def on_accepted():
             model_map_cache[old_model_uuid][note.note_model_uuid] = \
                 NoteModel.ModelMap(dialog.get_field_map(), dialog.get_template_map())
-                            
+        
+        saved_models = set()
         for note_model in self.metadata.models.values():
-            note_model.save_to_collection(collection)
+            model_uuid = note_model.get_uuid()
+            if model_uuid not in saved_models:
+                note_model.save_to_collection(collection)
+                saved_models.add(model_uuid)
         
         fetcher = UuidFetcher(collection)
         
         # Fetch the ids and model GUIDs of all notes with a UUID in note_uuids
         note_uuids = [note.get_uuid() for note in self.notes]
+        if not note_uuids:  # Early exit if no notes
+            for child in self.children:
+                child.handle_notetype_changes(collection, model_map_cache, note_type_data)
+            return
+            
         placeholders = ', '.join('?' for _ in note_uuids)
         query = "SELECT guid, mid, id FROM notes WHERE guid IN ({})"
         query = query.format(placeholders)
         mids_and_ids = collection.db.all(query, *note_uuids)
         model_guids = {uuid: (collection.models.get(mid).get(UUID_FIELD_NAME), id) for uuid, mid, id in mids_and_ids}
 
+        model_cache = {}  # Cache for loaded models
+        compatibility_cache = {}  # Cache for field compatibility results
+        
+        # Performance tracking
+        model_fetch_count = 0
+        compatibility_check_count = 0
+        
+        def get_cached_model(model_uuid):
+            nonlocal model_fetch_count
+            if model_uuid not in model_cache:
+                model_dict = fetcher.get_model(model_uuid)
+                if model_dict:
+                    model_cache[model_uuid] = NoteModel.from_json(model_dict)
+                    model_fetch_count += 1
+                else:
+                    model_cache[model_uuid] = None
+            return model_cache[model_uuid]
+        
+        def check_cached_compatibility(old_uuid, new_uuid):
+            nonlocal compatibility_check_count
+            cache_key = (old_uuid, new_uuid)
+            if cache_key not in compatibility_cache:
+                old_model = get_cached_model(old_uuid)
+                new_model = get_cached_model(new_uuid)
+                
+                if old_model and new_model:
+                    # Check if this is a projektanki note type
+                    note_type_name = new_model.anki_dict.get("name", "").lower()
+                    should_preserve_templates = "projektanki" in note_type_name
+                    
+                    if should_preserve_templates:
+                        # For projektanki: only check field compatibility
+                        compatibility_cache[cache_key] = NoteModel.check_fields_compatible(old_model, new_model)
+                    else:
+                        # For non-projektanki: use semantic identity check
+                        compatibility_cache[cache_key] = NoteModel.check_semantically_identical(old_model, new_model)
+                    compatibility_check_count += 1
+                else:
+                    compatibility_cache[cache_key] = False
+            return compatibility_cache[cache_key]
+
+        # Group notes by model transitions to batch process similar changes
+        model_transitions = defaultdict(list)  # (old_uuid, new_uuid) -> [notes]
+        
         for note in self.notes:
             old_model_uuid, note_id = model_guids.get(note.get_uuid(), (None, None))
-            if old_model_uuid and note.note_model_uuid != old_model_uuid: # note has changed model
-                mapping = model_map_cache[old_model_uuid].get(note.note_model_uuid)
-                if not mapping: # mapping not found, so call dialog to create mapping
-                    note.anki_object = fetcher.get_note(note.get_uuid())
-                    if note.anki_object is None: # Should be impossible to reach
-                        print(f"No note found with UUID: {note.get_uuid()}")
-                        continue
-                    new_model = NoteModel.from_json(fetcher.get_model(note.note_model_uuid))
-                    new_model.make_current(collection)
-                    dialog = ChangeModelDialog(collection, [note.anki_object.id], note.note_type(), mw)
-                    dialog.accepted.connect(on_accepted)
-                    dialog.exec()
-            if note_id is not None: # note exists in collection = not new
+            if old_model_uuid and note.note_model_uuid != old_model_uuid:
+                transition_key = (old_model_uuid, note.note_model_uuid)
+                model_transitions[transition_key].append((note, note_id))
+            elif note_id is not None:  # Existing note with same model
+                # Still need to initialize note_type_data for existing notes
                 if old_model_uuid not in note_type_data:
                     if note.anki_object is None:
                         note.anki_object = fetcher.get_note(note.get_uuid())
                     note_type = note.note_type()
                     note_type_data[old_model_uuid] = (note_type, note.note_model_uuid, [])
-                if note.note_model_uuid != old_model_uuid:
-                    note_type_data[old_model_uuid][2].append(note_id)
+
+        # Process each unique model transition
+        for (old_model_uuid, new_model_uuid), notes_with_ids in model_transitions.items():
+            # Check compatibility once per transition type
+            # For projektanki note types: only checks field compatibility (preserves templates)
+            fields_compatible = check_cached_compatibility(old_model_uuid, new_model_uuid)
+            
+            # Initialize note_type_data entry if needed
+            if old_model_uuid not in note_type_data:
+                # Use the first note to get the note_type
+                first_note = notes_with_ids[0][0]
+                if first_note.anki_object is None:
+                    first_note.anki_object = fetcher.get_note(first_note.get_uuid())
+                note_type = first_note.note_type()
+                note_type_data[old_model_uuid] = (note_type, new_model_uuid, [])
+            
+            if not fields_compatible:
+                # Fields are incompatible - need change model dialog
+                mapping = model_map_cache[old_model_uuid].get(new_model_uuid)
+                if not mapping:
+                    # Need to create mapping - use first note for dialog
+                    first_note = notes_with_ids[0][0]
+                    if first_note.anki_object is None:
+                        first_note.anki_object = fetcher.get_note(first_note.get_uuid())
+                    if first_note.anki_object is None:
+                        print(f"No note found with UUID: {first_note.get_uuid()}")
+                        continue
                     
+                    new_model = get_cached_model(new_model_uuid)
+                    if new_model:
+                        new_model.make_current(collection)
+                        dialog = ChangeModelDialog(collection, [first_note.anki_object.id], first_note.note_type(), mw)
+                        dialog.accepted.connect(on_accepted)
+                        dialog.exec()
+                
+                # Add all note IDs to note_type_data for batch processing
+                note_ids = [note_id for _, note_id in notes_with_ids if note_id is not None]
+                note_type_data[old_model_uuid][2].extend(note_ids)
+         
         for child in self.children:
             child.handle_notetype_changes(collection, model_map_cache, note_type_data)
 
@@ -470,29 +551,37 @@ class Deck(JsonSerializableAnkiDict):
             )
         existing_note_map = {guid: nid for guid, nid in existing_notes}
         
-        # Pre-process notes in memory
+        # Group notes by note type to reduce model lookups
+        notes_by_type = defaultdict(list)  # note_model_uuid -> [notes]
+        for note in self.notes:
+            notes_by_type[note.note_model_uuid].append(note)
+                
+        # Pre-process notes in memory, grouped by type
         new_notes = []
         update_notes = []
-        for note in self.notes:
-            uuid = note.get_uuid()
-            note_model = self.metadata.models[note.note_model_uuid]
-            if uuid not in existing_note_map:
-                note.anki_object = AnkiNote(collection, note_model.anki_dict)
-                new_notes.append(note)
-            else:
-                note.anki_object = AnkiNote(collection, id=existing_note_map[uuid])
-                update_notes.append(note)
+        
+        for note_model_uuid, notes_group in notes_by_type.items():
+            note_model = self.metadata.models[note_model_uuid]  # Single lookup per note type
             
-            note.handle_import_config_changes(import_config, note_model)
-            note.anki_object.__dict__.update(note.anki_object_dict)
-            note.anki_object.mid = note_model.anki_dict["id"]
-            note.anki_object.mod = int_time
-            
-            status_cur += 1
-            if status_cur % 100 == 0:
-                status_cb(status_cur, status_max)
-                if mw.progress.want_cancel():
-                    return status_cur, media_result
+            for note in notes_group:
+                uuid = note.get_uuid()
+                if uuid not in existing_note_map:
+                    note.anki_object = AnkiNote(collection, note_model.anki_dict)
+                    new_notes.append(note)
+                else:
+                    note.anki_object = AnkiNote(collection, id=existing_note_map[uuid])
+                    update_notes.append(note)
+                
+                note.handle_import_config_changes(import_config, note_model)
+                note.anki_object.__dict__.update(note.anki_object_dict)
+                note.anki_object.mid = note_model.anki_dict["id"]
+                note.anki_object.mod = int_time
+                
+                status_cur += 1
+                if status_cur % 100 == 0:
+                    status_cb(status_cur, status_max)
+                    if mw.progress.want_cancel():
+                        return status_cur, media_result
 
         # Batch process notes
         if new_notes:
