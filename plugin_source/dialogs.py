@@ -226,8 +226,8 @@ class AddChangelogDialog(QDialog):
        
 
 class DeletedNotesDialog(QDialog):
-    def __init__(self, deleted_notes, deck_hash):
-        super().__init__()
+    def __init__(self, deleted_notes, deck_hash, parent=None):
+        super().__init__(parent)
         local_name = get_local_deck_from_hash(deck_hash)
         self.setWindowTitle(f"AnkiCollab - Notes Removed from Deck {local_name}")
         self.setModal(True)

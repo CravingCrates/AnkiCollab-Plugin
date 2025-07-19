@@ -253,6 +253,19 @@ class Deck(JsonSerializableAnkiDict):
 
         self.metadata = DeckMetadata(new_deck_configs, new_models)
         
+    def calculate_total_work(self, include_children=True):
+        """Calculate total work units for progress tracking"""
+        note_count = len(self.notes)
+        media_count = len(self.get_media_file_list(data_from_models=True, include_children=False))
+        
+        if include_children:
+            for child in self.children:
+                child_note_count, child_media_count = child.calculate_total_work(include_children=include_children)
+                note_count += child_note_count
+                media_count += child_media_count
+                
+        return note_count, media_count
+    
     def on_success_wrapper(self, result):
         """Wrapper for on_success that unpacks the tuple result"""
         count, media_result = result
@@ -271,16 +284,28 @@ class Deck(JsonSerializableAnkiDict):
                         parent_did = aqt.mw.col.decks.id_for_name(parent_name) if parent_name else self.root_deck_id
                         if parent_did:
                             aqt.mw.col.decks.reparent(filtered_children, parent_did)
-                            
-                    aqt.mw.col.decks.remove([did])
-                    
+
+                    opchanges = aqt.mw.col.decks.remove(dids=[did])
+                    if opchanges.count != 1:
+                        print(f"Failed to delete deck {name}")
+
             except NotFoundError:
                 continue
             except Exception as e:
                 print(f"Error while processing deck {name}: {e}")
                 continue
             
+            
     def on_success(self, count: int, media_result) -> None:
+        # Show cleanup phase at 95%
+        aqt.mw.taskman.run_on_main(
+            lambda: aqt.mw.progress.update(
+                label="Finishing...",
+                value=95,
+                max=100,
+            ) if aqt.mw.progress.busy() else None
+        )
+        
         if count > 0:
             silent_clear_unused_tags()
             silent_clear_empty_cards()
@@ -288,105 +313,179 @@ class Deck(JsonSerializableAnkiDict):
         if self.root_deck_id:            
             self.delete_empty_subdecks()
             
+        # Show completion at 100%
+        aqt.mw.taskman.run_on_main(
+            lambda: aqt.mw.progress.update(
+                label="Complete",
+                value=100,
+                max=100,
+            ) if aqt.mw.progress.busy() else None
+        )
+            
         self.on_media_download_done(media_result)
                     
         mw.progress.finish()
         # Reset window without blocking main thread
         aqt.mw.reset()
     
-    def import_progress_cb(self, curr: int, max_i: int):
-        percentage = (curr / max_i) * 100
-        aqt.mw.taskman.run_on_main(
-            lambda: aqt.mw.progress.update(
-                label=
-                f"Processed {curr} / {max_i} notes ({percentage:.1f}%)...",
-                value=curr,
-                max=max_i,
-            ) if aqt.mw.progress.busy() else None
-        )
+    def create_unified_progress_tracker(self, total_notes, total_media):
+        """Create a unified progress tracker for smooth UX"""
+        class UnifiedProgressTracker:
+            def __init__(self, total_notes, total_media):
+                self.total_notes = total_notes
+                self.total_media = total_media
+                self.total_work = total_notes + total_media
+                self.completed_notes = 0
+                self.completed_media = 0
+                
+                # Pre-calculate phase percentages for smooth transitions
+                if self.total_work > 0:
+                    self.notes_phase_end = (total_notes / self.total_work) * 100
+                    self.media_phase_end = 100
+                else:
+                    self.notes_phase_end = 100
+                    self.media_phase_end = 100
+            
+            def update_notes_progress(self, completed_notes, deck_name=""):                
+                self.completed_notes = completed_notes                                    
+                
+                if self.total_work == 0:
+                    return
+                    
+                # Calculate smooth progress
+                progress_value = min(self.completed_notes + self.completed_media, self.total_work)
+                
+                label = f"Importing notes: {completed_notes:,} / {self.total_notes:,}"
+                
+                aqt.mw.taskman.run_on_main(
+                    lambda: aqt.mw.progress.update(
+                        label=label,
+                        value=progress_value,
+                        max=self.total_work,
+                    ) if aqt.mw.progress.busy() else None
+                )
+            
+            def update_media_progress(self, completed_media, downloading_count=0):                
+                self.completed_media = completed_media
+                    
+                if self.total_work == 0:
+                    return
+                    
+                # Calculate smooth progress
+                progress_value = min(self.completed_notes + self.completed_media, self.total_work)
+                
+                if downloading_count > 0:
+                    label = f"Downloading media: {completed_media:,} / {self.total_media:,}"
+                else:
+                    label = f"Processing media: {completed_media:,} / {self.total_media:,}"
+                
+                aqt.mw.taskman.run_on_main(
+                    lambda: aqt.mw.progress.update(
+                        label=label,
+                        value=progress_value,
+                        max=self.total_work,
+                    ) if aqt.mw.progress.busy() else None
+                )
+            
+            def set_phase_label(self, label, percentage=None):
+                """Set a custom label for transition phases"""
+                if percentage is not None:
+                    progress_value = int((percentage / 100) * self.total_work)
+                else:
+                    progress_value = self.completed_notes + self.completed_media
+                    
+                aqt.mw.taskman.run_on_main(
+                    lambda: aqt.mw.progress.update(
+                        label=label,
+                        value=progress_value,
+                        max=self.total_work,
+                    ) if aqt.mw.progress.busy() else None
+                )
+        
+        return UnifiedProgressTracker(total_notes, total_media)
         
     def on_media_download_done(self, result=None) -> None:
         if result is None:
             result = {"success": False, "message": "Unknown error"}
-            
+        
         mw.col.media.check()
         
         if result["success"]:
-            msg = (f"Media files: {result.get('downloaded', 0)} downloaded, "
-                f"{result.get('skipped', 0)} existing")
-            aqt.utils.tooltip(msg, parent=mw)
+            downloaded = result.get('downloaded', 0)
+            skipped = result.get('skipped', 0)
+            total = downloaded + skipped
+            
+            if downloaded > 0:
+                msg = f"Deck imported successfully!\n📁 {downloaded:,} media files downloaded\n✓ {skipped:,} files already present"
+            elif total > 0:
+                msg = f"Deck imported successfully!\n✓ All {total:,} media files were already present"
+            else:
+                msg = "Deck imported successfully!\n📝 No media files needed"
+                
+            aqt.utils.tooltip(msg, parent=mw, period=4000)
         else:
+            error_msg = result.get('message', 'Unknown error')
             aqt.utils.showWarning(
-                f"Media download error: {result.get('message', 'Unknown error')}", 
-                parent=mw
+                f"Deck imported with media errors:\n{error_msg}\n\nYour notes were imported successfully, but some media files may be missing.", 
+                parent=mw,
+                title="Import Warning"
             )
         
-    def process_media_download(self, deck_hash, media_files):
+    def process_media_download(self, deck_hash, media_files, progress_tracker=None, deck_name=""):
         try:
-            if media_files is None:
-                return
+            if media_files is None or len(media_files) == 0:
+                return {
+                    "success": True, 
+                    "message": "No media files to download",
+                    "downloaded": 0,
+                    "skipped": 0
+                }
+                
             dir_path = self.collection.media.dir()
             missing_files = []
 
+            # Quick file existence check - this is fast so we can check all at once
             for file_name in media_files:
                 if not os.path.exists(os.path.join(dir_path, file_name)):
                     missing_files.append(file_name)
                     
+            # Update progress tracker with media processing info
+            if progress_tracker:
+                downloading_count = len(missing_files)
+                progress_tracker.update_media_progress(0, downloading_count)
+                    
             if len(missing_files) > 0:
                 user_token = auth_manager.get_token()
+                
+                # Create progress callback that works with unified tracker
+                def progress_callback(progress_ratio):
+                    if progress_tracker:
+                        completed = int(progress_ratio * len(missing_files))
+                        # Add skipped files to completed count for smooth progress
+                        total_completed = completed + (len(media_files) - len(missing_files))
+                        progress_tracker.update_media_progress(total_completed, len(missing_files))
+                
                 return sync_run_async(main.media_manager.get_media_manifest_and_download, 
                     user_token=user_token,
                     deck_hash=deck_hash,
                     filenames=missing_files,
-                    progress_callback=None,  # Uncomment if you want to show progress
-                    # progress_callback=lambda p: mw.taskman.run_on_main(
-                    #     lambda: mw.progress.update(
-                    #         value=int(p * 100),
-                    #         max=100,
-                    #         label=f"Downloading media files... {int(p * 100)}%"
-                    #     ) if mw.progress.busy() else None
-                    # )
+                    progress_callback=progress_callback,
                 )
             else:
+                # All files already present - update progress immediately
+                if progress_tracker:
+                    progress_tracker.update_media_progress(len(media_files), 0)
+                
                 return {
                     "success": True, 
-                    "message": f"No missing media files to download",
+                    "message": f"All {len(media_files)} media files already present",
                     "downloaded": 0,
-                    "skipped": 0
+                    "skipped": len(media_files)
                 }
         except Exception as e:
             logger.error(f"Error in process_media_download: {str(e)}")
             return {"success": False, "message": str(e)}
-        
-    def save_to_collection(self, collection, model_map_cache, note_type_data, import_config: ImportConfig):
-        self.save_metadata(collection, import_config.home_deck, model_map_cache, note_type_data)
-        med_res = {
-                    "success": True, 
-                    "message": f"Unknown Media download error",
-                    "downloaded": 0,
-                    "skipped": 0
-                }
-        op = QueryOp(
-            parent=mw,
-            op=lambda collection=collection,
-            parent_name="",
-            status_cb=self.import_progress_cb,
-            status_cur=0,
-            status_max=self.get_note_count(),
-            media_result=med_res,
-            import_config=import_config: 
-                self.save_decks_and_notes(collection=collection,
-                    parent_name=parent_name,
-                    status_cb=status_cb,
-                    status_cur=status_cur,
-                    status_max=status_max,
-                    import_config=import_config,
-                    media_result=media_result,
-                ),
-            success=self.on_success_wrapper,
-        )
-        op.with_progress("Synchronizing...").run_in_background()
-    
+            
     def handle_notetype_changes(self, collection, model_map_cache, note_type_data):
         def on_accepted():
             model_map_cache[old_model_uuid][note.note_model_uuid] = \
@@ -532,7 +631,7 @@ class Deck(JsonSerializableAnkiDict):
             
         self._save_deck(collection, "", home_deck) # We store the root deck in this thread to avoid concurrency issues
     
-    def save_decks_and_notes(self, collection, parent_name, status_cb, status_cur, status_max, import_config: ImportConfig, media_result):
+    def save_decks_and_notes(self, collection, parent_name, progress_tracker, status_cur, import_config: ImportConfig, media_result):
         full_name = self._save_deck(collection, parent_name, import_config.home_deck)
                     
         deck_id = self.anki_dict["id"] if self else None
@@ -540,7 +639,7 @@ class Deck(JsonSerializableAnkiDict):
             return status_cur, media_result
         int_time = anki.utils.int_time()
         
-        # Batch fetch existing notes
+        # Batch fetch existing notes for better performance
         note_uuids = [note.get_uuid() for note in self.notes]
         existing_notes = []
         for i in range(0, len(note_uuids), CHUNK_SIZE):
@@ -552,7 +651,7 @@ class Deck(JsonSerializableAnkiDict):
         existing_note_map = {guid: nid for guid, nid in existing_notes}
         
         # Group notes by note type to reduce model lookups
-        notes_by_type = defaultdict(list)  # note_model_uuid -> [notes]
+        notes_by_type = defaultdict(list)
         for note in self.notes:
             notes_by_type[note.note_model_uuid].append(note)
                 
@@ -560,8 +659,11 @@ class Deck(JsonSerializableAnkiDict):
         new_notes = []
         update_notes = []
         
+        deck_name = self.anki_dict.get('name', 'Unknown')
+        current_deck_notes = 0
+        
         for note_model_uuid, notes_group in notes_by_type.items():
-            note_model = self.metadata.models[note_model_uuid]  # Single lookup per note type
+            note_model = self.metadata.models[note_model_uuid]
             
             for note in notes_group:
                 uuid = note.get_uuid()
@@ -578,8 +680,11 @@ class Deck(JsonSerializableAnkiDict):
                 note.anki_object.mod = int_time
                 
                 status_cur += 1
-                if status_cur % 100 == 0:
-                    status_cb(status_cur, status_max)
+                current_deck_notes += 1
+                
+                # Update progress more frequently for better UX, but throttled by the tracker
+                if current_deck_notes % 50 == 0 or current_deck_notes == len(self.notes):
+                    progress_tracker.update_notes_progress(status_cur, deck_name)
                     if mw.progress.want_cancel():
                         return status_cur, media_result
 
@@ -589,22 +694,28 @@ class Deck(JsonSerializableAnkiDict):
         if update_notes:
             Note.bulk_update_notes(collection, update_notes, deck_id, import_config)
             
-        # import media
+        # Process media files
         media_files = self.get_media_file_list(data_from_models=True, include_children=False)
-        # Download media files after deck import
+        
         this_deck_media_res = None
         if media_files:
-            this_deck_media_res = self.process_media_download(import_config.deck_hash, media_files)
+            this_deck_media_res = self.process_media_download(
+                import_config.deck_hash, 
+                media_files, 
+                progress_tracker, 
+                deck_name
+            )
         
-        # Append deck media to media result
+        # Update combined media result
         if this_deck_media_res:
             media_result["downloaded"] += this_deck_media_res.get("downloaded", 0)
             media_result["skipped"] += this_deck_media_res.get("skipped", 0)
             media_result["success"] = media_result["success"] and this_deck_media_res.get("success", False)
             
+        # Process children with unified progress
         for child in self.children:
             status_cur, media_result = child.save_decks_and_notes(
-                collection, full_name, status_cb, status_cur, status_max, import_config, media_result
+                collection, full_name, progress_tracker, status_cur, import_config, media_result
             )
             if mw.progress.want_cancel():
                 return status_cur, media_result

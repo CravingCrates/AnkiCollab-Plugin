@@ -145,7 +145,7 @@ class NoteModel(JsonSerializableAnkiDict):
             if self.check_fields_compatible(old_model_obj, self):
                 return
         else:
-            # For non-projektanki note types, we can later change it so it checks templates too
+            # For non-projektanki note types, use original semantic check (includes templates)
             if self.check_semantically_identical(NoteModel.from_json(old_model), self):
                 return
             

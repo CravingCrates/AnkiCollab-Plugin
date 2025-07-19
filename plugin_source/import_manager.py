@@ -1,5 +1,6 @@
 from collections import defaultdict
 import json
+from typing import Sequence
 
 import requests
 from datetime import datetime, timedelta, timezone
@@ -7,9 +8,12 @@ from datetime import datetime, timedelta, timezone
 import aqt
 import aqt.utils
 from aqt.operations import QueryOp
+from anki.errors import NotFoundError
+from anki.notes import NoteId
 
 from aqt.qt import *
 from aqt import mw
+from anki.decks import DeckId
 
 from .var_defs import API_BASE_URL
 
@@ -74,34 +78,40 @@ def update_deck_stats_enabled(given_deck_hash, stats_enabled):
                 details["last_stats_timestamp"] = 0  # Reset last stats timestamp if stats are disabled
 
 def get_noteids_from_uuids(guids):
+    """Get note IDs from GUIDs using prepared statements for better performance."""
+    if not mw.col or not guids:
+        return []
+    
     noteids = []
-    for guid in guids:
-        query = "select id from notes where guid=?"
-        note_id = aqt.mw.col.db.scalar(query, guid)
-        if note_id:
-            noteids.append(note_id)
+    try:
+        # Process in batches to avoid memory issues with large GUID lists
+        batch_size = 1000  # Process 1000 GUIDs at a time
+        
+        for i in range(0, len(guids), batch_size):
+            batch = guids[i:i + batch_size]
+            
+            # Use prepared statement with IN clause for batch processing
+            placeholders = ','.join(['?' for _ in batch])
+            query = f"SELECT id FROM notes WHERE guid IN ({placeholders})"
+            
+            # Pass parameters using *batch to unpack the list
+            batch_results = mw.col.db.list(query, *batch)
+            noteids.extend(batch_results)
+            
+    except Exception as e:
+        logger.error(f"Error getting note IDs from GUIDs using prepared statements: {e}")
+        # Fallback to individual queries if batch processing fails
+        for guid in guids:
+            try:
+                query = "SELECT id FROM notes WHERE guid = ?"
+                note_id = mw.col.db.scalar(query, guid)
+                if note_id:
+                    noteids.append(note_id)
+            except Exception as e2:
+                logger.error(f"Error getting note ID for GUID {guid}: {e2}")
+                continue
+    
     return noteids
-
-
-def get_guids_from_noteids(nids):
-    guids = []
-    for nid in nids:
-        query = "select guid from notes where id=?"
-        guid = aqt.mw.col.db.scalar(query, nid)
-        if guid:
-            guids.append(guid)
-    return guids
-
-
-def open_browser_with_nids(nids):
-    if not nids:
-        return
-    browser = aqt.dialogs.open("Browser", aqt.mw)
-    browser.form.searchEdit.lineEdit().setText(
-        "nid:" + " or nid:".join(str(nid) for nid in nids)
-    )
-    browser.onSearchActivated()
-
 
 def delete_notes(nids):
     if not nids:
@@ -115,15 +125,62 @@ def delete_notes(nids):
         )
     )
 
+def get_guids_from_noteids(nids):
+    """Get GUIDs from note IDs using prepared statements for better performance."""
+    if not mw.col or not nids:
+        return []
+    
+    guids = []
+    try:
+        # Process in batches to avoid memory issues with large note ID lists
+        batch_size = 1000  # Process 1000 note IDs at a time
+        
+        for i in range(0, len(nids), batch_size):
+            batch = nids[i:i + batch_size]
+            
+            # Use prepared statement with IN clause for batch processing
+            placeholders = ','.join(['?' for _ in batch])
+            query = f"SELECT guid FROM notes WHERE id IN ({placeholders})"
+            
+            # Pass parameters using *batch to unpack the list
+            batch_results = mw.col.db.list(query, *batch)
+            guids.extend(batch_results)
+            
+    except Exception as e:
+        logger.error(f"Error getting GUIDs from note IDs using prepared statements: {e}")
+        # Fallback to individual queries if batch processing fails
+        for nid in nids:
+            try:
+                query = "SELECT guid FROM notes WHERE id = ?"
+                guid = mw.col.db.scalar(query, nid)
+                if guid:
+                    guids.append(guid)
+            except Exception as e2:
+                logger.error(f"Error getting GUID for note ID {nid}: {e2}")
+                continue
+    
+    return guids
+
+
+def open_browser_with_nids(nids):
+    if not nids:
+        return
+    browser = aqt.dialogs.open("Browser", aqt.mw)
+    browser.form.searchEdit.lineEdit().setText(
+        "nid:" + " or nid:".join(str(nid) for nid in nids)
+    )
+    browser.onSearchActivated()
 
 def update_stats() -> None:
+    """Update stats for decks where stats sharing is already enabled."""
     decks = DeckManager()
 
     for deck_hash, details in decks:
         if details.get("stats_enabled", False):
-            # Only upload stats if the user wants to share them
-            (share_data, last_stats_timestamp) = wants_to_share_stats(deck_hash)
-            if share_data:
+            # Only upload stats if the user has already agreed to share them
+            share_stats = details.get("share_stats", False)
+            if share_stats:
+                last_stats_timestamp = details.get("last_stats_timestamp", 0)
                 rh = ReviewHistory(deck_hash)
                 op = QueryOp(
                     parent=mw,
@@ -137,31 +194,128 @@ def update_stats() -> None:
 
 
 def wants_to_share_stats(deck_hash) -> (bool, int):
+    """Get stats sharing preference without showing dialog."""
     with DeckManager() as decks:
         details = decks.get_by_hash(deck_hash)
         if details is None:
-            raise Exception
+            return False, 0
 
         last_stats_timestamp = details.get("last_stats_timestamp", 0)
-        stats_enabled = details.get("share_stats")
-
-        if stats_enabled is None:
-            deck = get_local_deck_from_id(details["deckId"])
-            dialog = AskShareStatsDialog(deck)
-            choice = dialog.exec()
-            if choice == QDialog.DialogCode.Accepted:
-                stats_enabled = True
-            else:
-                stats_enabled = False
-            if dialog.isChecked():
-                details["share_stats"] = stats_enabled
-                
+        stats_enabled = details.get("share_stats", False)
         return stats_enabled, last_stats_timestamp
 
 
-def install_update(subscription):
+def _install_deck_op(deck, config, map_cache=None, note_type_data=None):
+    """Background operation to install deck updates."""
+    assert mw.col is not None, "Collection must be available for deck installation"
+        
+    print("Saving metadata.")
+    deck.save_metadata(mw.col, config.home_deck, map_cache, note_type_data)
+    
+    print("Saving decks and notes.")
+    # Create media result structure
+    med_res = {
+        "success": True, 
+        "message": f"Unknown Media download error",
+        "downloaded": 0,
+        "skipped": 0
+    }
+    
+    total_notes, total_media = deck.calculate_total_work()
+    progress_tracker = deck.create_unified_progress_tracker(total_notes, total_media)
+
+    return deck.save_decks_and_notes(
+        collection=mw.col,
+        parent_name="",
+        progress_tracker=progress_tracker,  # Use unified tracker
+        status_cur=0,
+        import_config=config,
+        media_result=med_res
+        # No status_max needed with unified progress
+    )
+    
+def _on_deck_installed(install_result, deck, subscription, input_hash=None, update_timestamp_after=False):
+    """Success callback after deck installation."""
+    # Runs on Main Thread
+    
+    deck.on_success_wrapper(install_result)
+    
+    deleted_notes = subscription.get("deleted_notes", [])
+    deck_name = deck.anki_dict["name"]
+    deck_hash = subscription["deck_hash"]
+    
+    # unfortunately, the db scalar shits itself when called from the success callback after the deck has been installed
+    if deleted_notes:
+        print(f"Processing {len(deleted_notes)} deleted notes...")
+        # Handle deleted Notes
+        deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
+        print(f"Found {len(deleted_nids)} note IDs for deleted notes.")
+        if deleted_nids:
+            del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash)
+            del_notes_choice = del_notes_dialog.exec()
+
+            if del_notes_choice == QDialog.DialogCode.Accepted:
+                delete_notes(deleted_nids)
+            elif del_notes_choice == QDialog.DialogCode.Rejected:
+                open_browser_with_nids(deleted_nids)
+            
+    # Handle new deck registration if input_hash is provided
+    if input_hash:
+        with DeckManager() as decks:
+            details = decks.get_by_hash(input_hash)
+            if details and details["deckId"] == 0 and mw.col:  # should only be the case once when they add a new subscription and never ambiguous
+                details["deckId"] = aqt.mw.col.decks.id(deck_name)
+                # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
+                details["timestamp"] = (
+                        datetime.now(timezone.utc) - timedelta(days=1)
+                ).strftime("%Y-%m-%d %H:%M:%S")
+                details["stats_enabled"] = subscription["stats_enabled"]
+    else:
+        # Only ask for a rating if they are updating a deck and not adding a new deck to avoid spam popups
+        ask_for_rating()
+
+    # Update timestamp if requested (for changelog updates)
+    if update_timestamp_after:
+        update_timestamp(subscription["deck_hash"])
+
+    # Now handle stats sharing dialog AFTER import is complete
+    deck_hash = subscription["deck_hash"]
+    _handle_stats_sharing_after_import(deck_hash, deck_name)
+
+    mw.reset()  # Reset the main window to reflect changes
+    
+    return deck_name
+
+def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
+    """Handle stats sharing dialog after import is complete."""
+    try:
+        with DeckManager() as decks:
+            details = decks.get_by_hash(deck_hash)
+            if details is None:
+                return
+            
+            stats_enabled = details.get("share_stats")
+            if stats_enabled is None:
+                # Only show dialog if not already decided
+                if deck_name:
+                    dialog = AskShareStatsDialog(deck_name)
+                    choice = dialog.exec()
+                    if choice == QDialog.DialogCode.Accepted:
+                        stats_enabled = True
+                    else:
+                        stats_enabled = False
+                    
+                    if dialog.isChecked():
+                        details["share_stats"] = stats_enabled
+    except Exception as e:
+        logger.error(f"Error handling stats sharing dialog: {e}")
+        # Don't let this error break the import process
+
+def install_update(subscription, input_hash=None, update_timestamp_after=False):
     print(f"Installing update for deck: {subscription['deck_hash']}")
     deck_hash = subscription["deck_hash"]
+    parent_widget = QApplication.focusWidget() or mw
+    
     if check_optional_tag_changes(
             deck_hash, subscription["optional_tags"]
     ):
@@ -182,26 +336,25 @@ def install_update(subscription):
         True if subscription["optional_tags"] else False,
         deck_hash
     )
-    config.home_deck = get_home_deck(deck_hash)
     print("Config prepared.")
+
     map_cache = defaultdict(dict)
     note_type_data = {}
-    deck.handle_notetype_changes(aqt.mw.col, map_cache, note_type_data)
-    print("Handling note type changes.")
-    deck.save_to_collection(aqt.mw.col, map_cache, note_type_data, import_config=config)
-    print("Deck saved to collection.")
-
-    # Handle deleted Notes
-    deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
-    if deleted_nids:
-        del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash)
-        del_notes_choice = del_notes_dialog.exec()
-
-        if del_notes_choice == QDialog.DialogCode.Accepted:
-            delete_notes(deleted_nids)
-        elif del_notes_choice == QDialog.DialogCode.Rejected:
-            open_browser_with_nids(deleted_nids)
-
+    deck.handle_notetype_changes(mw.col, map_cache, note_type_data)
+    print("Handled note type changes.")
+    
+    # Start QueryOp for collection operations
+    op = QueryOp(
+        parent=parent_widget,
+        op=lambda col: _install_deck_op(deck, config, map_cache, note_type_data),
+        success=lambda res: _on_deck_installed(
+            res, deck, subscription, input_hash, update_timestamp_after
+        )
+    )
+    op.with_progress("Installing/Updating deck...")
+    op.run_in_background()
+        
+    # Return the deck name (note: this will be returned before the operation completes)
     return deck.anki_dict["name"]
 
 
@@ -214,6 +367,7 @@ def postpone_update():
 
 
 def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
+    home_deck = get_home_deck(deck_hash)
     config = ImportConfig(
         add_tag_to_cards=[],
         optional_tags=optional_tags,
@@ -222,7 +376,7 @@ def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
         use_media=False,
         ignore_deck_movement=get_deck_movement_status(),
         suspend_new_cards=get_card_suspension_status(),
-        home_deck=None,
+        home_deck=home_deck or "",  # Provide empty string as default
         deck_hash=deck_hash,
     )
     for protected_field in protected_fields:
@@ -245,15 +399,13 @@ def show_changelog_popup(subscription):
         choice = dialog.exec()
 
         if choice == QDialog.DialogCode.Accepted:
-            install_update(subscription)
-            update_timestamp(deck_hash)
+            install_update(subscription, update_timestamp_after=True)
         elif choice == QDialog.DialogCode.Rejected:
             postpone_update()
         else:
             abort_update(deck_hash)
     else:  # Skip changelog window if there is no message for the user
-        install_update(subscription)
-        update_timestamp(deck_hash)
+        install_update(subscription, update_timestamp_after=True)
 
 
 def ask_for_rating():
@@ -295,28 +447,10 @@ def import_webresult(data):
 
     for subscription in webresult:
         if input_hash:  # New deck
-            deck_name = install_update(subscription)
-
-            with DeckManager() as decks:
-                details = decks.get_by_hash(input_hash)
-
-                if details["deckId"] == 0:  # should only be the case once when they add a new subscription and never ambiguous
-                    details["deckId"] = aqt.mw.col.decks.id(deck_name)
-                    # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
-                    details["timestamp"] = (
-                            datetime.now(timezone.utc) - timedelta(days=1)
-                    ).strftime("%Y-%m-%d %H:%M:%S")
-                    details["stats_enabled"] = subscription["stats_enabled"]
-
+            install_update(subscription, input_hash)
         else:  # Update deck
             show_changelog_popup(subscription)
 
-    if not input_hash:  # Only ask for a rating if they are updating a deck and not adding a new deck to avoid spam popups
-        ask_for_rating()
-        _info = "AnkiCollab: Updated deck(s) successfully!"
-        aqt.mw.taskman.run_on_main(
-            lambda: aqt.utils.tooltip(_info, parent=mw)
-        )
     update_stats()
 
 
@@ -340,7 +474,7 @@ def get_home_deck(given_deck_hash):
     decks = DeckManager()
     details = decks.get_by_hash(given_deck_hash)
 
-    if details and details["deckId"] != 0:
+    if details and details["deckId"] != 0 and mw.col:
         return mw.col.decks.name_if_exists(details["deckId"])
 
 
