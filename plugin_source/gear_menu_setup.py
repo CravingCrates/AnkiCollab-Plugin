@@ -53,14 +53,15 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
         if deck_hash is None:
             aqt.utils.tooltip("No valid deck!")
             return
-        op = QueryOp(
-            parent=mw,
-            op=lambda _: deck.process_media_download(deck_hash, missing_media),
-            success=deck.on_media_download_done,
-        )
-        op.with_progress(
-            "Downloading missing media..."
-        ).run_in_background()
+        media_result = {
+                        "success": False, 
+                        "downloaded": 0, 
+                        "skipped": 0,
+                        "deck_hash": deck_hash,
+                        "missing_files": missing_media
+                    }
+        
+        deck._start_media_download_from_main_thread(deck_hash, missing_media, media_result)
         
     def reset_deck_timestamp():
         deck_hash = get_deck_hash_from_did(did)

@@ -39,8 +39,8 @@ from .var_defs import API_BASE_URL
 from .media_manager import MediaManager
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ankicollab")
+logger.setLevel(logging.WARNING)
 
 logger.info("AnkiCollab Add-on Loading...")
 

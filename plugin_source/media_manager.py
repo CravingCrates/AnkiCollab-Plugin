@@ -127,6 +127,7 @@ class MediaManager:
         self.hash_cache = {}
         self.exists_cache = {}
         self.download_cache = {}
+        self.optimization_cache = {}  # Cache for optimization results
 
         self.session = requests.Session()
         self.session.verify = VERIFY_SSL
@@ -136,6 +137,7 @@ class MediaManager:
         self._semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
         max_worker = min(32, (os.cpu_count() or 1) + 2)
         self.thread_executor = ThreadPoolExecutor(max_workers=max_worker)
+        logger.debug(f"Initialized thread pool with {max_worker} workers")
         mimetypes.add_type('image/webp', '.webp') # how the fuck is this not a default
 
     async def _get_semaphore(self) -> asyncio.Semaphore:
@@ -183,6 +185,14 @@ class MediaManager:
 
         # Run the blocking request in the thread pool
         return await loop.run_in_executor(self.thread_executor, do_request)
+
+    def clear_caches(self):
+        """Clear all internal caches to free memory or force re-computation."""
+        self.hash_cache.clear()
+        self.exists_cache.clear()
+        self.download_cache.clear()
+        self.optimization_cache.clear()
+        logger.info("All media manager caches cleared")
 
     def set_media_folder(self, media_folder: str):
         self.media_folder = Path(media_folder)
@@ -356,6 +366,10 @@ class MediaManager:
                          raise RuntimeError("No running event loop found for MD5 calculation")
                     file_hash = await loop.run_in_executor(self.thread_executor, calculate_md5)
 
+                # Ensure file_hash is not None before using it
+                if not file_hash:
+                    raise MediaHashError(f"Failed to calculate MD5 hash for {filepath}")
+
                 binary_hash = binascii.unhexlify(file_hash)
                 base64_md5 = base64.b64encode(binary_hash).decode('ascii')
                 headers = {"Content-Type": content_type, "Content-MD5": base64_md5}
@@ -378,12 +392,12 @@ class MediaManager:
                         )
                         response.raise_for_status()
                         return response
-                    except IOError as io_err:
-                         logger.error(f"IOError during S3 PUT preparation for {filepath}: {io_err}")
-                         raise # Re-raise to be caught by outer try/except
                     except requests.exceptions.RequestException as req_exc:
                          logger.error(f"Network error during S3 PUT for {filepath}: {req_exc}")
                          raise # Re-raise
+                    except IOError as io_err:
+                         logger.error(f"IOError during S3 PUT preparation for {filepath}: {io_err}")
+                         raise # Re-raise to be caught by outer try/except
 
                 try:
                     loop = asyncio.get_running_loop()
@@ -604,7 +618,7 @@ class MediaManager:
         }
 
     @retry(max_tries=3, delay=1)
-    async def check_media_bulk(self, user_token:str, deck_hash: str, files: List[Dict]) -> Dict:
+    async def check_media_bulk(self, user_token:str, deck_hash: str, bulk_operation_id: str, files: List[Dict]) -> Dict:
         if not files:
             return {"existing_files": [], "missing_files": [], "failed_files": [], "batch_id": None}
 
@@ -626,8 +640,8 @@ class MediaManager:
                  return {"existing_files": [], "missing_files": [], "failed_files": [], "batch_id": None}
 
 
-            data = {"token": user_token, "deck_hash": deck_hash, "files": valid_files_info}
-
+            data = {"token": user_token, "deck_hash": deck_hash, "files": valid_files_info, "bulk_operation_id": bulk_operation_id}
+            print(f"Bulk Operation ID: {bulk_operation_id}")
             try:
                 response = await self.async_request("post", url, json=data)
                 # No need for raise_for_status here, async_request does it
@@ -649,14 +663,13 @@ class MediaManager:
                 logger.error(f"Check Media Bulk: Network or parsing error: {str(e)}")
                 raise MediaServerError(f"Network or parsing error checking media: {str(e)}") from e
 
-    async def optimize_media_for_upload(self, file_note_pairs: List[Tuple[str, str]]) -> Tuple[Dict[str, str], List[Dict], Dict[str, str]]:
+    async def optimize_media_for_upload(self, file_note_pairs: List[Tuple[str, str]], progress_callback=None) -> Tuple[Dict[str, str], List[Dict], Dict[str, str]]:
         # Ensure media_optimizer is available
         try:
             from . import media_optimizer
         except ImportError:
             logger.error("media_optimizer module not found. Cannot optimize media.")
             return {}, [], {}
-
 
         files_info = []
         file_paths = {}
@@ -665,7 +678,7 @@ class MediaManager:
         if not file_note_pairs:
             return filename_mapping, files_info, file_paths
 
-        base_dir = mw.col.media.dir()
+        base_dir = mw.col.media.dir() if mw.col else None
         if not base_dir:
              logger.error("Anki media directory not found. Cannot process media.")
              return {}, [], {}
@@ -674,6 +687,10 @@ class MediaManager:
         regular_files = []
 
         # Initial pass to categorize and check existence/type
+        logger.info(f"Starting media optimization for {len(file_note_pairs)} files...")
+        if progress_callback:
+            progress_callback(0.05)  # 5% - started categorization
+            
         for filename, note_guid in file_note_pairs:
             if not filename: # Skip empty filenames
                  logger.warning(f"Skipping empty filename associated with note GUID {note_guid}")
@@ -703,8 +720,16 @@ class MediaManager:
                 # No size check here yet, optimization might reduce it
                 regular_files.append((filename, filepath_obj, note_guid))
 
-        # Process SVGs
+        logger.info(f"Categorized files: {len(svg_files)} SVGs, {len(regular_files)} regular files")
+        if progress_callback:
+            progress_callback(0.1)  # 10% - categorization complete
+
+        # Process SVGs in batch (already optimized)
         if svg_files:
+            logger.info(f"Processing {len(svg_files)} SVG files...")
+            if progress_callback:
+                progress_callback(0.15)  # 15% - starting SVG processing
+                
             svg_optimize_list = [(fname, fp) for fname, fp, _ in svg_files]
             try:
                 svg_optimized = await media_optimizer.optimize_svg_files(svg_optimize_list)
@@ -734,41 +759,151 @@ class MediaManager:
                     except Exception as e:
                          logger.exception(f"Unexpected error processing optimized SVG {filename}: {e}")
 
+            if progress_callback:
+                progress_callback(0.3)  # 30% - SVG processing complete
 
-        # Process regular files
-        for filename, filepath_obj, note_guid in regular_files:
-            try:
-                # audio files dont get optimized         
-                opt_filepath, current_filename, was_optimized = await media_optimizer.optimize_media_file(filename, filepath_obj)
-
-                if filename != current_filename:
-                    filename_mapping[filename] = current_filename
-                    # Use the new filename for hash calculation etc.
-                    filename = current_filename
-
-                # Use the potentially optimized filepath for hash/size
-                file_hash, file_size = await self.compute_file_hash_and_size(opt_filepath)
-
-                if file_size > MAX_FILE_SIZE:
-                    logger.warning(f"File (optimized: {was_optimized}) exceeds size limit: {opt_filepath} ({file_size} bytes)")
-                    # If optimized, remove mapping as we can't upload it
-                    if was_optimized and filename in filename_mapping:
-                         del filename_mapping[filename]
-                    continue
-
-                files_info.append({"hash": file_hash, "filename": filename, "note_guid": note_guid, "file_size": file_size})
-                file_paths[file_hash] = str(opt_filepath) # Store as string path
-
-            except (MediaHashError, FileNotFoundError, OSError) as e:
-                logger.error(f"Error preparing file {filename}: {str(e)}")
-            except Exception as e:
-                 logger.exception(f"Unexpected error preparing file {filename}: {e}")
-
+        # Process regular files in parallel batches
+        if regular_files:
+            logger.info(f"Processing {len(regular_files)} regular files in parallel...")
+            batch_size = min(50, max(10, len(regular_files) // 10))  # Dynamic batch size
+            logger.info(f"Using batch size of {batch_size} for parallel processing")
+            
+            for i in range(0, len(regular_files), batch_size):
+                batch = regular_files[i:i+batch_size]
+                batch_num = i//batch_size + 1
+                total_batches = (len(regular_files) + batch_size - 1)//batch_size
+                logger.debug(f"Processing batch {batch_num}/{total_batches} ({len(batch)} files)")
+                
+                # Update progress for this batch
+                if progress_callback:
+                    # Progress from 30% to 90% based on batch completion
+                    batch_progress = 0.3 + (0.6 * batch_num / total_batches)
+                    progress_callback(batch_progress)
+                
+                # Process batch in parallel
+                batch_tasks = []
+                for filename, filepath_obj, note_guid in batch:
+                    task = self._process_regular_file(filename, filepath_obj, note_guid, media_optimizer)
+                    batch_tasks.append(task)
+                
+                # Wait for batch to complete
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Process batch results
+                for idx, result in enumerate(batch_results):
+                    filename, filepath_obj, note_guid = batch[idx]
+                    
+                    if isinstance(result, Exception):
+                        logger.error(f"Exception processing file {filename}: {result}")
+                        continue
+                    
+                    if result is None:  # File was skipped or failed
+                        continue
+                    
+                    # Result should be a tuple of (file_info, file_path_entry, mapping_entry)
+                    if not isinstance(result, tuple) or len(result) != 3:
+                        logger.error(f"Invalid result format for file {filename}: {result}")
+                        continue
+                    
+                    file_info, file_path_entry, mapping_entry = result
+                    
+                    if file_info:
+                        files_info.append(file_info)
+                    if file_path_entry:
+                        file_hash, file_path = file_path_entry
+                        file_paths[file_hash] = file_path
+                    if mapping_entry:
+                        old_name, new_name = mapping_entry
+                        filename_mapping[old_name] = new_name
 
         logger.info(f"Media optimization complete. Mapping: {len(filename_mapping)}, Files to check: {len(files_info)}")
+        if progress_callback:
+            progress_callback(1.0)  # 100% - optimization complete
         return filename_mapping, files_info, file_paths
 
-    async def upload_media_bulk(self, user_token: str, files_info: List[Dict], file_paths: Dict[str, str], deck_hash: str, progress_callback=None) -> Dict:
+    async def _process_regular_file(self, filename: str, filepath_obj: Path, note_guid: str, media_optimizer) -> Optional[Tuple]:
+        """Process a single regular file for optimization. Returns tuple of (file_info, file_path_entry, mapping_entry) or None if failed."""
+        try:
+            # Check cache first to avoid re-optimization
+            cache_key = str(filepath_obj)
+            try:
+                mtime = filepath_obj.stat().st_mtime
+                cached_entry = self.optimization_cache.get(cache_key)
+                if cached_entry and cached_entry[0] == mtime:
+                    # Cache hit - use cached result
+                    logger.debug(f"Using cached optimization result for {filename}")
+                    cached_mtime, opt_filepath, current_filename, was_optimized = cached_entry
+                    
+                    # Verify cached results are valid
+                    if opt_filepath is None or current_filename is None or not opt_filepath or not current_filename:
+                        logger.warning(f"Invalid cached data for {filename}, re-optimizing (opt_filepath={opt_filepath}, current_filename={current_filename})")
+                        # Clear bad cache entry and fall through to re-optimization
+                        del self.optimization_cache[cache_key]
+                    elif Path(opt_filepath).exists():
+                        # Verify cached file still exists
+                        mapping_entry = None
+                        if filename != current_filename:
+                            mapping_entry = (filename, current_filename)
+                            filename = current_filename
+
+                        file_hash, file_size = await self.compute_file_hash_and_size(opt_filepath)
+
+                        if file_size > MAX_FILE_SIZE:
+                            logger.warning(f"Cached file (optimized: {was_optimized}) exceeds size limit: {opt_filepath} ({file_size} bytes)")
+                            return None
+
+                        file_info = {"hash": file_hash, "filename": filename, "note_guid": note_guid, "file_size": file_size}
+                        file_path_entry = (file_hash, str(opt_filepath))
+                        
+                        return (file_info, file_path_entry, mapping_entry)
+                    else:
+                        logger.debug(f"Cached file no longer exists for {filename}, re-optimizing")
+            except OSError:
+                # File might have been deleted or changed, proceed with optimization
+                pass
+            
+            # Cache miss or file changed - perform optimization
+            opt_filepath, current_filename, was_optimized = await media_optimizer.optimize_media_file(filename, filepath_obj)
+            
+            # Check if optimization failed
+            if opt_filepath is None or current_filename is None or not opt_filepath or not current_filename:
+                logger.warning(f"Optimization failed for file {filename}, skipping (opt_filepath={opt_filepath}, current_filename={current_filename})")
+                return None
+            
+            # Cache the optimization result
+            try:
+                mtime = filepath_obj.stat().st_mtime
+                self.optimization_cache[cache_key] = (mtime, opt_filepath, current_filename, was_optimized)
+            except OSError:
+                # File might have been deleted during optimization
+                pass
+
+            mapping_entry = None
+            if filename != current_filename:
+                mapping_entry = (filename, current_filename)
+                # Use the new filename for hash calculation etc.
+                filename = current_filename
+
+            # Use the potentially optimized filepath for hash/size
+            file_hash, file_size = await self.compute_file_hash_and_size(opt_filepath)
+
+            if file_size > MAX_FILE_SIZE:
+                logger.warning(f"File (optimized: {was_optimized}) exceeds size limit: {opt_filepath} ({file_size} bytes)")
+                return None
+
+            file_info = {"hash": file_hash, "filename": filename, "note_guid": note_guid, "file_size": file_size}
+            file_path_entry = (file_hash, str(opt_filepath))
+            
+            return (file_info, file_path_entry, mapping_entry)
+
+        except (MediaHashError, FileNotFoundError, OSError) as e:
+            logger.error(f"Error preparing file {filename}: {str(e)}")
+            return None
+        except Exception as e:
+             logger.exception(f"Unexpected error preparing file {filename}: {e}")
+             return None
+
+    async def upload_media_bulk(self, user_token: str, files_info: List[Dict], file_paths: Dict[str, str], deck_hash: str, bulk_operation_id: str, progress_callback=None) -> Dict:
         total_initial_files = len(files_info)
         if not files_info:
             logger.warning("upload_media_bulk called with no files_info.")
@@ -784,7 +919,7 @@ class MediaManager:
             logger.info(f"Checking {total_initial_files} files with server...")
             if progress_callback: progress_callback(0.1) # Progress: Checking started
 
-            bulk_check_result = await self.check_media_bulk(user_token, deck_hash, files_info)
+            bulk_check_result = await self.check_media_bulk(user_token, deck_hash, bulk_operation_id, files_info)
 
             existing_files = bulk_check_result.get("existing_files", [])
             existing_count = len(existing_files)
@@ -898,7 +1033,7 @@ class MediaManager:
             try:
                 if progress_callback: progress_callback(0.95) # Progress: Confirming
 
-                await self.confirm_media_bulk_upload(batch_id, uploaded_hashes)
+                await self.confirm_media_bulk_upload(batch_id, bulk_operation_id, uploaded_hashes)
 
                 logger.info("Bulk upload confirmed successfully.")
                 if progress_callback: progress_callback(1.0) # Progress: Done
@@ -951,7 +1086,7 @@ class MediaManager:
 
 
     @retry(max_tries=3, delay=1)
-    async def confirm_media_bulk_upload(self, batch_id: str, confirmed_files: List[str]) -> None: # Return None on success
+    async def confirm_media_bulk_upload(self, batch_id: str, bulk_operation_id: str, confirmed_files: List[str]) -> None: # Return None on success
         if not confirmed_files:
              logger.warning("confirm_media_bulk_upload called with no files to confirm.")
              return # Nothing to do
@@ -961,7 +1096,7 @@ class MediaManager:
             await self.rate_limiter.wait_if_needed()
 
             url = f"{self.api_base_url}/media/confirm/bulk"
-            data = {"batch_id": batch_id, "confirmed_files": confirmed_files}
+            data = {"batch_id": batch_id, "confirmed_files": confirmed_files, "bulk_operation_id": bulk_operation_id}
 
             try:
                 response = await self.async_request("post", url, json=data)

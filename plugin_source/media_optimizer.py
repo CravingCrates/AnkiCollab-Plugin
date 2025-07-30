@@ -19,7 +19,7 @@ logger = logging.getLogger("ankicollab")
 from .main import media_manager
 
 try:
-    from PIL import Image, UnidentifiedImageError
+    from PIL import Image, UnidentifiedImageError  # type: ignore
     # Newer Pillow versions use Resampling enums
     try:
         PIL_Resampling = Image.Resampling
@@ -91,8 +91,8 @@ def is_allowed_filename(filename):
         # If it *does* fail the regex but *is* all ASCII, we still reject it based on the regex.
         return False
 
-    # Check first character is alphanumeric
-    if not filename[0].isalnum():
+    # Check first character is alphanumeric or underscore
+    if not (filename[0].isalnum() or filename[0] == '_'):
         return False
     
     # Check contains at least one alphanumeric
@@ -198,8 +198,15 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
             original_mode = img.mode
             resized = False
 
-            # Convert RGBA to RGB with white background if saving to JPEG
-            if img.mode in ('RGBA', 'LA') and (not convert_to_webp and des_path.suffix.lower() not in ['.png', '.webp', '.tif']):
+            # Convert RGBA to RGB with white background only for formats that don't support transparency
+            # WebP, PNG, and TIFF support transparency, so preserve it when converting to those formats
+            needs_rgb_conversion = (
+                img.mode in ('RGBA', 'LA') and 
+                not convert_to_webp and 
+                des_path.suffix.lower() not in ['.png', '.webp', '.tif']
+            )
+            
+            if needs_rgb_conversion:
                 logger.debug(f"Converting {img.mode} to RGB for {filepath.name} before saving to {des_path.suffix}")
                 try:
                     # Create a white background and paste the image onto it
@@ -348,7 +355,7 @@ async def optimize_media_file(filename, filepath_obj):
     current_filename = filename
 
     # fix mislabeled .webp files (caused by a previous bug lol)
-    if OPTIMIZATION_AVAILABLE and current_filename.lower().endswith('.webp'):
+    if OPTIMIZATION_AVAILABLE and isinstance(current_filename, str) and current_filename.lower().endswith('.webp'):
         actual_format = None
         try:
             with Image.open(current_filepath_obj) as img:

@@ -1,5 +1,6 @@
 from collections import defaultdict
 import json
+import logging
 from typing import Sequence
 
 import requests
@@ -209,10 +210,10 @@ def _install_deck_op(deck, config, map_cache=None, note_type_data=None):
     """Background operation to install deck updates."""
     assert mw.col is not None, "Collection must be available for deck installation"
         
-    print("Saving metadata.")
-    deck.save_metadata(mw.col, config.home_deck, map_cache, note_type_data)
+    logger.info("Saving metadata.")
+    deck.save_metadata(mw.col, config.home_deck)
     
-    print("Saving decks and notes.")
+    logger.info("Saving decks and notes.")
     # Create media result structure
     med_res = {
         "success": True, 
@@ -221,17 +222,14 @@ def _install_deck_op(deck, config, map_cache=None, note_type_data=None):
         "skipped": 0
     }
     
-    total_notes, total_media = deck.calculate_total_work()
-    progress_tracker = deck.create_unified_progress_tracker(total_notes, total_media)
-
-    return deck.save_decks_and_notes(
+    total_notes = deck.calculate_total_work()
+    logger.info(f"Total notes: {total_notes}")
+    progress_tracker = deck.create_unified_progress_tracker(total_notes)
+    logger.info("Workload calculated, starting bulk save.")
+    return deck.save_decks_and_notes_bulk(
         collection=mw.col,
-        parent_name="",
         progress_tracker=progress_tracker,  # Use unified tracker
-        status_cur=0,
-        import_config=config,
-        media_result=med_res
-        # No status_max needed with unified progress
+        import_config=config
     )
     
 def _on_deck_installed(install_result, deck, subscription, input_hash=None, update_timestamp_after=False):
@@ -340,7 +338,7 @@ def install_update(subscription, input_hash=None, update_timestamp_after=False):
 
     map_cache = defaultdict(dict)
     note_type_data = {}
-    deck.handle_notetype_changes(mw.col, map_cache, note_type_data)
+    #deck.handle_notetype_changes(mw.col, map_cache, note_type_data)
     print("Handled note type changes.")
     
     # Start QueryOp for collection operations
@@ -368,6 +366,7 @@ def postpone_update():
 
 def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
     home_deck = get_home_deck(deck_hash)
+    new_notes_home_deck = get_new_notes_home_deck(deck_hash)
     config = ImportConfig(
         add_tag_to_cards=[],
         optional_tags=optional_tags,
@@ -377,6 +376,7 @@ def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
         ignore_deck_movement=get_deck_movement_status(),
         suspend_new_cards=get_card_suspension_status(),
         home_deck=home_deck or "",  # Provide empty string as default
+        new_notes_home_deck=new_notes_home_deck or "",  # Provide empty string as default
         deck_hash=deck_hash,
     )
     for protected_field in protected_fields:
@@ -476,6 +476,30 @@ def get_home_deck(given_deck_hash):
 
     if details and details["deckId"] != 0 and mw.col:
         return mw.col.decks.name_if_exists(details["deckId"])
+
+
+def get_new_notes_home_deck(given_deck_hash):
+    """Get the home deck for new notes (notes not in user's collection)"""
+    try:
+        decks = DeckManager()
+        details = decks.get_by_hash(given_deck_hash)
+
+        if details and mw.col:
+            # Check if new_notes_home_deck is set
+            new_notes_deck_id = details.get("new_notes_home_deck", None)
+            if new_notes_deck_id and new_notes_deck_id != 0:
+                deck_name = mw.col.decks.name_if_exists(new_notes_deck_id)
+                if deck_name:
+                    return deck_name
+            
+            # Fall back to regular home deck
+            return get_home_deck(given_deck_hash)
+    except Exception as e:
+        logger.error(f"Error getting new notes home deck: {e}")
+        # Fall back to regular home deck
+        return get_home_deck(given_deck_hash)
+    
+    return None
 
 
 def remove_nonexistent_decks():

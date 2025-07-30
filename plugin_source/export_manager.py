@@ -36,6 +36,7 @@ from .var_defs import DEFAULT_PROTECTED_TAGS, PREFIX_PROTECTED_FIELDS
 from .dialogs import RateAddonDialog
 
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
+from .media_exporter import gather_media_from_css, gather_media_from_template
 from .crowd_anki.representation.note import Note
 from .crowd_anki.config.config_settings import ConfigSettings
 from .crowd_anki.export.note_sorter import NoteSorter
@@ -50,6 +51,7 @@ from .auth_manager import auth_manager
 from .var_defs import API_BASE_URL
 
 from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup
+from .media_progress_indicator import show_media_progress, update_media_progress, complete_media_progress
 from . import main
 logger = logging.getLogger("ankicollab")
 
@@ -221,7 +223,66 @@ def update_media_references(filename_mapping: Dict[str, str], file_note_pairs: L
     
     return 0, None
 
-async def handle_media_upload(user_token: str, deck_hash: str, all_files_info: List[Dict], file_paths: Dict[str, str], progress_callback_wrapper=None, silent=False) -> Dict[str, Any]:
+# Currently not used, because notetype media files are not uploaded anyway so this is a no-op
+def update_notetype_media_references(filename_mapping: Dict[str, str]) -> int:
+    """
+    Update media references in notetype templates and CSS. MUST run on the main thread.
+    
+    Args:
+        filename_mapping: Dict mapping old filenames to new filenames
+        
+    Returns:
+        Number of notetypes updated
+    """
+    assert mw.col is not None, "Collection must be available for notetype media reference update"
+    if not filename_mapping:
+        return 0
+    
+    updated_notetypes = []
+    def update_content_references(content: str, filename_mapping: Dict[str, str]) -> str:
+        """Helper function to update media references in content string."""
+        updated_content = content
+        for old_filename, new_filename in filename_mapping.items():
+            if old_filename in updated_content:
+                updated_content = updated_content.replace(old_filename, new_filename)
+        return updated_content
+    
+    all_notetypes = mw.col.models.all()
+    
+    for notetype in all_notetypes:
+        modified_notetype = False
+        
+        # Update CSS
+        if 'css' in notetype and notetype['css']:
+            updated_css = update_content_references(notetype['css'], filename_mapping)
+            if updated_css != notetype['css']:
+                notetype['css'] = updated_css
+                modified_notetype = True
+        
+        # Update templates
+        if 'tmpls' in notetype:
+            for template in notetype['tmpls']:
+                # Update both question format (qfmt) and answer format (afmt)
+                for field_name in ['qfmt', 'afmt']:
+                    if field_name in template and template[field_name]:
+                        updated_content = update_content_references(template[field_name], filename_mapping)
+                        if updated_content != template[field_name]:
+                            template[field_name] = updated_content
+                            modified_notetype = True
+        
+        if modified_notetype:
+            updated_notetypes.append(notetype)
+    
+    # Save all updated notetypes
+    if updated_notetypes:
+        for notetype in updated_notetypes:
+            mw.col.models.save(notetype)
+        logger.info(f"Updated media references in {len(updated_notetypes)} notetypes.")
+        return len(updated_notetypes)
+    
+    return 0
+
+async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id: str, all_files_info: List[Dict], file_paths: Dict[str, str], progress_callback_wrapper=None, silent=False) -> Dict[str, Any]:
     """
     Async function to upload media files. Returns a summary dictionary.
     The progress_callback_wrapper is expected to handle threading (e.g., run_on_main).
@@ -262,6 +323,7 @@ async def handle_media_upload(user_token: str, deck_hash: str, all_files_info: L
                 files_info=current_batch,
                 file_paths=file_paths,
                 deck_hash=deck_hash,
+                bulk_operation_id=bulk_operation_id,
                 progress_callback=batch_progress_inner_cb # Pass the inner callback
             )
 
@@ -348,7 +410,7 @@ def _sync_optimize_media_and_update_refs(media_files: List[Tuple[str, str]]) -> 
     return filename_mapping, files_info, file_paths
 
 
-def _sync_handle_media_upload(token: str, deck_hash: str, files_info: List[Dict], file_paths: Dict[str, str], silent: bool) -> Dict[str, Any]:
+def _sync_handle_media_upload(token: str, deck_hash: str, bulk_operation_id: str, files_info: List[Dict], file_paths: Dict[str, str], silent: bool) -> Dict[str, Any]:
     """
     Synchronous wrapper for handle_media_upload async function.
     Designed to be run in a background thread (e.g., via QueryOp).
@@ -357,15 +419,15 @@ def _sync_handle_media_upload(token: str, deck_hash: str, files_info: List[Dict]
     """
     assert mw is not None, "Anki environment (mw) must be available"
 
+    mw.taskman.run_on_main(
+        lambda: show_media_progress("upload", len(files_info))
+    )
+
     # Wrapper for progress callback to ensure UI updates run on main thread
     def progress_wrapper(p: float):
-        # Schedule the UI update on the main thread
+        current_files = int(p * len(files_info))
         mw.taskman.run_on_main(
-            lambda: mw.progress.update(
-                label=f"Uploading media files... {int(p * 100)}%",
-                value=int(p * 100),
-                max=100,
-            ) if mw.progress else None # Check if progress exists
+            lambda: update_media_progress(p, current_files)
         )
 
     logger.info(f"Starting synchronous media upload wrapper for {len(files_info)} files.")
@@ -375,23 +437,53 @@ def _sync_handle_media_upload(token: str, deck_hash: str, files_info: List[Dict]
             handle_media_upload,
             user_token=token,
             deck_hash=deck_hash,
+            bulk_operation_id=bulk_operation_id,
             all_files_info=files_info,
             file_paths=file_paths,
             progress_callback_wrapper=progress_wrapper, # Pass the safe wrapper
             silent=silent
         )
+        
+        # Complete the progress indicator
+        success = not result.get("errors", []) and result.get("uploaded", 0) > 0
+        uploaded = result.get("uploaded", 0)
+        existing = result.get("existing", 0)
+        failed = result.get("failed", 0)
+        
+        if uploaded > 0:
+            message = f"Uploaded {uploaded:,} files"
+            if existing > 0:
+                message += f" ({existing:,} already existed)"
+        elif existing > 0:
+            message = f"All {existing:,} files already existed"
+        else:
+            message = "Upload completed"
+            
+        if failed > 0:
+            message += f" ({failed:,} failed)"
+            
+        mw.taskman.run_on_main(
+            lambda: complete_media_progress(success, message)
+        )
+        
         logger.info("Synchronous media upload wrapper finished.")
         return result
     except Exception as e:
         logger.error(f"Error during synchronous media upload wrapper: {str(e)}")
         logger.error(traceback.format_exc())
+        
+        # Show error in progress indicator
+        mw.taskman.run_on_main(
+            lambda: complete_media_progress(False, f"Upload failed: {str(e)}")
+        )
+        
         # Return an error structure consistent with handle_media_upload's return
         return {
             "uploaded": 0, "existing": 0, "failed": len(files_info),
             "errors": [f"Upload failed: {str(e)}"], "cancelled": False, "silent": silent
         }
 
-def _submit_deck_op(deck: Deck, did: int, rationale: int, commit_text: str, media_files_info: List[Dict], media_file_paths: Dict[str, str]) -> Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]]:
+def _submit_deck_op(deck: Deck, did: int, rationale: int, commit_text: str, media_files_info: List[Dict], media_file_paths: Dict[str, str]) -> Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]]:
     assert mw.col is not None, "Collection must be available for deck submission"
     deckHash = get_deck_hash_from_did(did)
     if not deckHash:
@@ -445,8 +537,9 @@ def _submit_deck_op(deck: Deck, did: int, rationale: int, commit_text: str, medi
         logger.info(f"Deck submission response status: {response.status_code}")
         # Return data needed for media upload if successful and media exists
         if media_files_info:
+            bulk_operation_id = "" # only used for new decks
             # Pass necessary info to the success callback for the next step
-            return token, deckHash, media_files_info, media_file_paths, False # silent = False for suggestions
+            return token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False # silent = False for suggestions
         else:
             # No media to upload, return None to signal completion
             # Also pass back the success message text
@@ -532,7 +625,7 @@ def _handle_media_upload_result(result: Dict[str, Any]):
         ask_for_rating()
 
 
-def _start_media_upload(media_upload_data: Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]], success_callback: Callable[[Dict[str, Any]], None]):
+def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]], success_callback: Callable[[Dict[str, Any]], None]):
     """
     Starts the media upload process using QueryOp.
     Called from the success callback of the deck submission/creation Op.
@@ -546,7 +639,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, List[Dict], 
         success_callback({"uploaded": 0, "existing": 0, "failed": 0, "errors": [], "cancelled": False, "silent": True})
         return
 
-    token, deckHash, media_files_info, media_file_paths, silent = media_upload_data
+    token, deckHash, bulk_operation_id, media_files_info, media_file_paths, silent = media_upload_data
     parent_widget = QApplication.focusWidget() or mw # type: ignore
 
     logger.info(f"Starting media upload QueryOp for deck {deckHash}. Silent: {silent}")
@@ -554,7 +647,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, List[Dict], 
     op = QueryOp(
         parent=parent_widget,
         # Run the synchronous wrapper in the background op
-        op=lambda col: _sync_handle_media_upload(token, deckHash, media_files_info, media_file_paths, silent),
+        op=lambda col: _sync_handle_media_upload(token, deckHash, bulk_operation_id, media_files_info, media_file_paths, silent),
         success=success_callback # Use the provided final success handler
     )
     # Configure QueryOp
@@ -626,6 +719,12 @@ def handle_media_references(parent_widget: QWidget, deck_repr: Deck, filename_ma
         try:
             updated_count, op_changes = update_media_references(filename_mapping, media_files)
             logger.info(f"Successfully updated media references in {updated_count} notes.")
+            
+            # Also update notetype media references
+            # notetype_updated_count = update_notetype_media_references(filename_mapping)
+            # if notetype_updated_count > 0:
+            #     logger.info(f"Successfully updated media references in {notetype_updated_count} notetypes.")
+            
             if updated_count > 0:
                 if editor and op_changes.note_text:
                     editor_note = editor.note
@@ -715,11 +814,12 @@ def _on_suggest_media_only_optimized(
         raise ValueError("Login required to upload media with suggestion.")
     
     handle_media_references(parent_widget, deck_repr, filename_mapping, media_files, None)
-    submit_result = (token, deckHash, media_files_info, media_file_paths, False)
+    bulk_operation_id = "" # Not used in this case, but required by the function signature
+    submit_result = (token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False)
     _start_media_upload(submit_result, success_callback=_on_suggest_media_uploaded)
     
 
-def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
+def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
     """Success callback after deck submission for suggestions."""
     # Runs on Main Thread
     logger.info("Deck submission complete. Starting media upload if needed.")
@@ -896,7 +996,7 @@ def handle_export(did: int, username: str):
 
 
 
-def _on_export_media_optimized(opt_result: Tuple[List[Dict], Dict[str, str]], deck_repr: Deck, did: int, media_files: list, username: str, user_token: str):
+def _on_export_media_optimized(opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]], deck_repr: Deck, did: int, media_files: list, username: str, user_token: str):
     """Success callback after media optimization for export."""
     # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
@@ -910,6 +1010,11 @@ def _on_export_media_optimized(opt_result: Tuple[List[Dict], Dict[str, str]], de
         try:
             updated_count, _ = update_media_references(filename_mapping, media_files)
             logger.info(f"Successfully updated media references in {updated_count} notes.")
+            
+            # Also update notetype media references
+            # notetype_updated_count = update_notetype_media_references(filename_mapping)
+            # if notetype_updated_count > 0:
+            #     logger.info(f"Successfully updated media references in {notetype_updated_count} notetypes.")
         except Exception as e:
             logger.error(f"Failed to update media references on main thread: {e}", exc_info=True)
             show_exception(parent=parent_widget, exception=e)
@@ -970,8 +1075,9 @@ def _on_export_deck_created(api_result: Dict[str, Any], did: int, user_token: st
 
     status = api_result.get("status")
     message = api_result.get("message", "Unknown response from server.")
-
+    
     if status == 1:
+        bulk_op_id = api_result.get("bulk_operation_id", "")
         deckHash = message
         logger.info(f"Deck successfully created with hash: {deckHash}")
 
@@ -995,7 +1101,7 @@ def _on_export_deck_created(api_result: Dict[str, Any], did: int, user_token: st
         ):
             logger.info("User opted to upload media for new deck.")
             
-            media_upload_data = (user_token, deckHash, files_info, file_paths, True) # silent = True for initial export
+            media_upload_data = (user_token, deckHash, bulk_op_id, files_info, file_paths, True) # silent = True for initial export
             _start_media_upload(media_upload_data, success_callback=_on_export_media_uploaded)
         else:
             # No media upload requested or no media found
