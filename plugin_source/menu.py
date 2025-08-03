@@ -18,7 +18,6 @@ from .dialogs import LoginDialog
 from .auth_manager import auth_manager
 
 collab_menu = QMenu('AnkiCollab', mw)
-settings_menu = QMenu('Settings', mw)
 links_menu = QMenu('Links', mw)
 
 # Main Actions
@@ -29,22 +28,10 @@ pull_changes_action = QAction('Check for New Content', mw)
 login_manager_action = QAction('Login', mw) # Default text is Login
 media_import_action = QAction('Import Media from Folder', mw)
 
-# Settings Actions
-pull_on_startup_action = QAction('Check for Updates on Startup', mw)
-suspend_new_cards_action = QAction('Automatically suspend new Cards', mw)
-move_cards_action = QAction('Do not move Cards automatically', mw)
-auto_approve_action = QAction('Auto Approve Changes (Maintainer only)', mw) # Maintainer setting
-
 # Links Actions
 community_action = QAction('Join the Community', mw)
 website_action = QAction('Open Website', mw)
 donation_action = QAction('Leave a review', mw)
-
-settings_menu.menuAction().setMenuRole(QAction.MenuRole.NoRole)
-pull_on_startup_action.setMenuRole(QAction.MenuRole.NoRole)
-suspend_new_cards_action.setMenuRole(QAction.MenuRole.NoRole)
-move_cards_action.setMenuRole(QAction.MenuRole.NoRole)
-auto_approve_action.setMenuRole(QAction.MenuRole.NoRole)
 
 def force_logout(with_dialog = True):
     auth_manager.logout()
@@ -1031,7 +1018,8 @@ def show_global_settings_dialog(parent_dialog):
     move_cards_cb = QCheckBox("Do not move Cards automatically")
     move_cards_cb.setChecked(bool(settings.get("auto_move_cards", False)))
     auto_approve_cb = QCheckBox("Auto Approve Changes (Maintainer only)")
-    auto_approve_cb.setChecked(bool(settings.get("auto_approve", False)))
+    auto_approve_cb.setChecked(bool(auth_manager.get_auto_approve()))
+    
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
     global_layout.addWidget(move_cards_cb)
@@ -1056,8 +1044,8 @@ def show_global_settings_dialog(parent_dialog):
         settings["pull_on_startup"] = pull_on_startup_cb.isChecked()
         settings["suspend_new_cards"] = suspend_new_cards_cb.isChecked()
         settings["auto_move_cards"] = move_cards_cb.isChecked()
-        settings["auto_approve"] = auto_approve_cb.isChecked()
         mw.addonManager.writeConfig(__name__, strings_data)
+        auth_manager.set_auto_approve(auto_approve_cb.isChecked())
         showInfo("Global settings saved!")
         dialog.accept()
 
@@ -1153,31 +1141,10 @@ def update_ui_for_login_state():
     edit_list_action.setVisible(logged_in)
     push_deck_action.setVisible(logged_in)
     pull_changes_action.setVisible(logged_in)
-    push_all_stats_action.setVisible(logged_in)
-    
-    # Safe check for settings menu action
-    settings_action = settings_menu.menuAction()
-    if settings_action:
-        settings_action.setVisible(logged_in) # Hide the whole settings submenu
-    
+    push_all_stats_action.setVisible(logged_in)    
     media_import_action.setVisible(logged_in)
 
     login_manager_action.setText("Logout" if logged_in else "Login")
-
-    if logged_in:
-        pull_on_startup_action.setCheckable(True)
-        pull_on_startup_action.setChecked(bool(settings.get("pull_on_startup", False)))
-        suspend_new_cards_action.setCheckable(True)
-        suspend_new_cards_action.setChecked(bool(settings.get("suspend_new_cards", False)))
-        move_cards_action.setCheckable(True)
-        move_cards_action.setChecked(bool(settings.get("auto_move_cards", False)))
-
-        # Handle Maintainer Checkbox (Auto Approve)
-        is_maintainer = True # maybe we can do a better check in the future here idk
-        auto_approve_action.setVisible(is_maintainer)
-        if is_maintainer:
-            auto_approve_action.setCheckable(True)
-            auto_approve_action.setChecked(bool(auth_manager.get_auto_approve())) # Use getter from auth_manager
 
     # Update Hooks
     update_hooks_for_login_state(logged_in)
@@ -1196,13 +1163,11 @@ def menu_init():
     collab_menu.addAction(edit_list_action)
     collab_menu.addAction(push_deck_action)
     collab_menu.addAction(push_all_stats_action)
+    collab_menu.addAction(media_import_action)
     collab_menu.addSeparator()
-    #collab_menu.addMenu(settings_menu)
     collab_menu.addMenu(links_menu)
     collab_menu.addSeparator()
     collab_menu.addAction(login_manager_action)
-
-    settings_menu.addAction(media_import_action)
 
     links_menu.addAction(community_action)
     links_menu.addAction(website_action)
@@ -1217,21 +1182,5 @@ def menu_init():
     donation_action.triggered.connect(open_support_site)
     community_action.triggered.connect(open_community_site)
     login_manager_action.triggered.connect(on_login_manager_btn)
-
-    # Settings toggles
-    def toggle_setting(setting_key, checked):
-        config = mw.addonManager.getConfig(__name__)
-        print(f"AnkiCollab: Toggling setting '{setting_key}' to {checked}.")
-        if config and "settings" in config:
-            config["settings"][setting_key] = checked
-            mw.addonManager.writeConfig(__name__, config)
-        else:
-            # Handle case where config might be missing unexpectedly
-            print(f"AnkiCollab: Error toggling setting '{setting_key}'. Config not found.")
-
-    pull_on_startup_action.triggered.connect(lambda checked: toggle_setting("pull_on_startup", checked))
-    suspend_new_cards_action.triggered.connect(lambda checked: toggle_setting("suspend_new_cards", checked))
-    move_cards_action.triggered.connect(lambda checked: toggle_setting("auto_move_cards", checked))
-    auto_approve_action.triggered.connect(auth_manager.set_auto_approve)
 
     update_ui_for_login_state()

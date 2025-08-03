@@ -242,7 +242,23 @@ def autoUpdate():
     startup_check_enabled = bool(settings.get("pull_on_startup", False))
 
     if startup_check_enabled:
-        async_update(True)
+        # Run the update once the ankiweb sync is done
+        if mw.pm.auto_syncing_enabled() and mw.pm.sync_auth() and not mw.safeMode:
+        
+            def on_sync_finished_hk():
+                # run reload_data AFTER sync is finished
+                async_update(True)
+                
+                try:
+                    gui_hooks.sync_did_finish.remove(on_sync_finished_hk)
+                except ValueError:
+                    pass  # Hook wasn't registered, ignore
+
+            gui_hooks.sync_did_finish.append(on_sync_finished_hk)
+        else:
+            # No auto-sync or not configured for sync, run immediately
+            async_update(True)
+        
 
 import struct
 

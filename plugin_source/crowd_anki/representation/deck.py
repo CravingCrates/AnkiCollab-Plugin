@@ -708,7 +708,21 @@ class Deck(JsonSerializableAnkiDict):
                     # Update the note model with the new notetype dict fields. we keep all else 
                     # in the server version because stuff like naming is used to identify the protected fields (ikik this is getting confusing)
                     note_model.anki_dict['flds'] = new_notetype_dict['flds']
+                    # Critical: Also update the ID to ensure it's available for note processing
+                    if 'id' not in note_model.anki_dict or note_model.anki_dict['id'] is None:
+                        note_model.anki_dict['id'] = new_notetype_dict['id']
                     logger.info(f"Notetype '{model_name}' created/updated successfully")
+                
+                # Ensure the model has a valid ID after save_to_collection
+                if 'id' not in note_model.anki_dict or note_model.anki_dict['id'] is None:
+                    # Try to fetch the model by UUID to get the ID
+                    fetcher = UuidFetcher(collection)
+                    saved_model = fetcher.get_model(note_model.get_uuid())
+                    if saved_model and 'id' in saved_model:
+                        note_model.anki_dict['id'] = saved_model['id']
+                        logger.info(f"Retrieved ID {saved_model['id']} for notetype '{model_name}'")
+                    else:
+                        logger.error(f"Failed to get valid ID for notetype '{model_name}'")
                 
             except Exception as e:
                 model_name = note_model.anki_dict.get("name", "unknown")
@@ -1412,7 +1426,21 @@ class Deck(JsonSerializableAnkiDict):
             
             note.handle_import_config_changes(import_config, note_model, field_mapping)
             note.anki_object.__dict__.update(note.anki_object_dict)
-            note.anki_object.mid = note_model.anki_dict["id"]
+            
+            # Defensive check for model ID
+            model_id = note_model.anki_dict.get("id")
+            if model_id is None or model_id == 0:
+                # Try to fetch the model ID by UUID as last resort
+                fetcher = UuidFetcher(collection)
+                saved_model = fetcher.get_model(note_model.get_uuid())
+                if saved_model and saved_model.get("id"):
+                    model_id = saved_model["id"]
+                    note_model.anki_dict["id"] = model_id
+                    logger.warning(f"Had to fetch model ID {model_id} for note processing")
+                else:
+                    raise ValueError(f"No valid model ID found for notetype {note_model.anki_dict.get('name', 'unknown')}")
+            
+            note.anki_object.mid = model_id
             note.anki_object.mod = int_time
         
         try:

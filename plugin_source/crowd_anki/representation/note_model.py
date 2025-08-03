@@ -57,7 +57,8 @@ class NoteModel(JsonSerializableAnkiDict):
             if existing_model_dict:
                 return self._update_existing_notetype(collection, existing_model_dict)
             else:
-                return self._create_new_notetype(collection), None
+                new_notetype = self._create_new_notetype(collection)
+                return new_notetype, None
                 
         except Exception as e:
             logger.error(f"Failed to save notetype {self.anki_dict.get('name', 'unknown')}: {e}")
@@ -128,9 +129,12 @@ class NoteModel(JsonSerializableAnkiDict):
             logger.error(f"Failed to update existing notetype: {e}")
             return None, None
 
-    def _create_new_notetype(self, collection: Collection) -> None:
+    def _create_new_notetype(self, collection: Collection) -> Optional[NotetypeDict]:
         """
         Creates a new notetype in the collection.
+        
+        Returns:
+            Optional[NotetypeDict]: The created notetype dictionary, or None if creation failed
         """
         try:
             # Ensure the notetype has a UUID
@@ -152,10 +156,17 @@ class NoteModel(JsonSerializableAnkiDict):
                     saved_model = collection.models.by_name(self.anki_dict["name"])
                     if saved_model:
                         self.anki_dict["id"] = saved_model["id"]
-                        logger.info(f"Assigned ID {saved_model['id']} to new notetype '{self.anki_dict['name']}'")                        
+                        logger.info(f"Assigned ID {saved_model['id']} to new notetype '{self.anki_dict['name']}'")
+                        
+                return self.anki_dict
+            else:
+                # Model already exists, just update our dict and return it
+                self.anki_dict = note_model_dict
+                return self.anki_dict
             
         except Exception as e:
             logger.error(f"Failed to create new notetype: {e}")
+            return None
 
     def _detect_changes_needed(self, existing_model: NotetypeDict, preserve_templates: bool) -> bool:
         """

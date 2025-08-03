@@ -7,17 +7,12 @@ import time
 import requests
 import base64
 import binascii
-import io
-import zipfile
-import tempfile
 from functools import wraps
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union, cast
+from typing import Dict, List, Optional, Tuple, Union, cast
 from concurrent.futures import ThreadPoolExecutor
 from asyncio import Lock as AsyncLock, get_running_loop # Use asyncio Lock
 
-import anki
-import aqt
 from aqt import mw
 
 logger = logging.getLogger("ankicollab")
@@ -35,8 +30,8 @@ logger = logging.getLogger("ankicollab")
 
 MAX_REQUESTS_PER_MINUTE = 50
 REQUEST_TRACKING_WINDOW = 60
-MAX_FILE_SIZE = 2 * 1024 * 1024
-CHUNK_SIZE = 16384
+MAX_FILE_SIZE = 2 * 1024 * 1024 # 2 MB
+CHUNK_SIZE = 131072  # 128KB
 REQUEST_TIMEOUT = 30
 VERIFY_SSL = True
 
@@ -125,8 +120,6 @@ class MediaManager:
 
         self.optimize_images = True
         self.hash_cache = {}
-        self.exists_cache = {}
-        self.download_cache = {}
         self.optimization_cache = {}  # Cache for optimization results
 
         self.session = requests.Session()
@@ -135,7 +128,10 @@ class MediaManager:
         self.semaphore: Optional[asyncio.Semaphore] = None
         self._semaphore_lock = AsyncLock() # Use asyncio's Lock
         self._semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
-        max_worker = min(32, (os.cpu_count() or 1) + 2)
+        # Reasonable thread pool sizing - the bottleneck is image processing, not our code
+        cpu_count = os.cpu_count() or 2
+        max_worker = min(32, max(4, cpu_count * 2))  # Simple: 2x cores, max 32
+        
         self.thread_executor = ThreadPoolExecutor(max_workers=max_worker)
         logger.debug(f"Initialized thread pool with {max_worker} workers")
         mimetypes.add_type('image/webp', '.webp') # how the fuck is this not a default
@@ -189,8 +185,6 @@ class MediaManager:
     def clear_caches(self):
         """Clear all internal caches to free memory or force re-computation."""
         self.hash_cache.clear()
-        self.exists_cache.clear()
-        self.download_cache.clear()
         self.optimization_cache.clear()
         logger.info("All media manager caches cleared")
 
@@ -204,23 +198,33 @@ class MediaManager:
             self.thread_executor.shutdown(wait=True) # Wait for tasks to complete
         if hasattr(self, 'session'):
             self.session.close()
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        await self.close()
     
+    async def _calculate_file_hash(self, filepath: Path) -> str:
+        """Centralized hash calculation to avoid code duplication."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.error("_calculate_file_hash called without a running event loop!")
+            raise RuntimeError("No running event loop found for hash computation")
+
+        def calculate_hash():
+            md5_hash = hashlib.md5()
+            try:
+                with open(filepath, "rb") as f:
+                    while True:
+                        byte_block = f.read(CHUNK_SIZE)
+                        if not byte_block:
+                            break
+                        md5_hash.update(byte_block)
+                return md5_hash.hexdigest()
+            except IOError as io_err:
+                raise MediaHashError(f"IOError reading file for hashing {filepath}: {io_err}") from io_err
+
+        return await loop.run_in_executor(self.thread_executor, calculate_hash)
+
     def _is_allowed_file_type(self, filename: Union[str, Path]) -> bool:
         ext = Path(filename).suffix.lower()
         return ext in ALL_ALLOWED_EXTENSIONS
-
-    def _get_media_type(self, filename: Union[str, Path]) -> Optional[str]:
-        ext = Path(filename).suffix.lower()
-        for media_type, extensions in ALLOWED_EXTENSIONS.items():
-            if ext in extensions:
-                return media_type
-        return None
 
     async def compute_file_hash_and_size(self, filepath: Union[str, Path]) -> Tuple[str, int]:
         filepath = Path(filepath)
@@ -243,27 +247,7 @@ class MediaManager:
              pass
 
         try:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                 logger.error("compute_file_hash_and_size called without a running event loop!")
-                 raise RuntimeError("No running event loop found for hash computation")
-
-            def calculate_hash():
-                md5_hash = hashlib.md5()
-                try:
-                    with open(filepath, "rb") as f:
-                        while True:
-                            byte_block = f.read(CHUNK_SIZE)
-                            if not byte_block:
-                                break
-                            md5_hash.update(byte_block)
-                    return md5_hash.hexdigest()
-                except IOError as io_err:
-                    # Raise specific error if file cannot be read
-                    raise MediaHashError(f"IOError reading file for hashing {filepath}: {io_err}") from io_err
-
-            file_hash = await loop.run_in_executor(self.thread_executor, calculate_hash)
+            file_hash = await self._calculate_file_hash(filepath)
 
             # Store in cache with modification time
             try:
@@ -347,24 +331,7 @@ class MediaManager:
 
                 # the fact that we cant use sha256 as default in aws s3 is embarassing
                 if file_hash is None:
-                    def calculate_md5():
-                        md5_hasher = hashlib.md5()
-                        try:
-                            with open(filepath, "rb") as f:
-                                while True:
-                                    chunk = f.read(8192)
-                                    if not chunk: break
-                                    md5_hasher.update(chunk)
-                            return md5_hasher.hexdigest()
-                        except IOError as io_err:
-                             raise MediaHashError(f"IOError reading file for MD5 {filepath}: {io_err}") from io_err
-
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                         logger.error("upload_file (MD5 calc) called without a running event loop!")
-                         raise RuntimeError("No running event loop found for MD5 calculation")
-                    file_hash = await loop.run_in_executor(self.thread_executor, calculate_md5)
+                    file_hash = await self._calculate_file_hash(filepath)
 
                 # Ensure file_hash is not None before using it
                 if not file_hash:
@@ -685,94 +652,126 @@ class MediaManager:
 
         svg_files = []
         regular_files = []
+        small_files_to_hash = []  # Files to hash directly without optimization
 
-        # Initial pass to categorize and check existence/type
-        logger.info(f"Starting media optimization for {len(file_note_pairs)} files...")
+        # Simple file categorization - the previous benchmarks show this is already fast
+        logger.info(f"Starting file categorization for {len(file_note_pairs)} files...")
         if progress_callback:
             progress_callback(0.05)  # 5% - started categorization
-            
+
         for filename, note_guid in file_note_pairs:
-            if not filename: # Skip empty filenames
-                 logger.warning(f"Skipping empty filename associated with note GUID {note_guid}")
-                 continue
+            if not filename:
+                continue
+            
             filepath = os.path.join(base_dir, filename)
             filepath_obj = Path(filepath)
 
-            if not filepath_obj.exists():
-                logger.warning(f"File not found, skipping: {filepath}")
-                continue
-            if not self._is_allowed_file_type(filepath):
-                logger.warning(f"File type not allowed, skipping: {filepath_obj.suffix} ({filename})")
+            if not filepath_obj.exists() or not self._is_allowed_file_type(filepath):
                 continue
 
             try:
-                 file_size = filepath_obj.stat().st_size
-            except OSError as e:
-                 logger.warning(f"Could not stat file {filepath}, skipping: {e}")
-                 continue
+                file_size = filepath_obj.stat().st_size
+            except OSError:
+                continue
 
-            if filepath_obj.suffix.lower() == '.svg':
-                if file_size > MAX_FILE_SIZE:
-                    logger.warning(f"SVG file exceeds size limit, skipping: {filepath}")
-                    continue
-                svg_files.append((filename, filepath_obj, note_guid))
+            # Handle small files directly without optimization
+            if filepath_obj.suffix.lower() == '.webp' and file_size < 200 * 1024:
+                small_files_to_hash.append((filename, filepath_obj, note_guid, file_size))
+            elif filepath_obj.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff'] and file_size < 100 * 1024:
+                small_files_to_hash.append((filename, filepath_obj, note_guid, file_size))
+            elif filepath_obj.suffix.lower() == '.svg':
+                if file_size <= MAX_FILE_SIZE:
+                    svg_files.append((filename, filepath_obj, note_guid))
             else:
-                # No size check here yet, optimization might reduce it
                 regular_files.append((filename, filepath_obj, note_guid))
 
-        logger.info(f"Categorized files: {len(svg_files)} SVGs, {len(regular_files)} regular files")
-        if progress_callback:
-            progress_callback(0.1)  # 10% - categorization complete
+        logger.info(f"Categorization complete: {len(svg_files)} SVGs, {len(regular_files)} regular files, {len(small_files_to_hash)} small files")
 
-        # Process SVGs in batch (already optimized)
+        # Simple parallel hash computation for small files
+        if small_files_to_hash:
+            logger.info(f"Processing {len(small_files_to_hash)} small files...")
+            
+            async def hash_small_file(file_info):
+                filename, filepath_obj, note_guid, file_size = file_info
+                try:
+                    file_hash, _ = await self.compute_file_hash_and_size(filepath_obj)
+                    return {
+                        "hash": file_hash, 
+                        "filename": filename, 
+                        "note_guid": note_guid, 
+                        "file_size": file_size
+                    }, (file_hash, str(filepath_obj))
+                except Exception as e:
+                    logger.warning(f"Error processing small file {filename}: {e}")
+                    return None, None
+
+            # Process in reasonable batches
+            batch_size = 100
+            for i in range(0, len(small_files_to_hash), batch_size):
+                batch = small_files_to_hash[i:i+batch_size]
+                hash_tasks = [hash_small_file(file_info) for file_info in batch]
+                hash_results = await asyncio.gather(*hash_tasks, return_exceptions=True)
+                
+                for result in hash_results:
+                    if isinstance(result, Exception) or not isinstance(result, tuple) or len(result) != 2:
+                        continue
+                    file_info_result, file_path_result = result
+                    if file_info_result and file_path_result:
+                        files_info.append(file_info_result)
+                        file_hash, file_path = file_path_result
+                        file_paths[file_hash] = file_path
+
+        # Process SVGs in batch
         if svg_files:
             logger.info(f"Processing {len(svg_files)} SVG files...")
-            if progress_callback:
-                progress_callback(0.15)  # 15% - starting SVG processing
+            if progress_callback: progress_callback(0.30)
                 
             svg_optimize_list = [(fname, fp) for fname, fp, _ in svg_files]
             try:
                 svg_optimized = await media_optimizer.optimize_svg_files(svg_optimize_list)
             except Exception as e:
-                 logger.exception(f"Error during SVG optimization batch: {e}")
-                 svg_optimized = {} # Treat as if optimization failed
+                logger.exception(f"Error during SVG optimization batch: {e}")
+                svg_optimized = {}
 
             for filename, filepath_obj, note_guid in svg_files:
                 if filename in svg_optimized:
                     opt_filepath, exp_hash, was_optimized = svg_optimized[filename]
-                    if not was_optimized or not exp_hash: continue # Skip unoptimized/failed
-
-                    try:
-                        file_hash, file_size = await self.compute_file_hash_and_size(opt_filepath)
-                        if file_hash != exp_hash:
-                            logger.error(f"Hash mismatch for optimized SVG {filename} ({file_hash} vs {exp_hash})")
-                            continue
-                        if file_size > MAX_FILE_SIZE: # Should have been caught earlier
-                            logger.warning(f"Optimized SVG still exceeds size limit: {opt_filepath} ({file_size} bytes)")
-                            continue
-
-                        files_info.append({"hash": file_hash, "filename": filename, "note_guid": note_guid, "file_size": file_size})
-                        file_paths[file_hash] = str(opt_filepath) # Store as string path
-
-                    except (MediaHashError, FileNotFoundError, OSError) as e:
-                        logger.error(f"Error processing optimized SVG {filename}: {str(e)}")
-                    except Exception as e:
-                         logger.exception(f"Unexpected error processing optimized SVG {filename}: {e}")
-
-            if progress_callback:
-                progress_callback(0.3)  # 30% - SVG processing complete
+                    if was_optimized and exp_hash:
+                        try:
+                            file_hash, file_size = await self.compute_file_hash_and_size(opt_filepath)
+                            if file_hash == exp_hash and file_size <= MAX_FILE_SIZE:
+                                files_info.append({"hash": file_hash, "filename": filename, "note_guid": note_guid, "file_size": file_size})
+                                file_paths[file_hash] = str(opt_filepath)
+                        except Exception as e:
+                            logger.error(f"Error processing optimized SVG {filename}: {e}")
 
         # Process regular files in parallel batches
         if regular_files:
-            logger.info(f"Processing {len(regular_files)} regular files in parallel...")
-            batch_size = min(50, max(10, len(regular_files) // 10))  # Dynamic batch size
-            logger.info(f"Using batch size of {batch_size} for parallel processing")
+            logger.info(f"Processing {len(regular_files)} regular files...")
+            
+            # Simplified batch sizing - the real bottleneck is image optimization, not our code
+            cpu_count = os.cpu_count() or 2
+            if cpu_count <= 4:
+                batch_size = 50
+            else:
+                batch_size = 75
+            
+            # For very large sets, slightly reduce to prevent memory issues
+            if len(regular_files) > 10000:
+                batch_size = max(25, batch_size // 2)
+            
+            logger.info(f"Using batch size of {batch_size} (CPU cores: {cpu_count})")
             
             for i in range(0, len(regular_files), batch_size):
                 batch = regular_files[i:i+batch_size]
                 batch_num = i//batch_size + 1
                 total_batches = (len(regular_files) + batch_size - 1)//batch_size
-                logger.debug(f"Processing batch {batch_num}/{total_batches} ({len(batch)} files)")
+                
+                # Log every 10 batches or significant milestones for large sets
+                if batch_num % 10 == 1 or batch_num == total_batches:
+                    logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} files)")
+                else:
+                    logger.debug(f"Processing batch {batch_num}/{total_batches} ({len(batch)} files)")
                 
                 # Update progress for this batch
                 if progress_callback:
@@ -828,11 +827,15 @@ class MediaManager:
             cache_key = str(filepath_obj)
             try:
                 mtime = filepath_obj.stat().st_mtime
+                file_size = filepath_obj.stat().st_size
                 cached_entry = self.optimization_cache.get(cache_key)
-                if cached_entry and cached_entry[0] == mtime:
+                
+                # Enhanced cache key includes file size for better cache hits
+                enhanced_cache_key = f"{cache_key}:{file_size}:{mtime}"
+                if cached_entry and cached_entry[0] == mtime and len(cached_entry) > 4 and cached_entry[4] == file_size:
                     # Cache hit - use cached result
                     logger.debug(f"Using cached optimization result for {filename}")
-                    cached_mtime, opt_filepath, current_filename, was_optimized = cached_entry
+                    cached_mtime, opt_filepath, current_filename, was_optimized, cached_size = cached_entry
                     
                     # Verify cached results are valid
                     if opt_filepath is None or current_filename is None or not opt_filepath or not current_filename:
@@ -870,10 +873,11 @@ class MediaManager:
                 logger.warning(f"Optimization failed for file {filename}, skipping (opt_filepath={opt_filepath}, current_filename={current_filename})")
                 return None
             
-            # Cache the optimization result
+            # Cache the optimization result with enhanced data
             try:
                 mtime = filepath_obj.stat().st_mtime
-                self.optimization_cache[cache_key] = (mtime, opt_filepath, current_filename, was_optimized)
+                file_size = filepath_obj.stat().st_size
+                self.optimization_cache[cache_key] = (mtime, opt_filepath, current_filename, was_optimized, file_size)
             except OSError:
                 # File might have been deleted during optimization
                 pass

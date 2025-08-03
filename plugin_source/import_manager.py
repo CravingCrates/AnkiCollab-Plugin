@@ -278,7 +278,8 @@ def _on_deck_installed(install_result, deck, subscription, input_hash=None, upda
 
     # Now handle stats sharing dialog AFTER import is complete
     deck_hash = subscription["deck_hash"]
-    _handle_stats_sharing_after_import(deck_hash, deck_name)
+    if subscription["stats_enabled"]:
+        _handle_stats_sharing_after_import(deck_hash, deck_name)
 
     mw.reset()  # Reset the main window to reflect changes
     

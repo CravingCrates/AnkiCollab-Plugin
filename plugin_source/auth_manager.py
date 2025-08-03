@@ -57,10 +57,6 @@ class AuthManager:
                 print(f"Error parsing expiration date: {e}")
                 self.auth_data["expires_timestamp"] = time.time() + (30 * 86400)  # 30 days
         
-        strings_data = mw.addonManager.getConfig(self.config_key) or {}
-        if "settings" in strings_data: #legacy
-            self.auth_data["auto_approve"] = strings_data["settings"].get("auto_approve", False)
-        
         # Save to config
         self._save_auth_data()
         return True
@@ -148,15 +144,3 @@ class AuthManager:
 
 # singleton
 auth_manager = AuthManager()
-
-
-# Legacy function for backward compatibility
-def store_login_token(token):
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data:
-        if "settings" not in strings_data:
-            strings_data["settings"] = {}
-        strings_data["settings"]["token"] = token
-        strings_data["settings"]["auto_approve"] = auth_manager.get_auto_approve()
-    mw.addonManager.writeConfig(__name__, strings_data)
-    

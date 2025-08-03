@@ -26,6 +26,8 @@ import logging
 from concurrent.futures import Future # Keep for main thread sync
 
 from typing import Callable, cast, Tuple, Dict, List, Any, Optional
+from pathlib import Path
+import os
 
 from .crowd_anki.representation.note_model import NoteModel
 
@@ -395,9 +397,17 @@ def _sync_optimize_media_and_update_refs(media_files: List[Tuple[str, str]]) -> 
     logger.info(f"Starting media optimization for {len(media_files)} files in background task.")
 
     # 1. Run async optimization using the synchronous runner
+    def progress_callback(p: float):
+        aqt.mw.taskman.run_on_main(
+            lambda: aqt.mw.progress.update(
+                label="Optimizing media for upload",
+                value=int(p * 100),
+                max=100,
+            ) if aqt.mw.progress.busy() else None
+        )
     try:
         filename_mapping, files_info, file_paths = _sync_run_async(
-            main.media_manager.optimize_media_for_upload, media_files
+            main.media_manager.optimize_media_for_upload, media_files, progress_callback
         )
         logger.info(f"Background media optimization finished. {len(filename_mapping)} files mapped.")
     except Exception as e:
