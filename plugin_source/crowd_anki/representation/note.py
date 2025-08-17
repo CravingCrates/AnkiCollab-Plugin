@@ -178,7 +178,7 @@ class Note(JsonSerializableAnkiObject):
         # First, update all the note content in chunks
         for i in range(0, len(update_notes), CHUNK_SIZE):
             chunk = update_notes[i:i + CHUNK_SIZE]
-            collection.update_notes([note.anki_object for note in chunk])
+            collection.update_notes([note.anki_object for note in chunk if note.anki_object])
         
         # Then handle deck movement if not ignored
         if not import_config.ignore_deck_movement:
@@ -235,13 +235,14 @@ class Note(JsonSerializableAnkiObject):
         if ANKI_INT_VERSION >= ANKI_VERSION_23_10_00:
             for i in range(0, len(notes), CHUNK_SIZE):
                 chunk = notes[i:i + CHUNK_SIZE]
-                requests = [AddNoteRequest(note.anki_object, deck_id=deck_id) for note in chunk]
+                requests = [AddNoteRequest(note.anki_object, deck_id=deck_id) for note in chunk if note.anki_object]
                 collection.add_notes(requests)
         else:
             for i in range(0, len(notes), CHUNK_SIZE):
                 chunk = notes[i:i + CHUNK_SIZE]
                 for note in chunk:
-                    collection.add_note(note.anki_object, deck_id)
+                    if note.anki_object:
+                        collection.add_note(note.anki_object, deck_id)
 
         if import_config and import_config.suspend_new_cards:
             cards_to_suspend = []

@@ -7,6 +7,7 @@ from aqt.qt import *
 from anki import hooks
 from anki.collection import Collection
 from aqt.utils import askUser, showInfo
+from aqt.operations import QueryOp
 
 import json
 from typing import Sequence, List, Tuple # Import List
@@ -146,6 +147,125 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
         "AnkiCollab: Request note removal",
         lambda: request_note_removal(browser, nids=selected_nids),
     )
+
+    # Conditionally add note link creation if deck is subscribed and linked to a base deck
+    try:
+        first_note = aqt.mw.col.get_note(selected_nids[0])
+        if first_note and first_note.cards():
+            first_did = first_note.cards()[0].did
+            subscriber_hash = get_deck_hash_from_did(first_did)
+            if subscriber_hash:
+                cfg = mw.addonManager.getConfig(__name__) or {}
+                details = cfg.get(subscriber_hash)
+                base_hash = details.get("linked_deck_hash") if isinstance(details, dict) else None
+                if base_hash:
+                    # Ensure all selected notes are from this same deck
+                    same_deck = True
+                    for nid in selected_nids[1:]:
+                        note = aqt.mw.col.get_note(nid)
+                        if not note or not note.cards():
+                            continue
+                        if get_deck_hash_from_did(note.cards()[0].did) != subscriber_hash:
+                            same_deck = False
+                            break
+                    if same_deck:
+                        context_menu.addAction(
+                            "AnkiCollab: Create note link(s)",
+                            lambda: create_note_links_handler(browser, selected_nids, subscriber_hash, base_hash),
+                        )
+    except Exception:
+        pass
+
+def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscriber_hash: str, base_hash: str) -> None:
+    if not auth_manager.is_logged_in():
+        showInfo("Please log in to link notes.", parent=browser)
+        return
+    if not nids:
+        showInfo("Please select at least one note.", parent=browser)
+        return
+
+    # Validate all notes belong to the subscriber deck
+    for nid in nids:
+        note = aqt.mw.col.get_note(nid)
+        if not note or not note.cards():
+            continue
+        if get_deck_hash_from_did(note.cards()[0].did) != subscriber_hash:
+            showInfo("Please select notes from the same subscribed deck.", parent=browser)
+            return
+
+    guids = get_guids_from_noteids(nids)
+    if not guids:
+        showInfo("Could not retrieve note GUIDs.", parent=browser)
+        return
+
+    token = auth_manager.get_token()
+    if not token:
+        showInfo("You're not logged in.", parent=browser)
+        return
+
+    def _op(_: object):
+        payload = {
+            "subscriber_deck_hash": subscriber_hash,
+            "base_deck_hash": base_hash,
+            "note_guids": guids,
+            "token": token,
+        }
+        try:
+            resp = requests.post(f"{API_BASE_URL}/CreateNewNoteLink", json=payload, timeout=30)
+            return resp.status_code, resp.text
+        except Exception as e:
+            return -1, str(e)
+
+    def _on_success(result):
+        status, text = result
+        if status == 200:
+            # Expecting a JSON string like: {"linked": <usize>, "skipped": [guid, ...]}
+            linked = 0
+            skipped = []
+            try:
+                payload = json.loads(text or "{}")
+                linked = int(payload.get("linked", 0))
+                skipped = payload.get("skipped", []) or []
+            except Exception:
+                # Fallback if server returned plain text
+                pass
+
+            if linked or skipped:
+                if skipped:
+                    skipped_list = ", ".join(map(str, skipped))
+                    showInfo(
+                        f"Linked {linked} note(s). Skipped {len(skipped)} note(s):\n{skipped_list}",
+                        parent=browser,
+                    )
+                    # Offer to show skipped notes in the Browser
+                    if askUser("Open skipped notes in Browser?", parent=browser):
+                        nids = []
+                        for g in skipped:
+                            try:
+                                nid = get_note_id_from_guid(g)
+                                if nid:
+                                    nids.append(nid)
+                            except Exception:
+                                continue
+                        if nids:
+                            open_browser_with_nids(nids)
+                        else:
+                            showInfo("Could not find the skipped notes locally.", parent=browser)
+                else:
+                    showInfo(f"Linked {linked} note(s) successfully.", parent=browser)
+                return
+            # If we couldn't parse, just show generic success
+            showInfo("Note link(s) created.", parent=browser)
+        elif status == 403 or (text or "").upper().find("FORBIDDEN") != -1:
+            showInfo("Forbidden: you don't have permission to link these notes.", parent=browser)
+        elif status == -1:
+            showInfo(f"Network error while creating note link(s):\n{text}", parent=browser)
+        else:
+            showInfo(f"Failed to create note link(s) (status {status}).\n{text}", parent=browser)
+
+    QueryOp(parent=browser, op=_op, success=_on_success) \
+        .with_progress("Creating note link(s)...") \
+        .run_in_background()
 
 def init_editor_card(buttons: List[str], editor):
     # This hook adds a button PERMANENTLY to the editor instance.

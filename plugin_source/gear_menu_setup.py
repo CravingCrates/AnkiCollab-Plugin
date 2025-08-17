@@ -8,6 +8,7 @@ import aqt
 from anki.decks import DeckId
 from aqt import gui_hooks, mw
 from aqt.operations import QueryOp
+import requests
 
 from .export_manager import get_server_missing_media, start_suggest_missing_media
 
@@ -15,6 +16,7 @@ from .auth_manager import auth_manager
 from .utils import get_deck_hash_from_did
 from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
 from .crowd_anki.representation.deck import Deck
+from .var_defs import API_BASE_URL
 
 try:
     from aqt.browser.browser import Browser
@@ -95,6 +97,67 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
         op.with_progress(
             "Checking for missing media..."
         ).run_in_background()
+
+    def create_deck_link() -> None:
+        # Only applicable to subscribed decks
+        if did is None:
+            aqt.utils.tooltip("No valid deck!")
+            return
+        subscriber_hash = get_deck_hash_from_did(did)
+        if subscriber_hash is None:
+            aqt.utils.tooltip("This deck is not subscribed to AnkiCollab.")
+            return
+
+        # Ask user for target (base) deck hash
+        base_hash, ok = QInputDialog.getText(
+            mw,
+            "Create Deck Link",
+            "Enter target base deck hash:",
+        )
+        if not ok:
+            return
+        base_hash = (base_hash or "").strip()
+        if not base_hash:
+            aqt.utils.tooltip("Deck hash is required.")
+            return
+
+        token = auth_manager.get_token()
+        if not token:
+            aqt.utils.showWarning("You're not logged in.")
+            return
+
+        def _post_create_link(_: object):
+            payload = {
+                "subscriber_deck_hash": subscriber_hash,
+                "base_deck_hash": base_hash,
+                "token": token,
+            }
+            try:
+                resp = requests.post(f"{API_BASE_URL}/CreateDeckLink", json=payload, timeout=10)
+                return resp.status_code, resp.text
+            except Exception as e:
+                return -1, str(e)
+
+        def _on_success(result):
+            status, text = result
+            if status == 200 and (text or "").strip() == "Success":
+                # Persist link on the subscribed deck's details
+                strings_data = mw.addonManager.getConfig(__name__) or {}
+                details = strings_data.get(subscriber_hash)
+                if isinstance(details, dict):
+                    details["linked_deck_hash"] = base_hash
+                    mw.addonManager.writeConfig(__name__, strings_data)
+                aqt.utils.showInfo("Deck link created successfully. Please configure the notetypes before creating any note links!")
+            elif status == 403 or (text or "").upper().find("FORBIDDEN") != -1:
+                aqt.utils.showWarning("Forbidden: you don't have permission to link these decks.")
+            elif status == -1:
+                aqt.utils.showWarning(f"Network error while creating link:\n{text}")
+            else:
+                aqt.utils.showWarning(f"Failed to create deck link (status {status}).\n{text}")
+
+        QueryOp(parent=mw, op=_post_create_link, success=_on_success) \
+            .with_progress("Creating deck link...") \
+            .run_in_background()
             
     links_menu = QMenu('AnkiCollab', mw)
     menu.addMenu(links_menu)
@@ -102,10 +165,13 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
     action2 = links_menu.addAction("Download Missing Media")
     action4 = links_menu.addAction("Upload Missing Media")
     action3 = links_menu.addAction("Reset Deck Timestamp")
+    action5 = links_menu.addAction("Create Deck Link")
     qconnect(action.triggered, export_media)
     qconnect(action2.triggered, download_missing_media)
     qconnect(action3.triggered, reset_deck_timestamp)
     qconnect(action4.triggered, upload_missing_media)
+    qconnect(action5.triggered, create_deck_link)
+    # Action is available; it will validate subscription before proceeding
         
 
 def add_browser_menu_item(browser: Browser) -> None:

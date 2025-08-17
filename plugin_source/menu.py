@@ -1112,7 +1112,6 @@ def store_default_config():
         config["auth"] = {} # Should be managed by auth_manager, but ensure key exists
 
     defaults = {
-        "auto_approve": False,
         "pull_on_startup": False,
         "suspend_new_cards": False,
         "auto_move_cards": False, # Note: Action text is "Do not move", so False means "Do move"

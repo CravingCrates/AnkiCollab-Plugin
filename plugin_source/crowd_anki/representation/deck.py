@@ -1394,6 +1394,8 @@ class Deck(JsonSerializableAnkiDict):
         try:
             if all_new_notes:
                 Note.bulk_add_notes(collection, all_new_notes, root_deck_id, import_config)
+                # Restore original creation timestamps for new notes
+                self._restore_original_note_ids(collection, all_new_notes)
             
             if all_update_notes:
                 Note._bulk_update_notes_preserving_placement(collection, all_update_notes, note_to_deck_map, import_config)
@@ -1425,6 +1427,14 @@ class Deck(JsonSerializableAnkiDict):
                 note.anki_object = AnkiNote(collection, id=existing_note_map[note_uuid])
             
             note.handle_import_config_changes(import_config, note_model, field_mapping)
+            
+            # Store original ID for new notes before removing it
+            # For existing notes we must never overwrite the current Anki note ID
+            if is_new and "id" in note.anki_object_dict:
+                note._original_id = note.anki_object_dict["id"]
+                note.anki_object_dict.pop("id", None)
+            elif "id" in note.anki_object_dict:
+                note.anki_object_dict.pop("id", None)
             note.anki_object.__dict__.update(note.anki_object_dict)
             
             # Defensive check for model ID
@@ -1439,7 +1449,7 @@ class Deck(JsonSerializableAnkiDict):
                     logger.warning(f"Had to fetch model ID {model_id} for note processing")
                 else:
                     raise ValueError(f"No valid model ID found for notetype {note_model.anki_dict.get('name', 'unknown')}")
-            
+                         
             note.anki_object.mid = model_id
             note.anki_object.mod = int_time
         
@@ -1457,6 +1467,77 @@ class Deck(JsonSerializableAnkiDict):
                 except Exception as note_error:
                     logger.warning(f"Error processing individual {note_type} note {note.get_uuid()}: {note_error}")
         
+    def _restore_original_note_ids(self, collection, notes):
+        """
+        Restore original creation timestamps for newly imported notes.
+        Only restores IDs that are not already taken by existing notes for safety.
+        """
+        if not notes:
+            return
+            
+        notes_with_original_ids = [note for note in notes if hasattr(note, '_original_id') and note._original_id]
+        
+        if not notes_with_original_ids:
+            logger.debug("No notes with original IDs to restore")
+            return
+            
+        try:
+            logger.info(f"Checking {len(notes_with_original_ids)} notes for safe ID restoration")
+            
+            # Check which original IDs are already taken by existing notes
+            original_ids = [note._original_id for note in notes_with_original_ids]
+            placeholders = ", ".join("?" * len(original_ids))
+            existing_ids = set(row[0] for row in collection.db.all(
+                f"SELECT id FROM notes WHERE id IN ({placeholders})", *original_ids
+            ))
+            
+            # Only restore IDs that are not already taken. in 99% of cases these notes are identical, but I cannot guarantee that they should be overwritten here, so we don't do it
+            safe_notes = []
+            conflicted_notes = []
+            
+            for note in notes_with_original_ids:
+                if note._original_id in existing_ids:
+                    conflicted_notes.append(note)
+                    logger.warning(f"Note ID {note._original_id} already exists, keeping new ID {note.anki_object.id} for safety")
+                else:
+                    safe_notes.append(note)
+            
+            if not safe_notes:
+                logger.info("No safe ID restorations possible - all original IDs are taken")
+            else:
+                logger.info(f"Restoring original creation timestamps for {len(safe_notes)} notes ({len(conflicted_notes)} skipped for safety)")
+                
+                case_conditions = " ".join(
+                    f"WHEN {note.anki_object.id} THEN {note._original_id}"
+                    for note in safe_notes
+                )
+                
+                current_anki_ids = ", ".join(str(note.anki_object.id) for note in safe_notes)
+                
+                collection.db.execute(
+                    f"UPDATE notes SET id = CASE id {case_conditions} END WHERE id IN ({current_anki_ids});"
+                )
+                collection.db.execute(
+                    f"UPDATE cards SET nid = CASE nid {case_conditions} END WHERE nid IN ({current_anki_ids});"
+                )
+                
+                for note in safe_notes:
+                    note.anki_object.id = note._original_id
+                
+                logger.info(f"Successfully restored {len(safe_notes)} original creation timestamps")
+            
+            # Clean up _original_id attribute from all notes
+            for note in notes_with_original_ids:
+                if hasattr(note, '_original_id'):
+                    delattr(note, '_original_id')
+                
+        except Exception as e:
+            logger.error(f"Error restoring original note IDs: {e}")
+            for note in notes_with_original_ids:
+                if hasattr(note, '_original_id'):
+                    delattr(note, '_original_id')
+            # Don't re-raise - this is not a critical error that should stop the import
+            
     def _create_deck_structure(self, collection, parent_name, home_deck, server_root_name=None):
         """Create the entire deck structure with smart subdeck mapping"""
         try:

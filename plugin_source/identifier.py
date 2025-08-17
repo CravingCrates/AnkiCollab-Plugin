@@ -14,12 +14,25 @@ def get_user_hash():
     """Create a unique identifier for the user"""
     identifier = None
     try:
-        identifier = aqt.mw.pm.profile["syncUser"]
-    except KeyError:
+        sync_user = aqt.mw.pm.profile["syncUser"]
+        # Check if syncUser is not just an empty string
+        if sync_user and sync_user.strip():
+            identifier = sync_user.strip()
+    except (KeyError, AttributeError, TypeError):
+        pass  # Fall through to MAC address
+    
+    if not identifier:
         # Get the MAC address
         mac = uuid.getnode()
         # Convert the MAC address to a string
-        identifier = ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
+        if mac and mac != 0:
+            identifier = ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
+    
+    # Fallback if both syncUser and MAC address fail
+    if not identifier:
+        # Generate a random UUID as last resort
+        identifier = str(uuid.uuid4())
+    
     user_hash = hashlib.sha256()
     user_hash.update(identifier.encode('utf-8'))
     return user_hash.hexdigest()
