@@ -45,7 +45,7 @@ Congratulations! The deck is ready to be shared. All they need is the subscripti
 
 ## Media Support
 
-Since early 2025, AnkiCollab hosts it's own Media Server supported by [Ankizin](https://www.ankizin.de/).
+Since early 2025, AnkiCollab hosts its own Media Server supported by [Ankizin](https://www.ankizin.de/).
 
 You can share media files that are in the cards you publish without setting up anything, media files are checked and uploaded automatically when you submit a suggestion.
 AnkiCollab checks the media files attached to the cards you suggest and uploads those that are missing on the server, subsribers automatically download new files when they check for new content.
