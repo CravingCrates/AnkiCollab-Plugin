@@ -14,7 +14,7 @@ AnkiCollab does not currently respect separate Anki profiles. If you subscribe t
 
 <details close>
 <summary><b>Does media get stored on AnkiCollab? How do subscribers get deck media?</b></summary>
-AnkiCollab does not upload media (images, audio, etc.) when publishing a deck or suggesting changes. If a deck has media, the maintainer should have a link available for you to download.
+AnkiCollab automatically up- and downloads media files that are attached to your cards. For more information, see "getting started maintainer"
 </details>
 
 <details close>
