@@ -48,7 +48,9 @@ Congratulations! The deck is ready to be shared. All they need is the subscripti
 Since early 2025, AnkiCollab hosts it's own Media Server supported by [Ankizin](https://www.ankizin.de/).
 
 You can share media files that are in the cards you publish without setting up anything, media files are checked and uploaded automatically when you submit a suggestion.
-AnkiCollab checks the media files attached to the cards you suggest and uploads those that are missing on the server, subsribers automatically download new files when they Check for new content.
+AnkiCollab checks the media files attached to the cards you suggest and uploads those that are missing on the server, subsribers automatically download new files when they check for new content.
+Since the media download takes longer than the rest of the update process, it will continue in the background while users can use anki normally, a small bar on the top right will show the download progress.
+Please note that you are liable for the content you distribute, so make sure to only use unlicensed material or get permission.
 
 To bulk upload media files, you can also click the gear icon next to your deck and select AnkiCollab → Upload Missing Media
 
@@ -56,7 +58,9 @@ To bulk upload media files, you can also click the gear icon next to your deck a
 
 Your subscribers can pull missing media files by using "Download Missing Media" respectively
 
-Please note that you are liable for the content you distribute, so make sure to only use unlicensed material or get permission.
+Your files will be converted into .webp format to minimize storage usage, invalid file names will automatically be renamed.
+
+__TBD__ Supported file types, file size limit, other restrictions
 
 ## Handling Suggestions
 
