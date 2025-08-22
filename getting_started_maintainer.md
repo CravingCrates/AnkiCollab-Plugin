@@ -15,7 +15,7 @@ Maintainers are the ones keeping AnkiCollab decks healthy, accurate, and updated
 
 ## Publishing a Deck
 
-By publishing a deck, you will be the sole maintainer and it will be associated with your email address.
+By publishing a deck, you will be the sole maintainer and it will be associated with your username.
 
 ### Signing Up for AnkiCollab
 
@@ -29,7 +29,7 @@ Inside of Anki, go to the toolbar, and click `AnkiCollab → Publish New Deck`.
 
 ![A cursor hovering over the Publish New Deck button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/jtIWABO.png)
 
-Select the deck you want to upload and enter your email **exactly** as it is on AnkiCollab.com.
+Select the deck you want to upload and enter your username **exactly** as it is on AnkiCollab.com.
 
 ![A pop up window from AnkiCollab waiting for the user to choose which deck to publish.](https://i.imgur.com/Q8IaYmu.png)
 
@@ -45,7 +45,26 @@ Congratulations! The deck is ready to be shared. All they need is the subscripti
 
 ## Media Support
 
-Unfortunately, there is currently no media support in AnkiCollab. This means, you'll have to distribute your media files manually or host them somewhere. We hope to offer a more polished solution in the future.
+Since early 2025, AnkiCollab hosts its own Media Server supported by [Ankizin](https://www.ankizin.de/).
+
+You can share media files that are in the cards you publish without setting up anything, media files are checked and uploaded automatically when you submit a suggestion.
+AnkiCollab checks the media files attached to the cards you suggest and uploads those that are missing on the server, subscribers automatically download new files when they check for new content.
+
+Restrictions for file uploads are as follows:
+
+- The file is too big (optimized size is > 2mb)
+- The fileformat is not supported (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff" are the supported formats)
+
+Your files will be converted into .webp format to minimize storage usage, invalid file names will automatically be renamed.
+
+Since the media download takes longer than the rest of the update process, it will continue in the background while users can use anki normally, a small bar on the top right will show the download progress.
+Please note that you are liable for the content you distribute, so make sure to only use unlicensed material or get permission.
+
+To bulk upload media files, you can also click the gear icon next to your deck and select AnkiCollab → Upload Missing Media
+
+<img src="https://i.imgur.com/kijdL1t.png" alt="bulk upload media option with blue arrow, dark mode" width="400"/><br>
+
+Your subscribers can pull missing media files by using "Download Missing Media" respectively
 
 ## Handling Suggestions
 
@@ -65,13 +84,18 @@ Once you're logged in, check the box. That's all you need to do!
 - If you happen to want to add more notes, just select them in your browser (Ctrl + B), hit right click and select "Ankicollab : Bulk suggest notes". You can then review them on the site (if you haven't turned on [auto approve changes](#auto-approve-changes)).
 
 ![](https://i.imgur.com/tV2tOga.png)
+
 - If you want to add some subdecks to the deck (keep in mind that once added they can't be removed for now), you can go on the left of the *Browse* window and right click on the master deck which you chose when first publishing, right click and select "suggest on Ankicollab"
 
 ![](https://i.imgur.com/zLCt3xV.png)
 
+- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*"
+
+![Deck Management Options](https://i.imgur.com/RMKAQva.png)
+
 ### Content Changes
 
-All the different possible changes are handled the same way. Someone (or you) may submit a change — fixing typos, updating content, formatting, or something else. You'll go to the **All Reviews** page on AnkiCollab and approve or deny them.
+All the different possible changes are handled the same way. Someone (or you) may submit a change — fixing typos, updating content, formatting, changing tags, or something else. You'll go to the **All Reviews** page on AnkiCollab and approve or deny them.
 
 Let's use a sample card from a trivia deck.
 
