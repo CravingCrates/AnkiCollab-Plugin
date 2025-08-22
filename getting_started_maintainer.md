@@ -89,7 +89,7 @@ Once you're logged in, check the box. That's all you need to do!
 
 ![](https://i.imgur.com/zLCt3xV.png)
 
-- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*disallow new notetype uploads*"
+- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*"
 
 ![Deck Management Options](https://i.imgur.com/RMKAQva.png)
 
