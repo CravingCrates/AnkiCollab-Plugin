@@ -14,7 +14,8 @@ AnkiCollab does not currently respect separate Anki profiles. If you subscribe t
 
 <details close>
 <summary><b>Does media get stored on AnkiCollab? How do subscribers get deck media?</b></summary>
-AnkiCollab automatically up- and downloads media files that are attached to your cards. For more information, see "getting started maintainer"
+AnkiCollab automatically up- and downloads media files that are attached to your cards.
+For more information, see the <a href="https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/getting_started_maintainer.md">getting started maintainer</a> document.
 </details>
 
 <details close>
