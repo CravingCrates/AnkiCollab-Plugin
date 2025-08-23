@@ -15,33 +15,40 @@ Maintainers are the ones keeping AnkiCollab decks healthy, accurate, and updated
 
 ## Publishing a Deck
 
-By publishing a deck, you will be the sole maintainer and it will be associated with your username.
+By publishing a deck, you will be the sole maintainer and it will be associated with your username. You can add more maintainers by their username via the `Manage Decks` Tab on the Website.
 
 ### Signing Up for AnkiCollab
 
 Create an account by going to [AnkiCollab.com/Login](https://www.ankicollab.com/login) and clicking **Sign Up Here**.
 
-![The sign up page for AnkiCollab website.](https://i.imgur.com/z4I11Wm.png)
+<img src="https://i.imgur.com/VPsLsk5.png" alt="The sign up page for AnkiCollab website" width="600">
 
 ### Adding a Deck to AnkiCollab
 
 Inside of Anki, go to the toolbar, and click `AnkiCollab → Publish New Deck`.
 
-![A cursor hovering over the Publish New Deck button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/jtIWABO.png)
+![AnkiCollab Dropdown bar](https://i.imgur.com/CsMaZnq.png)
 
 Select the deck you want to upload and enter your username **exactly** as it is on AnkiCollab.com.
 
-![A pop up window from AnkiCollab waiting for the user to choose which deck to publish.](https://i.imgur.com/Q8IaYmu.png)
+![A pop up window from AnkiCollab waiting for the user to choose which deck to publish.](https://i.imgur.com/3z4jR69.png)
 
 After clicking **Publish Deck**, a confirmation message will pop up and you will be able to view your deck on [AnkiCollab.com/Decks](https://www.ankicollab.com/decks).
 
-![A blue arrow pointing to the title of a deck on the AnkiCollab website.](https://i.imgur.com/9NjMnVf.png)
+![A blue arrow pointing to the title of a deck on the AnkiCollab website.](https://i.imgur.com/dSahhBI.png)
 
 Click on the deck and you can see all the cards as well as the **subscription key**. 🔑
 
-![A blue arrow pointing to the subscription key of a deck on the AnkiCollab website.](https://i.imgur.com/jDP2QuQ.png)
+![A blue arrow pointing to the subscription key of a deck on the AnkiCollab website.](https://i.imgur.com/lMgbAyS.png)
 
-Congratulations! The deck is ready to be shared. All they need is the subscription key — no account required! 👍
+Congratulations! The deck is ready to be shared with users. All they need is the subscription key and an account of their own.
+
+Users are prompted to log in after they download the Addon, and are linked to the sign-up page if they haven't created an account yet.
+
+Please note that your newly published Deck is set to `Unlisted` and `New Notetype uploads` are disallowed. You can uncheck the first option to make the deck visible under [Explore Decks](https://www.ankicollab.com/decks)
+
+![Public checkbox and NoteType Checkbox](https://i.imgur.com/T0s0N2A.png)
+
 
 ## Media Support
 
@@ -72,11 +79,11 @@ As a maintainer, you are responsible for approving or denying changes. There are
 
 ## Auto Approve Changes
 
-For convenience purposes, you can let the system auto approve all changes you (or other maintainers) make. In order to enable this feature, Login to AnkiCollab from within the Anki Desktop App
-
-![Login Button](https://i.imgur.com/Prl6Pqo.png)
+For convenience purposes, you can let the system auto approve all changes you (or other maintainers) make.
 
 Once you're logged in, check the box. That's all you need to do!
+
+Card deletion requests are always required to be reviewed on the Website to prevent accidental removal of content.
 
 ![Auto Approve Checkbox](https://i.imgur.com/IkRpkgi.png)
 
@@ -89,7 +96,7 @@ Once you're logged in, check the box. That's all you need to do!
 
 ![](https://i.imgur.com/zLCt3xV.png)
 
-- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*"
+- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*". The latter is enabled by default, v.sup.
 
 ![Deck Management Options](https://i.imgur.com/RMKAQva.png)
 
@@ -120,6 +127,8 @@ Here, the rest of the fields are shown.
 ![The full review page on AnkiCollab.com](https://i.imgur.com/Ij62zmY.png)
 
 From here, or the previous page, simply click the check mark for suggestions you want to keep or the red X to reject them. After that, you're good to go!
+
+### Card deletion feature TO BE DONE
 
 ## Credits
 
