@@ -96,7 +96,7 @@ Card deletion requests are always required to be reviewed on the Website to prev
 
 ![](https://i.imgur.com/zLCt3xV.png)
 
-- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*". The latter is enabled by default, v.sup.
+- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*". The latter is enabled by default.
 
 ![Deck Management Options](https://i.imgur.com/RMKAQva.png)
 
