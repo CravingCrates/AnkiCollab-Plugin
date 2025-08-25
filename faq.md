@@ -14,7 +14,9 @@ AnkiCollab does not currently respect separate Anki profiles. If you subscribe t
 
 <details close>
 <summary><b>Does media get stored on AnkiCollab? How do subscribers get deck media?</b></summary>
-AnkiCollab does not upload media (images, audio, etc.) when publishing a deck or suggesting changes. If a deck has media, the maintainer should have a link available for you to download.
+AnkiCollab automatically up- and downloads media files that are attached to your cards.
+
+For more information, see the <a href="https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/getting_started_maintainer.md">getting started maintainer</a> document.
 </details>
 
 <details close>
@@ -58,47 +60,48 @@ Additionally, it's worth noting that certain fields may already be protected by 
 </details>
 <details close>
 <summary><b>I get this Error: "Please only use notetypes that the maintainer added"!?</b></summary>
-You can only suggest notes with notetypes that already exist on the deck (since its initial upload). That way, the maintainer can be sure that subscribers only upload notes with correct notetypes. Allowing new notetypes will soon be a toggleable option on the website.
-If you have a lot of subscribers, I'll manually help you but if it's just you and your friend, please reupload the deck with all notetypes configured properly.
+The maintainer can choose to not allow new notetype creation. If that is the case, you can only suggest notes with notetypes that already exist in the deck. That way, the maintainer can be sure that subscribers only upload notes with correct notetypes (e.g. to prevent flooding of the deck with slightly different versions of notetypes).
 </details>
 
 ## Maintainer
 
 <details close>
 <summary><b>How do I delete a deck?</b></summary>
-You can delete a deck by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> at the bottom of the page you will have the option to delete the deck
+You can delete a deck by going to the Manage Decks option on the side-bar → select your deck in the page for the deck you are maintaining → at the bottom of the page you will have the option to delete the deck
 </details>
 
 <details close>
-<summary><b>How do I make a deck private?</b></summary>
-You can make a deck private by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have a checkbox to make the deck private (unlisted) by simply clicking that checkbox the deck will be made private
+<summary><b>How do I make a deck publically available?</b></summary>
+Your deck is private (unlisted) by default when you upload it, users can only subscribe if you share the subscription key with them.
+
+To make your deck publicly available, go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are hosting → you will have a checkbox to make the deck public by simply clicking that checkbox. Users can then see your deck in the <a href="https://www.ankicollab.com/decks">Explore Decks</a> tab on the side-bar.
 </details>
 
 <details close>
 <summary><b>How do I put a description on the Deck Browser page on AnkiCollab?</b></summary>
-When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have the option to Update deck description. keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly
+When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are maintaining → you will have the option to Update deck description. Keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly.
 </details>
 
 <details close>
 <summary><b> How can I inform my Subscribers about changes?</b></summary>
-This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the website side-bar -> select your deck in the page for the deck you are maintaining -> Add a changelog message as well as view your previous changelog messages (if you published any).
+This can be done by publishing a changelog message. To publish a changelog message, you simply have to go to the Manage Decks option on the website side-bar → select your deck in the page for the deck you are maintaining → Add a changelog message as well as view your previous changelog messages (if you published any) and press `Save all changes`.
 <br>
-<img src="https://i.imgur.com/T4kiBYI.png" width="50%">
-  
+<img src="https://i.imgur.com/zsOHpPr.png" width="50%">
+
 <br/><br/>
 And subscribers will see a popup that lists all changes that occurred since they last updated:
 <img src="https://i.imgur.com/mpzDCEB.png" width="50%">
 </details>
 
 <details close>
-  <summary><b>How can I add new changelog messages from within the Anki Desktop App?"</b></summary>
+  <summary><b>How can I add new changelog messages from within the Anki Desktop App?</b></summary>
 Here's how it works:
 
 1. **Log In and Open the Deck Browser**: Ensure that you are logged in to your AnkiCollab account from within the Anki Desktop app.
 
-2. **Deck Selection**: To access this feature, you must be a maintainer of the deck. Right-click on the deck of your choice to open the context menu from the Deck Browser.
+2. **Deck Selection**: To access this feature, you must be a maintainer of the deck. Right-click on the deck of your choice in the Deck Browser to open the context menu.
 
-3. **"Add Changelog" Option**: After right-clicking on the deck, you'll notice a new option: "Add Changelog." Click on it to proceed.
+3. **"Add new Changelog" Option**: After right-clicking on the deck, you'll notice a new option: "Add new Changelog." Click on it to proceed.
 
 4. **Update Your Changelog**: A user-friendly interface will appear, allowing you to enter your changelog details quickly and efficiently. Describe the changes, updates, and improvements you've made to the deck.
 
@@ -118,12 +121,12 @@ Keep in mind that when you change the deck name on AnkiCollab, you will also hav
 Optional Tags are a cool way to make your Deck Tag Structure less crowded. Imagine your deck is used by 3 different schools and each school has the cards tagged according to their school curriculum. Not all subscribers want to have all these curriculums in their local collection because it makes it a lot less readable. 
 To solve that issue, you can use Optional Tags! These tags are only synchronized to the users that subscribed to them.
 <br /><br />
-To create a new Optional Tag group, navigate to the AnkiCollab Website > Manage Decks > Select your Deck > Optional Tags: Show All.
+To create a new Optional Tag group, navigate to the AnkiCollab Website → Manage Decks → Select your Deck → Optional Tags: Show All.
 
 <br />
 This will bring you to a page like this:
 <br />
-<img src="https://cdn.discordapp.com/attachments/1066468817351483502/1102317974511177858/RynkViW.png" width="50%">
+<img src="https://i.imgur.com/HCIiDMR.png" width="100%">
 
 Here you can add the new Tag Groups you want to use (For example, one for each school).
 
@@ -133,39 +136,50 @@ To classify a tag as an "optional tag" it needs the prefix <code>AnkiCollab_Opti
 
 An example tag could look like this:
 <br />
-<img src="https://i.imgur.com/aRknj1g.png" width="50%">
+<img src="https://i.imgur.com/lsj1pg1.png" width="50%">
 
 Now you can go ahead and tag your notes to your liking and the subscribers will see a popup like this, when they subscribe to your deck:
 <br />
-<img src="https://cdn.discordapp.com/attachments/1066468817351483502/1102317974846718072/ZGS1WNr.png" width="50%">
+<img src="https://i.imgur.com/gC8hMWS.png" width="50%">
 
-and if they choose to subscribe to the ASU Tag, they will find all the tagged cards in their collection, but none of the tags they haven't subscribed to!
+and if they choose to subscribe to the NYU Tag, they will find all the tagged cards in their collection, but none of the tags they haven't subscribed to!
 <br />
-<img src="https://i.imgur.com/L0vmXlP.png" width="50%"> 
+<img src="https://i.imgur.com/BWwwiUc.png" width="50%"> 
 
 Note that this only affects tags. Notes and Cards are unaffected by this. All subscribers will always get all cards no matter what tag they have.
+
+Update 08/2025: A new feature to enable decks being linked to other decks and therefore creating the possibility of "optional cards" is currently WIP.
+Follow the [Discord](https://discord.com/invite/9x4DRxzqwM) for current information.
 </details>
 
 <details close>
 <summary><b>How do I add my friends as maintainers for my deck on AnkiCollab?</b></summary>
-  
-Go to the AnkiCollab website.
-Click on the "Manage Decks" option in the side-bar.<br />
-Select the deck you are maintaining from the deck page.<br />
-On the left side, you will find a title that says "Maintainers" with a button that says "Show All". Click the "Show All" button.<br />
-A list of current maintainers for the deck will be displayed, along with an input box to add the email of new maintainers.<br />
-Ask your friend to create an account on AnkiCollab.com using the email they want to use as a maintainer.<br />
-Add their email in the input box and click the green "Add" button.<br />
-Once your friend logs in to the AnkiCollab website using their email, they will be able to see your deck and review changes.<br /><br />
-  
-  
-Please note that maintainers do not have full access to your deck. There are certain actions, such as deleting the deck or adding more maintainers, that only you can perform.
-  
-![Screenshot from 2023-06-04 18-49-41](https://github.com/CravingCrates/AnkiCollab-Plugin/assets/70135155/2777a855-f387-4731-a443-264070d96312)
-![Screenshot from 2023-06-04 19-04-49](https://github.com/CravingCrates/AnkiCollab-Plugin/assets/70135155/723a7182-308f-4ab1-9efa-debe7672936d)
+Here's how it works:
 
+1. Go to the **AnkiCollab website** and log in with the account that hosts the deck you want to add maintainers to.
+
+2. Click on the **Manage Decks** option in the side-bar and select the wanted deck from the deck page.
+
+3. On the left side, you will find a big button that says **Maintainers**.
+
+4. After clicking it, a list of current maintainers for the deck will be displayed, along with an **input box to add the username of new maintainers**.
+
+5. **Add the username** of any friend you want to give maintaining rights to into the input box and  **hit Enter**.
+
+Once your friend logs in to the AnkiCollab website using their username, they will be able to see open suggestions in the [Review Changes](https://www.ankicollab.com/reviews) tab of the side-bar.<br /><br />
   
+Please note that maintainers do not have full access to your deck. The Deck management tab on the side-bar is only ever available for the account hosting the deck.
+
+So certain actions, such as updating the description, deleting the deck or adding more maintainers, can only be performed by the host account.
+
+If you wish to share host privileges with others, you need to share the account credentials with them.
+
+Here's how the relevant parts of the Website look like:
+![Maintainer_DeckSelectScreen-Maintainers with blue box](https://i.imgur.com/8Cht8e9.png)
+This is your central Deck Management screen.<br>
+![Add Maintainers with blue arrows](https://i.imgur.com/FHKFsNM.png)
+This is the list of all accounts with maintainer privileges. Attentive eyes may spot a very great guy.
 </details>
 
-If you have a question that hasn't been answered in this FAQ, please reach out to us on Discord and we will try our best to help you :)
+If you have a question that hasn't been answered in this FAQ, please reach out to us on [Discord](https://discord.com/invite/9x4DRxzqwM) and we will try our best to help you :)
 
