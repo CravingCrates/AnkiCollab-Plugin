@@ -15,7 +15,7 @@ Maintainers are the ones keeping AnkiCollab decks healthy, accurate, and updated
 
 ## Publishing a Deck
 
-By publishing a deck, you will be the sole maintainer and it will be associated with your username. You can add more maintainers by their username via the `Manage Decks` Tab on the Website. For more details on that, see the [FAQ](#faq.md) entry.
+By publishing a deck, you will be the sole maintainer and it will be associated with your username. You can add more maintainers by their username via the `Manage Decks` Tab on the Website. For more details on that, see the [FAQ](/blob/main/faq.md) entry.
 
 ### Signing Up for AnkiCollab
 
