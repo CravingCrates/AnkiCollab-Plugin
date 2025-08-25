@@ -73,7 +73,8 @@ You can delete a deck by going to the Manage Decks option on the side-bar → se
 <details close>
 <summary><b>How do I make a deck publically available?</b></summary>
 Your deck is private (unlisted) by default when you upload it, users can only subscribe if you share the subscription key with them.
-To  make your deck publicly available, go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are hosting → you will have a checkbox to make the deck public by simply clicking that checkbox. Users can then see your deck in the <a href="https://www.ankicollab.com/decks">Explore Decks</a> tab on the side-bar.
+
+To make your deck publicly available, go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are hosting → you will have a checkbox to make the deck public by simply clicking that checkbox. Users can then see your deck in the <a href="https://www.ankicollab.com/decks">Explore Decks</a> tab on the side-bar.
 </details>
 
 <details close>
