@@ -15,7 +15,7 @@ Maintainers are the ones keeping AnkiCollab decks healthy, accurate, and updated
 
 ## Publishing a Deck
 
-By publishing a deck, you will be the sole maintainer and it will be associated with your username. You can add more maintainers by their username via the `Manage Decks` Tab on the Website.
+By publishing a deck, you will be the sole maintainer and it will be associated with your username. You can add more maintainers by their username via the `Manage Decks` Tab on the Website. For more details on that, see the [FAQ](#faq.md) entry.
 
 ### Signing Up for AnkiCollab
 
@@ -128,8 +128,13 @@ Here, the rest of the fields are shown.
 
 From here, or the previous page, simply click the check mark for suggestions you want to keep or the red X to reject them. After that, you're good to go!
 
-### Card deletion feature TO BE DONE
+### Card deletion
 
+Cards in your deck can be removed by using the the **Request Note Removal** option just below the *Bulk suggest Notes* feature in the browser.
+
+[RemoveNoteRequest in Browser - White Arrow](https://i.imgur.com/lftYyBT.png)
+
+Removal requests disregard the Auto Approve Changes feature, they always require approval on the Website.
 ## Credits
 
 This guide was written by Andre, and we would like to extend our sincere thanks for his contributions. With his expertise and commitment, this tutorial has become a valuable resource for all those who read it. Thank you, Andre, for your hard work and dedication.
