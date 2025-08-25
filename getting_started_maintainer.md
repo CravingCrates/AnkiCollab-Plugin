@@ -132,7 +132,7 @@ From here, or the previous page, simply click the check mark for suggestions you
 
 Cards in your deck can be removed by using the the **Request Note Removal** option just below the *Bulk suggest Notes* feature in the browser.
 
-[RemoveNoteRequest in Browser - White Arrow](https://i.imgur.com/lftYyBT.png)
+![RemoveNoteRequest in Browser - White Arrow](https://i.imgur.com/lftYyBT.png)
 
 Removal requests disregard the Auto Approve Changes feature, they always require approval on the Website.
 ## Credits
