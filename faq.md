@@ -79,14 +79,14 @@ To make your deck publicly available, go to the Manage Decks option on the side-
 
 <details close>
 <summary><b>How do I put a description on the Deck Browser page on AnkiCollab?</b></summary>
-When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are maintaining → you will have the option to Update deck description. keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly
+When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are maintaining → you will have the option to Update deck description. Keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly.
 </details>
 
 <details close>
 <summary><b> How can I inform my Subscribers about changes?</b></summary>
-This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the website side-bar → select your deck in the page for the deck you are maintaining → Add a changelog message as well as view your previous changelog messages (if you published any).
+This can be done by publishing a changelog message. To publish a changelog message, you simply have to go to the Manage Decks option on the website side-bar → select your deck in the page for the deck you are maintaining → Add a changelog message as well as view your previous changelog messages (if you published any) and press `Save all changes`.
 <br>
-<img src="https://i.imgur.com/T4kiBYI.png" width="50%">
+<img src="https://i.imgur.com/zsOHpPr.png" width="50%">
 
 <br/><br/>
 And subscribers will see a popup that lists all changes that occurred since they last updated:
@@ -94,14 +94,14 @@ And subscribers will see a popup that lists all changes that occurred since they
 </details>
 
 <details close>
-  <summary><b>How can I add new changelog messages from within the Anki Desktop App?"</b></summary>
+  <summary><b>How can I add new changelog messages from within the Anki Desktop App?</b></summary>
 Here's how it works:
 
 1. **Log In and Open the Deck Browser**: Ensure that you are logged in to your AnkiCollab account from within the Anki Desktop app.
 
-2. **Deck Selection**: To access this feature, you must be a maintainer of the deck. Right-click on the deck of your choice to open the context menu from the Deck Browser.
+2. **Deck Selection**: To access this feature, you must be a maintainer of the deck. Right-click on the deck of your choice in the Deck Browser to open the context menu.
 
-3. **"Add Changelog" Option**: After right-clicking on the deck, you'll notice a new option: "Add Changelog." Click on it to proceed.
+3. **"Add new Changelog" Option**: After right-clicking on the deck, you'll notice a new option: "Add new Changelog." Click on it to proceed.
 
 4. **Update Your Changelog**: A user-friendly interface will appear, allowing you to enter your changelog details quickly and efficiently. Describe the changes, updates, and improvements you've made to the deck.
 
