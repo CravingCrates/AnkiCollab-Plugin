@@ -40,5 +40,5 @@ You can confirm that the installation was successful by checking the toolbar for
 
 ## Credits
 This project would not be possible if it wasn't for the great work others have put in before me. 2 people that I want to mention at this point and give credit to are
-1. Stvad for their incredible work at ![CrowdAnki](https://github.com/Stvad/CrowdAnki/)
-2. abdo for their helpfullness on the anki forum and the ![media exporter](https://github.com/abdnh/anki-media-exporter) used in this project 
+1. Stvad for their incredible work at [CrowdAnki](https://github.com/Stvad/CrowdAnki/)
+2. abdo for their helpfullness on the anki forum and the [media exporter](https://github.com/abdnh/anki-media-exporter) used in this project 
