@@ -60,33 +60,33 @@ Additionally, it's worth noting that certain fields may already be protected by 
 </details>
 <details close>
 <summary><b>I get this Error: "Please only use notetypes that the maintainer added"!?</b></summary>
-You can only suggest notes with notetypes that already exist on the deck (since its initial upload). That way, the maintainer can be sure that subscribers only upload notes with correct notetypes. Allowing new notetypes will soon be a toggleable option on the website.
-If you have a lot of subscribers, I'll manually help you but if it's just you and your friend, please reupload the deck with all notetypes configured properly.
+The maintainer can choose to not allow new notetype creation. If that is the case, you can only suggest notes with notetypes that already exist in the deck. That way, the maintainer can be sure that subscribers only upload notes with correct notetypes (e.g. to prevent flooding of the deck with slightly different versions of notetypes).
 </details>
 
 ## Maintainer
 
 <details close>
 <summary><b>How do I delete a deck?</b></summary>
-You can delete a deck by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> at the bottom of the page you will have the option to delete the deck
+You can delete a deck by going to the Manage Decks option on the side-bar → select your deck in the page for the deck you are maintaining → at the bottom of the page you will have the option to delete the deck
 </details>
 
 <details close>
-<summary><b>How do I make a deck private?</b></summary>
-You can make a deck private by going to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have a checkbox to make the deck private (unlisted) by simply clicking that checkbox the deck will be made private
+<summary><b>How do I make a deck publically available?</b></summary>
+Your deck is private (unlisted) by default when you upload it, users can only subscribe if you share the subscription key with them.
+To  make your deck publicly available, go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are hosting → you will have a checkbox to make the deck public by simply clicking that checkbox. Users can then see your deck in the <a href="https://www.ankicollab.com/decks">Explore Decks</a> tab on the side-bar.
 </details>
 
 <details close>
 <summary><b>How do I put a description on the Deck Browser page on AnkiCollab?</b></summary>
-When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar -> select your deck in the page for the deck you are maintaining -> you will have the option to Update deck description. keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly
+When you initially publish a deck, the deck description is also uploaded and can be seen on AnkiCollab's deck browser page. If you want to change it, you can go to the Manage Decks option on the side-bar → select your deck in the page for the deck you are maintaining → you will have the option to Update deck description. keep in mind deck description is written using HTML (as is most things within anki) so you can style it accordingly
 </details>
 
 <details close>
 <summary><b> How can I inform my Subscribers about changes?</b></summary>
-This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the website side-bar -> select your deck in the page for the deck you are maintaining -> Add a changelog message as well as view your previous changelog messages (if you published any).
+This can be done by publishing a changelog message. To publish a changelog message you simply have to go to the Manage Decks option on the website side-bar → select your deck in the page for the deck you are maintaining → Add a changelog message as well as view your previous changelog messages (if you published any).
 <br>
 <img src="https://i.imgur.com/T4kiBYI.png" width="50%">
-  
+
 <br/><br/>
 And subscribers will see a popup that lists all changes that occurred since they last updated:
 <img src="https://i.imgur.com/mpzDCEB.png" width="50%">
