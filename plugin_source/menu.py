@@ -26,7 +26,6 @@ from aqt.qt import (
     Qt,
 )
 # Explicit imports to satisfy static checkers that don't follow star imports
-from aqt.qt import QCheckBox, QLabel, QHBoxLayout, QPushButton
 from aqt.theme import theme_manager
 from datetime import datetime, timezone
 import requests
