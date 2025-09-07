@@ -4,6 +4,7 @@ from aqt.browser import Browser, SidebarTreeView, SidebarItem, SidebarItemType
 from anki.decks import DeckId
 from anki.notes import NoteId
 from aqt.qt import *
+from aqt.qt import QMenu, QModelIndex, QCheckBox, QDialogButtonBox, QApplication
 from anki import hooks
 from anki.collection import Collection
 from aqt.utils import askUser, showInfo
@@ -20,6 +21,10 @@ from .gear_menu_setup import add_browser_menu_item, on_deck_browser_will_show_op
 from .dialogs import AddChangelogDialog
 
 from .auth_manager import auth_manager
+from .utils import get_logger
+import requests
+
+logger = get_logger("ankicollab.hooks")
 
 added_editor_buttons = [] # Keep track of buttons added to editors
 added_addcards_widgets = [] # Keep track of widgets added to AddCards
@@ -107,21 +112,32 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
         'force_overwrite': False # not implemented on the backend yet so we pass false welp
     }
 
-    # TODO: Backgroun threading
+    # TODO: Background threading
     try:
         response = requests.post(f"{API_BASE_URL}/requestRemoval", json=payload)
         response.raise_for_status()
-
-        print(f"Removal request response: {response.text}")
-        if askUser(f"Successfully requested removal of {len(nids)} note(s) from AnkiCollab.\nDo you want to delete them locally now?", parent=window if window is not None else mw):
-             delete_notes(nids)
-
+        logger.debug(f"Removal request response: {response.text}")
+        if askUser(
+            f"Successfully requested removal of {len(nids)} note(s) from AnkiCollab.\nDo you want to delete them locally now?",
+            parent=window if window is not None else mw,
+        ):
+            delete_notes(nids)
     except requests.exceptions.RequestException as e:
         showInfo(f"Error requesting note removal: {e}", parent=window if window is not None else mw)
-        print(f"Removal request failed: {e}")
+        logger.exception("Removal request failed")
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
     except Exception as e:
         showInfo(f"An unexpected error occurred: {e}", parent=window if window is not None else mw)
-        print(f"Unexpected error during removal request: {e}")
+        logger.exception("Unexpected error during removal request")
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
 
 
 def request_note_removal(browser: Browser, nids: Sequence[NoteId]) -> None:
@@ -317,7 +333,7 @@ def init_add_card(addCardsDialog):
     else:
         # Fallback: add to the main layout if button box not found
         addCardsDialog.layout().addWidget(checkbox)
-        print("AnkiCollab: Could not find buttonBox in AddCards dialog, added checkbox to main layout.")
+        logger.debug("Could not find buttonBox in AddCards dialog, added checkbox to main layout.")
 
 
 def make_new_card(note: NoteId):
@@ -427,7 +443,7 @@ def onProfileLoaded():
     main.media_manager.set_media_folder(mw.col.media.dir())
     autoUpdate()
     patch_successful = patch_image_occlusion_enhanced()
-    print(f"Image Occlusion Enhanced patch: {patch_successful}")
+    logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
 
 def update_hooks_for_login_state(logged_in: bool):
     #placeholder for future use

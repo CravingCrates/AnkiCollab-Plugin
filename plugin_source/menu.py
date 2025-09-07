@@ -2,6 +2,30 @@
 from aqt import mw
 from aqt.utils import askUser, showInfo
 from aqt.qt import *
+# Explicit imports to satisfy static analyzers (aqt.qt re-exports Qt classes)
+from aqt.qt import (
+    QMenu,
+    QAction,
+    QDialog,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTableWidget,
+    QTableWidgetItem,
+    QGroupBox,
+    QLineEdit,
+    QComboBox,
+    QLabel,
+    QPushButton,
+    QCheckBox,
+    QRadioButton,
+    QAbstractItemView,
+    QHeaderView,
+    QSizePolicy,
+    QApplication,
+    Qt,
+)
+# Explicit imports to satisfy static checkers that don't follow star imports
 from aqt.theme import theme_manager
 from datetime import datetime, timezone
 import requests
@@ -16,6 +40,7 @@ from .media_import import on_media_btn
 from .hooks import async_update, update_hooks_for_login_state
 from .dialogs import LoginDialog
 from .auth_manager import auth_manager
+from .sentry_integration import init_sentry
 
 collab_menu = QMenu('AnkiCollab', mw)
 links_menu = QMenu('Links', mw)
@@ -49,14 +74,14 @@ def delete_selected_rows(table, dialog):
     for row in selected_rows:
         if table.item(row, 0) is not None:
             deck_hash = table.item(row, 0).text()
-            print(f"found: {deck_hash}")
+            logger.debug(f"found: {deck_hash}")
             QueryOp(
                 parent=mw,
                 op=lambda col: unsubscribe_from_deck(deck_hash),
                 success=lambda result: None
             ).without_collection().run_in_background()
             if deck_hash in strings_data:
-                print(" Unsubscribing from deck:", deck_hash)
+                logger.debug(f"Unsubscribing from deck: {deck_hash}")
                 strings_data.pop(deck_hash)
         table.removeRow(row)
     mw.addonManager.writeConfig(__name__, strings_data)
@@ -381,7 +406,7 @@ def edit_subscription_details(deck_hash, parent_dialog):
             
         except Exception as e:
             showInfo(f"Error saving changes: {str(e)}")
-            print(f"Error in save_changes: {e}")  # For debugging
+            logger.exception("Error in save_changes")  # For debugging
     
     save_button.clicked.connect(save_changes)
     cancel_button.clicked.connect(dialog.reject)
@@ -948,7 +973,7 @@ intellectual property holder(s) to share it on AnkiCollab.""")
                 
         except Exception as e:
             showInfo(f"An error occurred during publishing: {e}", parent=dialog, title="Publication Error")
-            print(f"Publishing error: {e}")
+            logger.exception("Publishing error")
 
     publish_button.clicked.connect(on_publish_button_clicked)
 
@@ -1019,11 +1044,16 @@ def show_global_settings_dialog(parent_dialog):
     move_cards_cb.setChecked(bool(settings.get("auto_move_cards", False)))
     auto_approve_cb = QCheckBox("Auto Approve Changes (Maintainer only)")
     auto_approve_cb.setChecked(bool(auth_manager.get_auto_approve()))
+    error_reporting_cb = QCheckBox("Report errors anonymously (recommended)")
+    error_reporting_cb.setChecked(bool(settings.get("error_reporting_enabled", False)))
     
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
     global_layout.addWidget(move_cards_cb)
     global_layout.addWidget(auto_approve_cb)
+    
+    # Add to group
+    global_layout.addWidget(error_reporting_cb)
     layout.addWidget(global_group)
 
     # Info section
@@ -1044,8 +1074,14 @@ def show_global_settings_dialog(parent_dialog):
         settings["pull_on_startup"] = pull_on_startup_cb.isChecked()
         settings["suspend_new_cards"] = suspend_new_cards_cb.isChecked()
         settings["auto_move_cards"] = move_cards_cb.isChecked()
+        settings["error_reporting_enabled"] = error_reporting_cb.isChecked()
         mw.addonManager.writeConfig(__name__, strings_data)
         auth_manager.set_auto_approve(auto_approve_cb.isChecked())
+        # Apply telemetry setting immediately
+        try:
+            init_sentry()
+        except Exception:
+            pass
         showInfo("Global settings saved!")
         dialog.accept()
 
@@ -1119,6 +1155,8 @@ def store_default_config():
         "last_ratepls": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         "pull_counter": 0,
         "push_counter": 0,
+        # Error reporting (Sentry)
+        "error_reporting_enabled": False,
     }
 
     settings = config["settings"]

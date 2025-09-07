@@ -9,6 +9,54 @@ from anki.collection import Collection
 from aqt import mw
 import aqt.utils
 from contextlib import AbstractContextManager
+import logging
+
+
+class _SentryBreadcrumbHandler(logging.Handler):
+    """Emit log records as Sentry breadcrumbs without writing to stdio.
+
+    Avoids Anki/Colorama stream issues and preserves breadcrumbs for our add-on.
+    """
+
+    level_map = {
+        logging.DEBUG: "debug",
+        logging.INFO: "info",
+        logging.WARNING: "warning",
+        logging.ERROR: "error",
+        logging.CRITICAL: "fatal",
+    }
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            try:
+                import sentry_sdk  # type: ignore
+            except Exception:
+                return
+            level = self.level_map.get(record.levelno, "info")
+            sentry_sdk.add_breadcrumb(
+                category=record.name,
+                message=self.format(record),
+                level=level,
+            )
+        except Exception:
+            # Never fail due to logging
+            pass
+
+
+def get_logger(name: str = "ankicollab") -> logging.Logger:
+    """Return a namespaced logger for this add-on.
+
+    Keeps logging consistent and produces good Sentry breadcrumbs.
+    """
+    logger = logging.getLogger(name)
+    # Avoid writing to Anki's stderr; only add our Sentry breadcrumb handler
+    logger.handlers = []
+    handler = _SentryBreadcrumbHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    return logger
 from typing import Dict, Iterator, Optional, Tuple
 
 
@@ -67,7 +115,8 @@ def get_local_deck_from_id(deck_id):
 
 
 def create_backup(background: bool = False):
-    print("Creating backup...")
+    logger = get_logger("ankicollab.utils")
+    logger.info("Creating backup...")
 
     def do_backup(col: Collection):
         try:
@@ -77,7 +126,7 @@ def create_backup(background: bool = False):
                 wait_for_completion=True,
             )
         except Exception as e:
-            print(f"Error creating backup: {e}")
+            logger.exception("Error creating backup")
 
     if background:
         QueryOp(

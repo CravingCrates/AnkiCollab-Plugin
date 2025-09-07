@@ -37,12 +37,26 @@ from .menu import *
 from .hooks import *
 from .var_defs import API_BASE_URL
 from .media_manager import MediaManager
+from .sentry_integration import obsolete_version_of_sentry_sdk, init_sentry
+from .utils import get_logger
 
 # Setup logging
-logger = logging.getLogger("ankicollab")
+logger = get_logger("ankicollab")
 logger.setLevel(logging.WARNING)
 
 logger.info("AnkiCollab Add-on Loading...")
+
+# Initialize Sentry (no-op if disabled/missing)
+try:
+    if obsolete_version_of_sentry_sdk():
+        logger.info("Obsolete version of sentry-sdk detected. Error reporting disabled.")
+    else:
+        logger.info("Initializing Sentry for error reporting.")
+        init_sentry()
+except Exception:
+    # Never fail startup due to telemetry
+    logger.error(f"AnkiCollab: Sentry initialization failed: {sys.exc_info()[1]}")
+    pass
 
 strings_data = mw.addonManager.getConfig(__name__)
 if strings_data is not None:
@@ -63,12 +77,22 @@ try:
     logger.info("Menu initialized.")
 except Exception as e:
     logger.error(f"Failed to initialize menu: {e}", exc_info=True)
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_exception(e)
+    except Exception:
+        pass
 
 try:
     hooks_init()
     logger.info("Hooks initialized.")
 except Exception as e:
     logger.error(f"Failed to initialize hooks: {e}", exc_info=True)
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_exception(e)
+    except Exception:
+        pass
 
 logger.info("AnkiCollab Add-on Loaded Successfully.")
 

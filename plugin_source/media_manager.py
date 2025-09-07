@@ -14,8 +14,9 @@ from concurrent.futures import ThreadPoolExecutor
 from asyncio import Lock as AsyncLock, get_running_loop # Use asyncio Lock
 
 from aqt import mw
+from .utils import get_logger
 
-logger = logging.getLogger("ankicollab")
+logger = get_logger("ankicollab.media_manager")
 
 # --- Add File Logging ---
 # log_file_path = os.path.join(os.path.dirname(__file__), 'ankicollab_media_errors.log')
@@ -393,6 +394,11 @@ class MediaManager:
             except Exception as e:
                  # Catch unexpected errors
                  logger.exception(f"Unexpected error during upload_file for {filepath}: {e}")
+                 try:
+                     import sentry_sdk
+                     sentry_sdk.capture_exception(e)
+                 except Exception:
+                     pass
                  raise MediaUploadError(f"Unexpected upload error: {e}") from e
 
 
@@ -443,6 +449,11 @@ class MediaManager:
 
         except Exception as e:
             logger.error(f"Unexpected error downloading file {url}: {str(e)}")
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             return False # Indicate failure
         finally:
             # Clean up partial downloads robustly
@@ -516,6 +527,11 @@ class MediaManager:
                  return {"success": False, "message": f"Failed to get manifest: {e}", "downloaded": 0, "skipped": 0, "failed": total_files}
             except Exception as e:
                  logger.exception(f"Unexpected error getting manifest batch {i // manifest_batch_size + 1}: {e}")
+                 try:
+                     import sentry_sdk
+                     sentry_sdk.capture_exception(e)
+                 except Exception:
+                     pass
                  return {"success": False, "message": f"Unexpected error getting manifest: {e}", "downloaded": 0, "skipped": 0, "failed": total_files}
 
         # Phase 2: Download files
@@ -608,7 +624,7 @@ class MediaManager:
 
 
             data = {"token": user_token, "deck_hash": deck_hash, "files": valid_files_info, "bulk_operation_id": bulk_operation_id}
-            print(f"Bulk Operation ID: {bulk_operation_id}")
+            logger.debug(f"Bulk Operation ID: {bulk_operation_id}")
             try:
                 response = await self.async_request("post", url, json=data)
                 # No need for raise_for_status here, async_request does it
@@ -731,6 +747,11 @@ class MediaManager:
                 svg_optimized = await media_optimizer.optimize_svg_files(svg_optimize_list)
             except Exception as e:
                 logger.exception(f"Error during SVG optimization batch: {e}")
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_exception(e)
+                except Exception:
+                    pass
                 svg_optimized = {}
 
             for filename, filepath_obj, note_guid in svg_files:
@@ -905,188 +926,183 @@ class MediaManager:
             return None
         except Exception as e:
              logger.exception(f"Unexpected error preparing file {filename}: {e}")
+             try:
+                 import sentry_sdk
+                 sentry_sdk.capture_exception(e)
+             except Exception:
+                 pass
              return None
 
     async def upload_media_bulk(self, user_token: str, files_info: List[Dict], file_paths: Dict[str, str], deck_hash: str, bulk_operation_id: str, progress_callback=None) -> Dict:
         total_initial_files = len(files_info)
         if not files_info:
             logger.warning("upload_media_bulk called with no files_info.")
-            return {"success": True, "status": "no_files", "message": "No files provided for upload.", "uploaded": 0, "existing": 0, "failed": 0}
+            return {"success": True, "status": "no_files", "message": "No files provided for upload.", "uploaded": 0, "existing": 0, "failed": 0, "failed_filenames": []}
 
-        # Phase 1: Check files with server
         existing_count = 0
         check_failed_count = 0
-        missing_files_to_upload = []
-        batch_id = None
+        missing_files_to_upload: List[Dict] = []
+        batch_id: Optional[str] = None
+        failed_filenames_set: set[str] = set()
+        hash_to_filename = {}
+        for f in files_info:
+            h = f.get("hash")
+            fn = f.get("filename")
+            if isinstance(h, str) and isinstance(fn, str):
+                hash_to_filename[h] = fn
 
+        # Phase 1: server check
         try:
             logger.info(f"Checking {total_initial_files} files with server...")
-            if progress_callback: progress_callback(0.1) # Progress: Checking started
+            if progress_callback:
+                progress_callback(0.1)
 
             bulk_check_result = await self.check_media_bulk(user_token, deck_hash, bulk_operation_id, files_info)
-
-            existing_files = bulk_check_result.get("existing_files", [])
+            existing_files = bulk_check_result.get("existing_files", []) or []
             existing_count = len(existing_files)
-
-            check_failed_files = bulk_check_result.get("failed_files", [])
+            check_failed_files = bulk_check_result.get("failed_files", []) or []
             check_failed_count = len(check_failed_files)
-            if check_failed_count > 0:
-                 logger.warning(f"{check_failed_count} files failed server-side check: {check_failed_files}")
+            if check_failed_count:
+                logger.warning(f"{check_failed_count} files failed server-side check: {check_failed_files}")
+                for entry in check_failed_files:
+                    if isinstance(entry, dict):
+                        fn = entry.get("filename") or hash_to_filename.get(entry.get("hash"))
+                        if fn:
+                            failed_filenames_set.add(fn)
+                    elif isinstance(entry, str):
+                        fn = hash_to_filename.get(entry, entry)
+                        failed_filenames_set.add(fn)
 
-
-            missing_files_to_upload = bulk_check_result.get("missing_files", [])
+            missing_files_to_upload = bulk_check_result.get("missing_files", []) or []
             batch_id = bulk_check_result.get("batch_id")
 
             logger.info(f"Check complete. Existing: {existing_count}, Failed Check: {check_failed_count}, To Upload: {len(missing_files_to_upload)}")
-            if progress_callback: progress_callback(0.3) # Progress: Checking done
+            if progress_callback:
+                progress_callback(0.3)
 
-            if not missing_files_to_upload:
+            if not missing_files_to_upload:  # Nothing to upload further
                 status = "all_exist_or_failed_check"
                 message = f"{existing_count} files already exist, {check_failed_count} failed server check."
-                success = check_failed_count == 0 # Only success if no check failures
-                return {"success": success, "status": status, "message": message, "uploaded": 0, "existing": existing_count, "failed": check_failed_count}
+                success = check_failed_count == 0
+                return {"success": success, "status": status, "message": message, "uploaded": 0, "existing": existing_count, "failed": check_failed_count, "failed_filenames": sorted(failed_filenames_set)}
 
             if not batch_id:
                 logger.error("Server did not provide batch_id for upload.")
-                # Treat all missing as failed upload attempt
-                return {"success": False, "status": "no_batch_id", "message": "Server rejected upload batch.", "uploaded": 0, "existing": existing_count, "failed": check_failed_count + len(missing_files_to_upload)}
-
+                for f in missing_files_to_upload:  # treat as failed
+                    fn = f.get("filename")
+                    if isinstance(fn, str):
+                        failed_filenames_set.add(fn)
+                return {"success": False, "status": "no_batch_id", "message": "Server rejected upload batch.", "uploaded": 0, "existing": existing_count, "failed": check_failed_count + len(missing_files_to_upload), "failed_filenames": sorted(failed_filenames_set)}
         except MediaServerError as e:
             logger.error(f"Server error during media check: {e}")
-            return {"success": False, "status": "check_failed", "message": f"Server error checking files: {e}", "uploaded": 0, "existing": 0, "failed": total_initial_files}
+            return {"success": False, "status": "check_failed", "message": f"Server error checking files: {e}", "uploaded": 0, "existing": 0, "failed": total_initial_files, "failed_filenames": list(hash_to_filename.values())}
         except Exception as e:
             logger.exception(f"Unexpected error during media check: {e}")
-            return {"success": False, "status": "check_failed_unexpected", "message": f"Unexpected error checking files: {e}", "uploaded": 0, "existing": 0, "failed": total_initial_files}
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
+            return {"success": False, "status": "check_failed_unexpected", "message": f"Unexpected error checking files: {e}", "uploaded": 0, "existing": 0, "failed": total_initial_files, "failed_filenames": list(hash_to_filename.values())}
 
-
-        # Phase 2: Upload missing files
-        uploaded_hashes = []
-        upload_failed_hashes = []
+        # Phase 2: Upload missing
+        uploaded_hashes: List[str] = []
+        upload_failed_hashes: List[str] = []
         num_to_upload = len(missing_files_to_upload)
-        upload_batch_size = 10 # Keep S3 uploads in smaller batches
-
+        upload_batch_size = 10
         logger.info(f"Starting upload for {num_to_upload} files...")
-
         for i in range(0, num_to_upload, upload_batch_size):
             batch = missing_files_to_upload[i:i+upload_batch_size]
             upload_tasks = []
-            hashes_in_batch = []
-            files_for_tasks = []
-
-            # Create tasks for this batch
+            hashes_in_batch: List[str] = []
+            files_for_tasks: List[str] = []
             for file_info in batch:
                 file_hash = file_info.get("hash")
                 presigned_url = file_info.get("presigned_url")
-
-                if not file_hash or not presigned_url:
+                if not isinstance(file_hash, str) or not isinstance(presigned_url, str):
                     logger.warning(f"Missing hash or URL in file info, skipping upload: {file_info}")
                     upload_failed_hashes.append(file_hash or "unknown")
                     continue
-
                 filepath_str = file_paths.get(file_hash)
                 if not filepath_str or not Path(filepath_str).exists():
                     logger.error(f"Local file path missing or file not found for hash {file_hash}, skipping upload.")
                     upload_failed_hashes.append(file_hash)
                     continue
-
                 hashes_in_batch.append(file_hash)
-                files_for_tasks.append(file_hash) # Track hash for result mapping
-                # Pass hash to upload_file for MD5 optimization
-                task = self.upload_file(presigned_url, Path(filepath_str), file_hash=file_hash)
-                upload_tasks.append(task)
-
-            # Process this batch
+                files_for_tasks.append(file_hash)
+                upload_tasks.append(self.upload_file(presigned_url, Path(filepath_str), file_hash=file_hash))
             if upload_tasks:
                 logger.debug(f"Attempting S3 upload sub-batch {i//upload_batch_size + 1}. Hashes: {hashes_in_batch}")
                 try:
                     batch_results = await asyncio.gather(*upload_tasks, return_exceptions=True)
                     logger.debug(f"Completed S3 upload sub-batch for hashes: {hashes_in_batch}")
-
                     for idx, result in enumerate(batch_results):
                         current_hash = files_for_tasks[idx]
                         if isinstance(result, Exception):
-                            # Log specific exception type if possible
                             logger.error(f"Failed to upload file {current_hash}: {type(result).__name__}: {result}")
                             upload_failed_hashes.append(current_hash)
-                        elif not result: # Should not happen if upload_file raises exceptions
+                        elif not result:
                             logger.error(f"Upload function returned False for file {current_hash}")
                             upload_failed_hashes.append(current_hash)
                         else:
-                            # logger.debug(f"Successfully uploaded file {current_hash}")
                             uploaded_hashes.append(current_hash)
                 except Exception as e:
-                    # This catches errors in asyncio.gather itself, less likely
                     logger.exception(f"Unexpected error during asyncio.gather for S3 uploads (hashes {hashes_in_batch}): {e}")
-                    # Mark all in this gather as failed
+                    try:
+                        import sentry_sdk
+                        sentry_sdk.capture_exception(e)
+                    except Exception:
+                        pass
                     upload_failed_hashes.extend(h for h in hashes_in_batch if h not in uploaded_hashes)
-
-            # Update progress (scaled between 30% and 90%)
             if progress_callback:
                 progress_value = 0.3 + (0.6 * min(i + upload_batch_size, num_to_upload) / num_to_upload)
                 progress_callback(progress_value)
 
-        # Phase 3: Confirm successful uploads
         final_uploaded_count = len(uploaded_hashes)
         final_upload_failed_count = len(upload_failed_hashes)
         total_failed_count = check_failed_count + final_upload_failed_count
-
         logger.info(f"Upload phase complete. Succeeded: {final_uploaded_count}, Failed during upload: {final_upload_failed_count}")
+        for fh in upload_failed_hashes:
+            fn = hash_to_filename.get(fh)
+            if fn:
+                failed_filenames_set.add(fn)
 
         if uploaded_hashes:
-            logger.info(f"Confirming {final_uploaded_count} uploaded files with server (Batch ID: {batch_id})...")
             try:
-                if progress_callback: progress_callback(0.95) # Progress: Confirming
-
+                logger.info(f"Confirming {final_uploaded_count} uploaded files with server (Batch ID: {batch_id})...")
+                if progress_callback:
+                    progress_callback(0.95)
                 await self.confirm_media_bulk_upload(batch_id, bulk_operation_id, uploaded_hashes)
-
                 logger.info("Bulk upload confirmed successfully.")
-                if progress_callback: progress_callback(1.0) # Progress: Done
-
-                return {
-                    "success": total_failed_count == 0, # Success only if no failures at any stage
-                    "status": "uploaded_confirmed",
-                    "message": f"Uploaded {final_uploaded_count} files ({existing_count} existing, {total_failed_count} failed).",
-                    "uploaded": final_uploaded_count,
-                    "existing": existing_count,
-                    "failed": total_failed_count,
-                }
+                if progress_callback:
+                    progress_callback(1.0)
+                return {"success": total_failed_count == 0, "status": "uploaded_confirmed", "message": f"Uploaded {final_uploaded_count} files ({existing_count} existing, {total_failed_count} failed).", "uploaded": final_uploaded_count, "existing": existing_count, "failed": total_failed_count, "failed_filenames": sorted(failed_filenames_set)}
             except MediaServerError as e:
                 logger.error(f"Server error confirming bulk upload: {e}")
-                # Confirmation failed, treat uploaded files as failed for summary
                 total_failed_count += final_uploaded_count
-                return {
-                    "success": False,
-                    "status": "confirmation_failed",
-                    "message": f"Upload confirmation failed: {e}",
-                    "uploaded": 0, # None were successfully confirmed
-                    "existing": existing_count,
-                    "failed": total_failed_count,
-                    "error": str(e),
-                }
+                for fh in uploaded_hashes:
+                    fn = hash_to_filename.get(fh)
+                    if fn:
+                        failed_filenames_set.add(fn)
+                return {"success": False, "status": "confirmation_failed", "message": f"Upload confirmation failed: {e}", "uploaded": 0, "existing": existing_count, "failed": total_failed_count, "error": str(e), "failed_filenames": sorted(failed_filenames_set)}
             except Exception as e:
                 logger.exception(f"Unexpected error confirming bulk upload: {e}")
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_exception(e)
+                except Exception:
+                    pass
                 total_failed_count += final_uploaded_count
-                return {
-                    "success": False,
-                    "status": "confirmation_failed_unexpected",
-                    "message": f"Unexpected error confirming upload: {e}",
-                    "uploaded": 0,
-                    "existing": existing_count,
-                    "failed": total_failed_count,
-                    "error": str(e),
-                }
+                for fh in uploaded_hashes:
+                    fn = hash_to_filename.get(fh)
+                    if fn:
+                        failed_filenames_set.add(fn)
+                return {"success": False, "status": "confirmation_failed_unexpected", "message": f"Unexpected error confirming upload: {e}", "uploaded": 0, "existing": existing_count, "failed": total_failed_count, "error": str(e), "failed_filenames": sorted(failed_filenames_set)}
         else:
-            # No files were successfully uploaded in Phase 2
+            if progress_callback:
+                progress_callback(1.0)
             logger.warning("No files were successfully uploaded.")
-            if progress_callback: progress_callback(1.0) # Progress: Done (but nothing happened)
-            return {
-                "success": total_failed_count == 0, # Success only if check failures were 0
-                "status": "upload_failed_all",
-                "message": f"No files uploaded ({existing_count} existing, {total_failed_count} failed).",
-                "uploaded": 0,
-                "existing": existing_count,
-                "failed": total_failed_count,
-            }
+            return {"success": total_failed_count == 0, "status": "upload_failed_all", "message": f"No files uploaded ({existing_count} existing, {total_failed_count} failed).", "uploaded": 0, "existing": existing_count, "failed": total_failed_count, "failed_filenames": sorted(failed_filenames_set)}
 
 
     @retry(max_tries=3, delay=1)
@@ -1118,4 +1134,9 @@ class MediaManager:
                 raise MediaServerError(f"Network error confirming upload: {str(e)}") from e
             except Exception as e:
                  logger.exception(f"Unexpected error during confirm_media_bulk_upload: {e}")
+                 try:
+                     import sentry_sdk
+                     sentry_sdk.capture_exception(e)
+                 except Exception:
+                     pass
                  raise MediaServerError(f"Unexpected error confirming upload: {e}") from e
