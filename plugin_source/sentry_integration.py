@@ -220,8 +220,8 @@ def init_sentry() -> None:
             release = "ankicollab@unknown"
 
     traces_sample_rate_map = {
-        'development': 1.0,
-        'production': 0.05
+        "development": 1.0,
+        "production": 0.05
     }
     
     # Configure Sentry
