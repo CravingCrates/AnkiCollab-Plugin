@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 from threading import current_thread, main_thread
 import traceback
 import requests
@@ -13,6 +14,24 @@ import anki
 from anki.utils import point_version
 
 from aqt.qt import *
+from aqt.qt import (
+    QApplication,
+    QDialog,
+    QVBoxLayout,
+    QGroupBox,
+    QLabel,
+    Qt,
+    QHBoxLayout,
+    QWidget,
+    QToolButton,
+    QLineEdit,
+    QPushButton,
+    QListWidget,
+    QAbstractItemView,
+    QShortcut,
+    QKeySequence,
+    QTextEdit,
+)
 from aqt import mw
 import aqt.utils
 from aqt.operations import QueryOp
@@ -24,6 +43,7 @@ import base64
 import gzip
 import logging
 from concurrent.futures import Future # Keep for main thread sync
+import subprocess
 
 from typing import Callable, cast, Tuple, Dict, List, Any, Optional
 from pathlib import Path
@@ -52,10 +72,14 @@ from .crowd_anki.representation.deck import Deck
 from .auth_manager import auth_manager
 from .var_defs import API_BASE_URL
 
-from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup
+from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger
 from .media_progress_indicator import show_media_progress, update_media_progress, complete_media_progress
 from . import main
-logger = logging.getLogger("ankicollab")
+logger = get_logger("ankicollab.export_manager")
+
+ASYNC_MEDIA_REF_THRESHOLD = 250  # Tunable; keep conservative to avoid overhead on small tasks.
+ASYNC_MEDIA_LARGE_PROGRESS_THRESHOLD = 5000  # >= this many notes: show percentage progress
+BATCH_UPDATE_NOTES_SIZE = 800  # batch size for mw.col.update_notes to avoid huge single commit / UI hitch
 
 # Define and compile regexes for various media types
 SOUND_REGEX_STRINGS = [r"(?i)(\[sound:(?P<fname>[^]]+)\])"]
@@ -225,6 +249,211 @@ def update_media_references(filename_mapping: Dict[str, str], file_note_pairs: L
     
     return 0, None
 
+def _compute_media_reference_updates(col, filename_mapping: Dict[str, str], file_note_pairs: List[Tuple[str, str]], progress_cb: Optional[Callable[[float], None]] = None):
+    """Background thread function.
+    Returns a structure suitable for safe transfer back to main thread without note objects.
+    Output: {
+       'updates': [ { 'note_id': int, 'note_guid': str, 'fields': List[str], 'old_fields': List[str], 'mod': int, 'old_filenames': List[str] }, ... ],
+       'count': int
+    }
+    """
+    if not filename_mapping:
+        return {'updates': [], 'count': 0}
+
+    # Build mapping: note_guid -> [old_filenames]
+    notes_to_update: Dict[str, List[str]] = {}
+    for filename, note_guid in file_note_pairs:
+        if filename in filename_mapping:
+            lst = notes_to_update.setdefault(note_guid, [])
+            if filename not in lst:  # avoid duplicates
+                lst.append(filename)
+
+    if not notes_to_update:
+        return {'updates': [], 'count': 0}
+
+    updates = []
+    # Local helpers (reuse compiled regexes)
+    def make_replacer(old_name, new_name):
+        return lambda m: m.group(0).replace(old_name, new_name)
+
+    total = len(notes_to_update)
+    processed = 0
+    for note_guid, old_filenames in notes_to_update.items():
+        try:
+            row = col.db.first("select id from notes where guid = ?", note_guid)
+            if not row:
+                continue
+            note_id = row[0]
+            note = col.get_note(note_id)
+            if not note:
+                continue
+            original_fields = list(note.fields)
+            new_fields = list(note.fields)
+            modified = False
+            for idx, content in enumerate(original_fields):
+                updated_content = content
+                for old_filename in old_filenames:
+                    new_filename = filename_mapping.get(old_filename)
+                    if not new_filename:
+                        continue
+                    replacer = make_replacer(old_filename, new_filename)
+                    for media_regex in ALL_COMPILED_MEDIA_REGEXES:
+                        new_content = media_regex.sub(replacer, updated_content)
+                        if new_content != updated_content:
+                            updated_content = new_content
+                            modified = True
+                if updated_content != content:
+                    new_fields[idx] = updated_content
+            if modified:
+                updates.append({
+                    'note_id': note_id,
+                    'note_guid': note_guid,
+                    'fields': new_fields,
+                    'old_fields': original_fields,
+                    'mod': note.mod,
+                    'old_filenames': old_filenames,
+                })
+        except Exception as e:
+            logger.error(f"Error computing media references for note {note_guid}: {e}")
+        processed += 1
+        if progress_cb and total >= ASYNC_MEDIA_LARGE_PROGRESS_THRESHOLD:
+            # Update every ~1% or every 250 notes, whichever larger, to reduce chatter
+            if processed == total or processed % max(250, total // 100) == 0:
+                try:
+                    progress_cb(processed / total)
+                except Exception:
+                    pass
+    return {'updates': updates, 'count': len(updates)}
+
+def _apply_media_reference_updates(results: Dict[str, Any], editor: Optional[Any] = None):
+    """Main-thread application of pre-computed field updates.
+    Re-validates each note; if it changed since computation (mod mismatch), we re-run
+    substitutions on the latest fields to avoid overwriting user edits.
+    Returns (updated_count, opchanges or None)
+    """
+    assert mw.col is not None
+    updates: List[Dict[str, Any]] = results.get('updates', [])
+    if not updates:
+        return 0, None
+
+    filename_mapping: Dict[str, str] = results.get('filename_mapping', {})
+    notes_to_save = []
+
+    def make_replacer(old_name, new_name):
+        return lambda m: m.group(0).replace(old_name, new_name)
+
+    for upd in updates:
+        try:
+            note = mw.col.get_note(upd['note_id'])
+            if not note:
+                continue
+            if note.mod != upd['mod']:
+                # Note changed after background processing; recompute on fresh fields.
+                fresh_fields = list(note.fields)
+                changed_any = False
+                for idx, content in enumerate(fresh_fields):
+                    updated_content = content
+                    for old_filename in upd['old_filenames']:
+                        new_filename = filename_mapping.get(old_filename)
+                        if not new_filename:
+                            continue
+                        replacer = make_replacer(old_filename, new_filename)
+                        for media_regex in ALL_COMPILED_MEDIA_REGEXES:
+                            new_content = media_regex.sub(replacer, updated_content)
+                            if new_content != updated_content:
+                                updated_content = new_content
+                                changed_any = True
+                    if updated_content != content:
+                        fresh_fields[idx] = updated_content
+                if changed_any:
+                    note.fields = fresh_fields
+                    notes_to_save.append(note)
+            else:
+                # Safe to apply pre-computed fields
+                note.fields = upd['fields']
+                notes_to_save.append(note)
+        except Exception as e:
+            logger.error(f"Error applying media reference update to note {upd.get('note_guid')}: {e}")
+
+    opchanges = None
+    if notes_to_save:
+        combined_opchanges = None
+        current_note_id = editor.note.id if editor and getattr(editor, 'note', None) else None
+        for start in range(0, len(notes_to_save), BATCH_UPDATE_NOTES_SIZE):
+            batch = notes_to_save[start:start + BATCH_UPDATE_NOTES_SIZE]
+            try:
+                opchanges = mw.col.update_notes(notes=batch)
+                if opchanges:
+                    combined_opchanges = opchanges  # keep last; sufficient for editor refresh heuristic
+            except Exception as e:
+                logger.error(f"Batch note update failed ({start}-{start+len(batch)}): {e}")
+        if editor and current_note_id and any(n.id == current_note_id for n in notes_to_save):
+            # Refresh editor once at end
+            try:
+                editor_note = editor.note
+                if editor_note:
+                    editor_note.load()
+                    editor.set_note(editor_note)
+                    editor.loadNote()
+            except Exception as e:
+                logger.warning(f"Editor refresh after async media update failed: {e}")
+        opchanges = combined_opchanges
+    return len(notes_to_save), opchanges
+
+def schedule_media_reference_updates(
+    deck_repr: 'Deck',
+    filename_mapping: Dict[str, str],
+    media_files: List[Tuple[str, str]],
+    editor: Optional[Any],
+    continuation: Callable[[int, Any], None],
+    force_async: bool = False,
+):
+    """Decide synchronous vs async path. Calls continuation(updated_count, opchanges) on completion.
+    continuation runs on main thread.
+    """
+    assert mw.col is not None
+    if not filename_mapping:
+        continuation(0, None)
+        return
+
+    # Determine unique notes needing update
+    notes_to_update = {note_guid for (fname, note_guid) in media_files if fname in filename_mapping}
+    if not force_async and len(notes_to_update) < ASYNC_MEDIA_REF_THRESHOLD:
+        # Fast path: reuse existing synchronous function
+        updated_count, opchanges = update_media_references(filename_mapping, media_files)
+        continuation(updated_count, opchanges)
+        return
+
+    parent_widget = QApplication.focusWidget() or mw
+    logger.info(f"Scheduling async media reference updates for {len(notes_to_update)} notes...")
+
+    def _background(col):
+        def pc(pct: float):
+            # Runs in worker thread; schedule UI progress update
+            mw.taskman.run_on_main(lambda: mw.progress.update(label=f"Processing media references ({int(pct*100)}%)", value=int(pct*100), max=100))
+        progress_cb = pc if True else None  # always supply; internal function decides if large enough
+        result = _compute_media_reference_updates(col, filename_mapping, media_files, progress_cb)
+        result['filename_mapping'] = filename_mapping  # include mapping for conflict re-compute
+        return result
+
+    def _on_success(result):
+        try:
+            updated_count, opchanges = _apply_media_reference_updates(result, editor)
+        except Exception as e:
+            logger.error(f"Failed applying async media updates: {e}")
+            updated_count, opchanges = 0, None
+        continuation(updated_count, opchanges)
+
+    op = QueryOp(
+        parent=parent_widget,
+        op=_background,
+        success=_on_success
+    )
+    # Needs collection access (default); show progress.
+    # Start with an indeterminate bar; we will convert to determinate for large sets via updates above
+    op.with_progress("Processing media references...")
+    op.run_in_background()
+
 # Currently not used, because notetype media files are not uploaded anyway so this is a no-op
 def update_notetype_media_references(filename_mapping: Dict[str, str]) -> int:
     """
@@ -297,6 +526,7 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
     uploaded_total = 0
     skipped_total = 0
     failed_total = 0
+    failed_filenames: List[str] = []
     error_messages = []
     cancelled = False
 
@@ -340,6 +570,10 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
                 uploaded_total += batch_result.get("uploaded", 0)
                 skipped_total += batch_result.get("existing", 0)
                 failed_total += batch_result.get("failed", 0)
+                # Extend failed filenames if present
+                failed_batch_names = batch_result.get("failed_filenames") or []
+                if failed_batch_names:
+                    failed_filenames.extend(failed_batch_names)
                 if "error" in batch_result and batch_result["error"]:
                     error_messages.append(str(batch_result["error"]))
             else:
@@ -347,6 +581,9 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
                 error_messages.append(f"Batch {batch_index + 1}/{total_batches}: {str(error_msg)}")
                 failed_total += len(current_batch) # Assume all failed if batch failed
                 logger.error(f"Batch upload error: {error_msg}")
+                failed_batch_names = batch_result.get("failed_filenames") or []
+                if failed_batch_names:
+                    failed_filenames.extend(failed_batch_names)
 
         if progress_callback_wrapper and not cancelled:
              progress_callback_wrapper(1.0) # Signal completion if not cancelled
@@ -363,7 +600,8 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
         "failed": failed_total,
         "errors": error_messages,
         "cancelled": cancelled,
-        "silent": silent
+        "silent": silent,
+        "failed_filenames": sorted(set(failed_filenames)),
     }
 
 def _sync_run_async(coro, *args, **kwargs):
@@ -493,12 +731,27 @@ def _sync_handle_media_upload(token: str, deck_hash: str, bulk_operation_id: str
             "errors": [f"Upload failed: {str(e)}"], "cancelled": False, "silent": silent
         }
 
-def _submit_deck_op(deck: Deck, did: int, rationale: int, commit_text: str, media_files_info: List[Dict], media_file_paths: Dict[str, str]) -> Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]]:
+def _submit_deck_op(
+    deck: Deck,
+    did: int,
+    rationale: int,
+    commit_text: str,
+    media_files_info: List[Dict],
+    media_file_paths: Dict[str, str],
+    media_files_refresh: Optional[List[Tuple[str, str]]] = None,
+) -> Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]]:
     assert mw.col is not None, "Collection must be available for deck submission"
     deckHash = get_deck_hash_from_did(did)
     if not deckHash:
          # This case should ideally be caught earlier, but handle defensively.
          raise ValueError("Could not determine deck hash for submission.")
+
+    # Refresh deck representation notes (expensive aggregation) inside the op to avoid an extra QueryOp wrapper
+    if media_files_refresh is not None:
+        try:
+            deck.refresh_notes(media_files_refresh)
+        except Exception as e:
+            logger.warning(f"Deck refresh inside submission op failed; proceeding: {e}")
 
     newName = get_local_deck_from_hash(deckHash)
     deckPath = mw.col.decks.name(did)
@@ -563,7 +816,7 @@ def _submit_deck_op(deck: Deck, did: int, rationale: int, commit_text: str, medi
         
         error_text = e.response.text
         status_code = e.response.status_code
-        print(f"Error: {error_text}") # Debugging output
+        logger.debug(f"Submission error body: {error_text}")
         
         if status_code == 500 and error_text:
             if "Notetype Error: " in error_text:
@@ -586,6 +839,11 @@ def _submit_deck_op(deck: Deck, did: int, rationale: int, commit_text: str, medi
     except Exception as e:
         logger.error(f"Unexpected error during deck submission: {e}")
         logger.error(traceback.format_exc())
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
         raise RuntimeError(f"An unexpected error occurred during submission: {e}") from e
 
 
@@ -597,6 +855,7 @@ def _handle_media_upload_result(result: Dict[str, Any]):
     uploaded = result.get("uploaded", 0)
     existing = result.get("existing", 0)
     failed = result.get("failed", 0)
+    failed_filenames = result.get("failed_filenames", []) or []
     errors = result.get("errors", [])
     cancelled = result.get("cancelled", False)
     silent = result.get("silent", False)
@@ -610,15 +869,200 @@ def _handle_media_upload_result(result: Dict[str, Any]):
                f"• {failed} files failed before cancellation")
         aqt.utils.showWarning(msg, title="Upload Cancelled", parent=parent_widget)
     elif failed > 0:
-        msg = (f"Media upload completed with issues:\n"
-               f"• {uploaded} files uploaded successfully\n"
-               f"• {existing} files already existed\n"
-               f"• {failed} files failed\n\n")
+        # Build base message
+        base_msg = (f"Media upload completed with issues:\n"
+                    f"• {uploaded} files uploaded successfully\n"
+                    f"• {existing} files already existed\n"
+                    f"• {failed} files failed\n")
         if errors:
-            msg += "Recent errors:\n" + "\n".join(errors[-3:])
+            base_msg += "\nRecent errors:\n" + "\n".join(errors[-3:])
             if len(errors) > 3:
-                msg += f"\n...and {len(errors) - 3} more errors"
-        aqt.utils.showWarning(msg, title="Media Upload Summary", parent=parent_widget)
+                base_msg += f"\n...and {len(errors) - 3} more errors"
+
+        if not failed_filenames:
+            aqt.utils.showWarning(base_msg + "\n", title="Media Upload Summary", parent=parent_widget)
+        else:
+            dialog = QDialog(parent_widget)
+            dialog.setWindowTitle("Media Upload Summary")
+            dialog.setModal(True)
+            dlg_layout = QVBoxLayout(dialog)
+
+            header_box = QGroupBox()
+            header_layout = QVBoxLayout(header_box)
+            header_label = QLabel("<b>Media upload completed with issues</b>")
+            header_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            header_layout.addWidget(header_label)
+
+            stats_layout = QHBoxLayout()
+            def _badge(text, bg):
+                lbl = QLabel(text)
+                lbl.setStyleSheet(f"QLabel {{ background:{bg}; border-radius:4px; padding:3px 6px; color:#222; font-weight:500; }}")
+                lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                return lbl
+            stats_layout.addWidget(_badge(f"Uploaded: {uploaded}", '#c8f7c5'))
+            stats_layout.addWidget(_badge(f"Existing: {existing}", '#e2e8f0'))
+            stats_layout.addWidget(_badge(f"Failed: {failed}", '#fecaca'))
+            stats_layout.addStretch()
+            header_layout.addLayout(stats_layout)
+
+            if errors:
+                err_label = QLabel("Recent errors:\n" + "\n".join(errors[-3:]) + (f"\n...and {len(errors)-3} more" if len(errors) > 3 else ""))
+                err_label.setStyleSheet("QLabel { color:#b45309; }")
+                err_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                header_layout.addWidget(err_label)
+
+            dlg_layout.addWidget(header_box)
+
+            section_widget = QWidget()
+            section_layout = QVBoxLayout(section_widget)
+            section_layout.setContentsMargins(0,0,0,0)
+
+            toggle_row = QHBoxLayout()
+            arrow_btn = QToolButton()
+            arrow_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            arrow_btn.setArrowType(Qt.ArrowType.RightArrow)
+            arrow_btn.setText("Files that failed")
+            arrow_btn.setCheckable(True)
+            toggle_row.addWidget(arrow_btn)
+            toggle_row.addStretch()
+            section_layout.addLayout(toggle_row)
+
+            failed_container = QWidget()
+            failed_layout = QVBoxLayout(failed_container)
+            failed_layout.setContentsMargins(4,0,0,0)
+
+            filter_row = QHBoxLayout()
+            filter_edit = QLineEdit()
+            filter_edit.setPlaceholderText("Search..")
+            filter_row.addWidget(filter_edit)
+            clear_btn = QPushButton("Clear")
+            filter_row.addWidget(clear_btn)
+            failed_layout.addLayout(filter_row)
+
+            MAX_DISPLAY = 500
+            original_failed = failed_filenames
+            truncated = False
+            display_names = original_failed
+            if len(display_names) > MAX_DISPLAY:
+                display_names = original_failed[:MAX_DISPLAY]
+                truncated = True
+
+            list_widget = QListWidget()
+            list_widget.addItems(display_names)
+            if truncated:
+                list_widget.addItem(f"... ({len(original_failed) - MAX_DISPLAY} more not shown)")
+            list_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            list_widget.setUniformItemSizes(True)
+            list_widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+
+            # Dynamic height: show up to 14 rows (or fewer) initially
+            if list_widget.count():
+                visible_rows = min(list_widget.count(), 14)
+                row_h = list_widget.sizeHintForRow(0) if list_widget.sizeHintForRow(0) > 0 else 18
+                list_widget.setMaximumHeight(row_h * visible_rows + 6)
+
+            failed_layout.addWidget(list_widget)
+
+            meta_label = QLabel()
+            meta_label.setStyleSheet("QLabel { color:#666; font-size:11px; }")
+            meta_label.setText(f"Showing {min(len(display_names), list_widget.count())} of {len(original_failed)} failed filenames" + (" (truncated)" if truncated else ""))
+            failed_layout.addWidget(meta_label)
+
+            failed_container.setVisible(False)
+            section_layout.addWidget(failed_container)
+            dlg_layout.addWidget(section_widget)
+
+            def apply_filter():
+                term = filter_edit.text().strip().lower()
+                list_widget.clear()
+                if not term:
+                    subset = display_names
+                else:
+                    subset = [n for n in original_failed if term in n.lower()][:MAX_DISPLAY]
+                list_widget.addItems(subset)
+                if term and len(subset) == MAX_DISPLAY and len(original_failed) > MAX_DISPLAY:
+                    list_widget.addItem("... (filtered list truncated)")
+                # Resize height to subset
+                if list_widget.count():
+                    visible_rows = min(list_widget.count(), 14)
+                    rh = list_widget.sizeHintForRow(0) if list_widget.sizeHintForRow(0) > 0 else 18
+                    list_widget.setMaximumHeight(rh * visible_rows + 6)
+                meta_label.setText(f"Showing {min(list_widget.count(), MAX_DISPLAY)} of {len(original_failed)} failed filenames" + (" (filtered)" if term else (" (truncated)" if truncated else "")))
+                dialog.adjustSize()
+            filter_edit.textChanged.connect(apply_filter)
+            clear_btn.clicked.connect(lambda: filter_edit.clear())
+
+            _expanded_height = {}
+            def on_toggle(checked: bool):
+                failed_container.setVisible(checked)
+                arrow_btn.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+                dialog.adjustSize()
+                if checked:
+                    if "expanded" not in _expanded_height:
+                        _expanded_height["expanded"] = min(dialog.height(), 900)
+                    target_h = max(dialog.sizeHint().height(), _expanded_height["expanded"])
+                    dialog.resize(dialog.width(), target_h)
+                else:
+                    collapsed_hint = dialog.sizeHint()
+                    dialog.resize(dialog.width(), collapsed_hint.height())
+            arrow_btn.toggled.connect(on_toggle)
+
+            # Auto-open if small list (<= 50) to reduce extra click
+            if len(original_failed) <= 50:
+                arrow_btn.setChecked(True)
+                on_toggle(True)
+
+            btn_row = QHBoxLayout()
+            open_btn = QPushButton("Open Folder")
+            copy_btn = QPushButton("Copy All")
+            close_btn = QPushButton("Close")
+            btn_row.addWidget(open_btn)
+            btn_row.addWidget(copy_btn)
+            btn_row.addStretch()
+            btn_row.addWidget(close_btn)
+            dlg_layout.addLayout(btn_row)
+
+            def copy_failed():
+                cb = QApplication.clipboard()
+                if cb:
+                    cb.setText("\n".join(original_failed))
+                    aqt.utils.tooltip("Failed filenames copied", parent=dialog)
+                else:
+                    aqt.utils.showWarning("Could not access clipboard.", parent=dialog)
+            copy_btn.clicked.connect(copy_failed)
+
+            def open_media_folder():
+                try:
+                    if mw and mw.col and mw.col.media:
+                        media_dir = mw.col.media.dir()
+                    else:
+                        aqt.utils.showWarning("Media directory unavailable.", parent=dialog)
+                        return
+                    if not os.path.isdir(media_dir):
+                        aqt.utils.showWarning("Media directory not found.", parent=dialog)
+                        return
+                    # Cross-platform folder open
+                    if sys.platform.startswith('win'):
+                        os.startfile(media_dir)  # type: ignore[attr-defined]
+                    elif sys.platform == 'darwin':
+                        subprocess.Popen(["open", media_dir])
+                    else:
+                        # Linux / others
+                        try:
+                            subprocess.Popen(["xdg-open", media_dir])
+                        except FileNotFoundError:
+                            aqt.utils.showInfo(f"Media folder: {media_dir}", parent=dialog)
+                except Exception as e:
+                    logger.error(f"Failed to open media folder: {e}")
+                    aqt.utils.showWarning("Could not open media folder.", parent=dialog)
+            open_btn.clicked.connect(open_media_folder)
+            close_btn.clicked.connect(dialog.accept)
+
+            dialog.setMinimumWidth(500)
+            dialog.adjustSize()
+            dialog.show()
+            dialog.exec()
+            
     elif uploaded > 0 and not silent:
         msg = (f"Media upload: {uploaded} files uploaded"
                )
@@ -723,60 +1167,47 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
         logger.error(traceback.format_exc())
         show_exception(parent=parent_widget, exception=e)
 
-def handle_media_references(parent_widget: QWidget, deck_repr: Deck, filename_mapping: Dict[str, str], media_files: List[Tuple[str, str]], editor: Optional[Any] = None):
-    if filename_mapping:
-        logger.info(f"Updating media references in {len(filename_mapping)} notes on main thread...")
-        try:
-            updated_count, op_changes = update_media_references(filename_mapping, media_files)
-            logger.info(f"Successfully updated media references in {updated_count} notes.")
-            
-            # Also update notetype media references
-            # notetype_updated_count = update_notetype_media_references(filename_mapping)
-            # if notetype_updated_count > 0:
-            #     logger.info(f"Successfully updated media references in {notetype_updated_count} notetypes.")
-            
-            if updated_count > 0:
-                if editor and op_changes.note_text:
-                    editor_note = editor.note
-                    try:
-                        assert editor_note is not None
-                        editor_note.load()
-                        editor.set_note(editor_note)
-                        editor.loadNote()
-                    except NotFoundError:
-                        logger.warning("Note being edited was deleted during suggestion process.")
-                        editor.cleanup()
-                    except Exception as e:
-                        logger.error(f"Error reloading editor note: {e}")
-        except Exception as e:
-            logger.error(f"Failed to update media references on main thread: {e}", exc_info=True)
-            show_exception(parent=parent_widget, exception=e)
-            # Abort the rest of the process if references couldn't be updated
-            mw.progress.finish() # Ensure any progress bar is closed
-            return
-    else:
-        logger.info("No media references needed updating.")
+def handle_media_references(
+    parent_widget: QWidget,
+    deck_repr: Deck,
+    filename_mapping: Dict[str, str],
+    media_files: List[Tuple[str, str]],
+    editor: Optional[Any] = None,
+    after: Optional[Callable[[int, Any], None]] = None,
+):
+    """Coordinate media reference updates (sync or async), then refresh deck_repr, then call after().
+    after(updated_count, opchanges) always runs on main thread.
+    """
+    def _finalize(updated_count: int, opchanges: Any):
+        # No deck_repr.refresh_notes here to avoid an extra QueryOp; callers will refresh
+        if after:
+            after(updated_count, opchanges)
 
-    logger.info(f"Refreshing deck representation notes from collection...")
-    
-    try:
-        deck_repr.refresh_notes(media_files)
-    except Exception as e:
-        logger.error(f"Failed to refresh deck_repr notes: {e}", exc_info=True)
-        # Logged the error, but proceed with potentially stale data in deck_repr?
-        # Or abort here too? Aborting might be safer.
-        aqt.utils.showWarning(f"Failed to refresh note data before submission: {e}\n\nAborting suggestion.", parent=parent_widget)
-        mw.progress.finish()
+    if not filename_mapping:
+        logger.info("No media references needed updating.")
+        _finalize(0, None)
         return
+
+    # Decide sync vs async via scheduler; continuation will call _finalize
+    def _cont(updated_count: int, opchanges: Any):
+        _finalize(updated_count, opchanges)
+
+    schedule_media_reference_updates(
+        deck_repr=deck_repr,
+        filename_mapping=filename_mapping,
+        media_files=media_files,
+        editor=editor,
+        continuation=_cont,
+    )
     
 def _on_suggest_media_optimized(
-    opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]], # Result from _sync_optimize...
+    opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]],
     deck_repr: Deck,
     media_files: List[Tuple[str, str]],
     did: int,
     rationale_id: int,
     commit_text: str,
-    editor: Optional[Any]
+    editor: Optional[Any],
 ):
     """Update media references AND FINALLY UPLOAD THE DECK ."""
     # Runs on Main Thread
@@ -785,22 +1216,35 @@ def _on_suggest_media_optimized(
 
     # Create a backup before updating the fields in the collection?
     #create_backup()
+    def _after_refs(_updated_count: int, _opchanges: Any):
+        # Submit Deck (Background Op) only after references updated. Deck refresh happens inside _submit_deck_op now.
+        logger.info("Starting deck submission QueryOp.")
+        op_submit = QueryOp(
+            parent=parent_widget,
+            op=lambda col: _submit_deck_op(
+                deck_repr,
+                did,
+                rationale_id,
+                commit_text,
+                files_info,
+                file_paths,
+                media_files_refresh=media_files,
+            ),
+            success=lambda result: _on_suggest_deck_submitted(result, editor),
+        )
+        silent_on_new_cards = rationale_id == 6  # New Card rationale should be silent
+        if not silent_on_new_cards:
+            op_submit.with_progress("Submitting suggestion to AnkiCollab...")
+        op_submit.run_in_background()
 
-    handle_media_references(parent_widget, deck_repr, filename_mapping, media_files, editor)
-
-    # Submit Deck (Background Op)
-    logger.info("Starting deck submission QueryOp.")
-    op_submit = QueryOp(
-        parent=parent_widget,
-        # Pass the potentially updated deck_repr
-        op=lambda col: _submit_deck_op(deck_repr, did, rationale_id, commit_text, files_info, file_paths),
-        success=lambda result: _on_suggest_deck_submitted(result, editor)
+    handle_media_references(
+        parent_widget,
+        deck_repr,
+        filename_mapping,
+        media_files,
+        editor,
+        after=_after_refs,
     )
-    
-    silent_on_new_cards = rationale_id == 6 # New Card rationale should be silent
-    if not silent_on_new_cards:
-        op_submit.with_progress("Submitting suggestion to AnkiCollab...")
-    op_submit.run_in_background()
 
 def _on_suggest_media_only_optimized(
     opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]], # Result from _sync_optimize...
@@ -823,10 +1267,19 @@ def _on_suggest_media_only_optimized(
         # We raise an exception to be caught by QueryOp's failure handler
         raise ValueError("Login required to upload media with suggestion.")
     
-    handle_media_references(parent_widget, deck_repr, filename_mapping, media_files, None)
-    bulk_operation_id = "" # Not used in this case, but required by the function signature
-    submit_result = (token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False)
-    _start_media_upload(submit_result, success_callback=_on_suggest_media_uploaded)
+    def _after_refs(_updated_count: int, _opchanges: Any):
+        bulk_operation_id = ""  # Not used in this case, but required by the function signature
+        submit_result = (token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False)
+        _start_media_upload(submit_result, success_callback=_on_suggest_media_uploaded)
+
+    handle_media_references(
+        parent_widget,
+        deck_repr,
+        filename_mapping,
+        media_files,
+        None,
+        after=_after_refs,
+    )
     
 
 def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
@@ -869,9 +1322,9 @@ def start_suggest_missing_media(webresult):
         if not missing_files:
             aqt.utils.showInfo("No missing media files to upload.", parent=parent_widget)
             return
-        
-        print(f"Missing files for deck {deck_hash}: {missing_files}")
-    
+
+        logger.debug(f"Missing files for deck {deck_hash}: {missing_files}")
+
         did = get_did_from_hash(deck_hash)
         if did is None:
             aqt.utils.showWarning("Config Error: Could not find the local Anki deck associated with this cloud deck. Please check the Subscriptions window.", parent=parent_widget)
@@ -916,6 +1369,11 @@ def start_suggest_missing_media(webresult):
     except Exception as e:
         logger.error(f"Error uploading missing media: {e}")
         logger.error(traceback.format_exc())
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
         show_exception(parent=parent_widget, exception=e)
 
 def suggest_subdeck(did: int):
@@ -1006,7 +1464,14 @@ def handle_export(did: int, username: str):
 
 
 
-def _on_export_media_optimized(opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]], deck_repr: Deck, did: int, media_files: list, username: str, user_token: str):
+def _on_export_media_optimized(
+    opt_result: Tuple[Dict[str, str], List[Dict], Dict[str, str]],
+    deck_repr: Deck,
+    did: int,
+    media_files: list,
+    username: str,
+    user_token: str,
+):
     """Success callback after media optimization for export."""
     # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
@@ -1015,40 +1480,39 @@ def _on_export_media_optimized(opt_result: Tuple[Dict[str, str], List[Dict], Dic
     # Create a backup before updating the fields in the collection?
     #create_backup()
 
-    if filename_mapping:
-        logger.info(f"Updating media references in {len(filename_mapping)} notes on main thread...")
-        try:
-            updated_count, _ = update_media_references(filename_mapping, media_files)
-            logger.info(f"Successfully updated media references in {updated_count} notes.")
-            
-            # Also update notetype media references
-            # notetype_updated_count = update_notetype_media_references(filename_mapping)
-            # if notetype_updated_count > 0:
-            #     logger.info(f"Successfully updated media references in {notetype_updated_count} notetypes.")
-        except Exception as e:
-            logger.error(f"Failed to update media references on main thread: {e}", exc_info=True)
-            show_exception(parent=parent_widget, exception=e)
-            mw.progress.finish() # Ensure any progress bar is closed
-            return # Stop here
-    else:
-        logger.info("No media references needed updating.")
-        
-    deck_repr.refresh_notes(media_files)
+    def _after_refs(_updated_count: int, _opchanges: Any):
+        logger.info("Media references processed for export. Starting deck creation QueryOp.")
+        op_create = QueryOp(
+            parent=parent_widget,
+            op=lambda col: _create_deck_op(deck_repr, username, media_files_refresh=media_files),
+            success=lambda result: _on_export_deck_created(result, did, user_token, files_info, file_paths),
+        )
+        op_create.with_progress("Publishing deck to AnkiCollab...")
+        op_create.run_in_background()
 
-    logger.info("Media optimization complete. Starting deck creation QueryOp.")
-
-    op_create = QueryOp(
-        parent=parent_widget,
-        op=lambda col: _create_deck_op(deck_repr, username),
-        success=lambda result: _on_export_deck_created(result, did, user_token, files_info, file_paths) # Pass token/media info
+    # Use unified media reference handler (async for large sets, sync for small)
+    handle_media_references(
+        parent_widget=parent_widget,
+        deck_repr=deck_repr,
+        filename_mapping=filename_mapping,
+        media_files=media_files,
+        editor=None,
+        after=_after_refs,
     )
-    op_create.with_progress("Publishing deck to AnkiCollab...")
-    op_create.run_in_background()
 
 
-def _create_deck_op(deck_repr: Deck, username: str) -> Dict[str, Any]:
+def _create_deck_op(
+    deck_repr: Deck,
+    username: str,
+    media_files_refresh: Optional[List[Tuple[str, str]]] = None,
+) -> Dict[str, Any]:
     """Operation function for QueryOp: Creates the deck via API."""
     # Runs in background thread
+    if media_files_refresh is not None:
+        try:
+            deck_repr.refresh_notes(media_files_refresh)
+        except Exception as e:
+            logger.warning(f"Deck refresh inside create op failed; proceeding: {e}")
     deck_res = json.dumps(deck_repr, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     data = {"deck": deck_res, "username": username}
     try:

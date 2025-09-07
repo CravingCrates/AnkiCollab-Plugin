@@ -13,6 +13,7 @@ from anki.errors import NotFoundError
 from anki.notes import NoteId
 
 from aqt.qt import *
+from aqt.qt import QDialog, QApplication, QMessageBox
 from aqt import mw
 from anki.decks import DeckId
 
@@ -23,7 +24,7 @@ from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, As
 from .crowd_anki.representation import deck_initializer
 from .crowd_anki.importer.import_dialog import ImportConfig
 
-from .utils import create_backup, get_local_deck_from_id, DeckManager
+from .utils import create_backup, get_local_deck_from_id, DeckManager, get_logger
 
 from .stats import ReviewHistory, on_stats_upload_done, update_stats_timestamp
 
@@ -32,7 +33,7 @@ import gzip
 
 import logging
 
-logger = logging.getLogger("ankicollab")
+logger = get_logger("ankicollab.import_manager")
 
 
 def do_nothing(count: int):
@@ -194,7 +195,7 @@ def update_stats() -> None:
                 update_stats_timestamp(deck_hash)
 
 
-def wants_to_share_stats(deck_hash) -> (bool, int):
+def wants_to_share_stats(deck_hash) -> tuple[bool, int]:
     """Get stats sharing preference without showing dialog."""
     with DeckManager() as decks:
         details = decks.get_by_hash(deck_hash)
@@ -244,10 +245,10 @@ def _on_deck_installed(install_result, deck, subscription, input_hash=None, upda
     
     # unfortunately, the db scalar shits itself when called from the success callback after the deck has been installed
     if deleted_notes:
-        print(f"Processing {len(deleted_notes)} deleted notes...")
+        logger.info(f"Processing {len(deleted_notes)} deleted notes...")
         # Handle deleted Notes
         deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
-        print(f"Found {len(deleted_nids)} note IDs for deleted notes.")
+        logger.info(f"Found {len(deleted_nids)} note IDs for deleted notes.")
         if deleted_nids:
             del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash)
             del_notes_choice = del_notes_dialog.exec()
@@ -309,9 +310,14 @@ def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
     except Exception as e:
         logger.error(f"Error handling stats sharing dialog: {e}")
         # Don't let this error break the import process
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
 
 def install_update(subscription, input_hash=None, update_timestamp_after=False):
-    print(f"Installing update for deck: {subscription['deck_hash']}")
+    logger.info(f"Installing update for deck: {subscription['deck_hash']}")
     deck_hash = subscription["deck_hash"]
     parent_widget = QApplication.focusWidget() or mw
     
@@ -326,21 +332,21 @@ def install_update(subscription, input_hash=None, update_timestamp_after=False):
             deck_hash, dialog.get_selected_tags()
         )
     subscribed_tags = get_optional_tags(deck_hash)
-    print("Optional Tags done.")
+    logger.debug("Optional Tags done.")
     deck = deck_initializer.from_json(subscription["deck"])
-    print("Deck initialized.")
+    logger.debug("Deck initialized.")
     config = prep_config(
         subscription["protected_fields"],
         [tag for tag, value in subscribed_tags.items() if value],
         True if subscription["optional_tags"] else False,
         deck_hash
     )
-    print("Config prepared.")
+    logger.debug("Config prepared.")
 
     map_cache = defaultdict(dict)
     note_type_data = {}
     #deck.handle_notetype_changes(mw.col, map_cache, note_type_data)
-    print("Handled note type changes.")
+    logger.debug("Handled note type changes.")
     
     # Start QueryOp for collection operations
     op = QueryOp(
@@ -498,6 +504,11 @@ def get_new_notes_home_deck(given_deck_hash):
     except Exception as e:
         logger.error(f"Error getting new notes home deck: {e}")
         # Fall back to regular home deck
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
         return get_home_deck(given_deck_hash)
     
     return None
@@ -521,26 +532,41 @@ def remove_nonexistent_decks():
         strings_data_to_send = strings_data_copy
 
         payload = {"deck_hashes": list(strings_data_to_send.keys())}
-        response = requests.post(f"{API_BASE_URL}/CheckDeckAlive", json=payload)
-        if response.status_code == 200:
-            if response.content == "Error":
-                infot = "A Server Error occurred. Please notify us!"
-                aqt.mw.taskman.run_on_main(
-                    lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
-                )
-            else:
-                webresult = json.loads(response.content)
-                # we need to remove all the decks that don't exist anymore from the strings_data
-                strings_data = mw.addonManager.getConfig(__name__)
-                if strings_data is not None and len(strings_data) > 0:
-                    for deck_hash in webresult:
-                        if deck_hash in strings_data:
-                            del strings_data[deck_hash]
-                        else:
-                            print("deck_hash not found in strings_data")
-                    mw.addonManager.writeConfig(__name__, strings_data)
+        try:
+            response = requests.post(f"{API_BASE_URL}/CheckDeckAlive", json=payload)
+            if response.status_code == 200:
+                if response.content == "Error":
+                    infot = "A Server Error occurred. Please notify us!"
+                    aqt.mw.taskman.run_on_main(
+                        lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
+                    )
                 else:
-                    print("strings_data is None or empty")
+                    webresult = json.loads(response.content)
+                    # we need to remove all the decks that don't exist anymore from the strings_data
+                    strings_data = mw.addonManager.getConfig(__name__)
+                    if strings_data is not None and len(strings_data) > 0:
+                        for deck_hash in webresult:
+                            if deck_hash in strings_data:
+                                del strings_data[deck_hash]
+                            else:
+                                logger.debug("deck_hash not found in strings_data")
+                        mw.addonManager.writeConfig(__name__, strings_data)
+                    else:
+                        logger.debug("strings_data is None or empty")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error checking deck alive: {e}")
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception(f"Unexpected error checking deck alive: {e}")
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
 
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
 def async_start_pull(input_hash, silent=False):
@@ -568,16 +594,41 @@ def async_start_pull(input_hash, silent=False):
                 else {}
             )
 
-        response = requests.post(
-            f"{API_BASE_URL}/pullChanges", json=strings_data_to_send
-        )
-        if response.status_code == 200:
-            compressed_data = base64.b64decode(response.content)
-            decompressed_data = gzip.decompress(compressed_data)
-            webresult = json.loads(decompressed_data.decode("utf-8"))
-            return (webresult, input_hash, silent)
-        else:
-            infot = "A Server Error occurred. Please notify us!"
+        try:
+            response = requests.post(
+                f"{API_BASE_URL}/pullChanges", json=strings_data_to_send
+            )
+            if response.status_code == 200:
+                compressed_data = base64.b64decode(response.content)
+                decompressed_data = gzip.decompress(compressed_data)
+                webresult = json.loads(decompressed_data.decode("utf-8"))
+                return (webresult, input_hash, silent)
+            else:
+                infot = "A Server Error occurred. Please notify us!"
+                aqt.mw.taskman.run_on_main(
+                    lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
+                )
+                return (None, None, silent)
+        except (requests.exceptions.RequestException, OSError, ValueError, gzip.BadGzipFile, base64.binascii.Error) as e:
+            logger.error(f"Error pulling changes: {e}")
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
+            infot = "A Network Error occurred while fetching changes."
+            aqt.mw.taskman.run_on_main(
+                lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
+            )
+            return (None, None, silent)
+        except Exception as e:
+            logger.exception(f"Unexpected error pulling changes: {e}")
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
+            infot = "An unexpected error occurred while fetching changes."
             aqt.mw.taskman.run_on_main(
                 lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
             )

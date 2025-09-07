@@ -14,6 +14,7 @@ from ..utils.constants import UUID_FIELD_NAME
 from ..utils.uuid import UuidFetcher
 from ..utils.notifier import AnkiModalNotifier
 from ...thread import run_function_in_thread, sync_run_async
+from ...utils import get_logger
 import uuid
                                 
 from ... import main
@@ -28,6 +29,7 @@ import anki.utils
 import requests
 import logging
 import time
+import sentry_sdk
 from anki.collection import Collection, EmptyCardsReport
 from aqt.operations import QueryOp
 from aqt.emptycards import EmptyCardsDialog
@@ -41,7 +43,7 @@ from ...var_defs import API_BASE_URL
 
 CHUNK_SIZE = 1000
         
-logger = logging.getLogger("ankicollab")
+logger = get_logger("ankicollab.deck_import")
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
 
 
@@ -350,6 +352,10 @@ class Deck(JsonSerializableAnkiDict):
                 
             except Exception as e:
                 logger.error(f"Media download error: {e}")
+                try:
+                    sentry_sdk.capture_exception(e)
+                except Exception:
+                    pass
                 media_result.update({
                     "success": False,
                     "message": f"Media download failed: {e}"
@@ -411,7 +417,11 @@ class Deck(JsonSerializableAnkiDict):
             except NotFoundError:
                 continue
             except Exception as e:
-                print(f"Error while processing deck {name}: {e}")
+                logger.error(f"Error while processing deck {name}: {e}")
+                try:
+                    sentry_sdk.capture_exception(e)
+                except Exception:
+                    pass
                 continue
             
             
@@ -606,6 +616,10 @@ class Deck(JsonSerializableAnkiDict):
             
         except Exception as e:
             logger.error(f"Critical error in notetype management: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             return False
 
     def _handle_notetype_duplicates(self, collection: Collection, failed_operations: List[str]) -> bool:
@@ -673,6 +687,10 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             failed_operations.append(f"Duplicate handling: {e}")
             logger.error(f"Error handling notetype duplicates: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             return False
 
     def _create_and_update_notetypes(self, collection: Collection, failed_operations: List[str]) -> bool:
@@ -729,6 +747,10 @@ class Deck(JsonSerializableAnkiDict):
                 failed_operations.append(f"Error with notetype '{model_name}': {e}")
                 logger.error(f"Failed to process notetype '{model_name}': {e}")
                 success = False
+                try:
+                    sentry_sdk.capture_exception(e)
+                except Exception:
+                    pass
         
         return success
 
@@ -874,6 +896,10 @@ class Deck(JsonSerializableAnkiDict):
                 except Exception as e:
                     failed_operations.append(f"Notetype change {old_mid} -> {new_mid}: {e}")
                     logger.error(f"Failed to change notetype for {len(note_ids)} notes: {e}")
+                    try:
+                        sentry_sdk.capture_exception(e)
+                    except Exception:
+                        pass
                     success = False
             
             # Report results and any required manual review
@@ -891,6 +917,10 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             failed_operations.append(f"Note type changes: {e}")
             logger.error(f"Error in notetype changes: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             return False
 
     def _assess_change_risk(self, old_model: Dict, new_model: Dict) -> bool:
@@ -951,12 +981,20 @@ class Deck(JsonSerializableAnkiDict):
                                 total_success = False
                         except Exception as e:
                             logger.error(f"Mini-batch failed: {e}")
+                            try:
+                                sentry_sdk.capture_exception(e)
+                            except Exception:
+                                pass
                             total_success = False
                 else:
                     # Large batch succeeded
                     logger.debug(f"Successfully processed large batch of {len(batch)} notes")
             except Exception as e:
                 logger.error(f"Exception in optimized batch {i//OPTIMIZED_BATCH_SIZE + 1}: {e}")
+                try:
+                    sentry_sdk.capture_exception(e)
+                except Exception:
+                    pass
                 total_success = False
         
         return total_success
@@ -1015,6 +1053,10 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             logger.error(f"Failed to apply notetype change {old_mid} -> {new_mid}: {e}")
             # Log the error but don't lose notes - they keep their old notetype
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             return False
 
     def _validate_notetype_operations(self, collection: Collection, failed_operations: List[str]) -> bool:
@@ -1064,6 +1106,10 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             failed_operations.append(f"Validation: {e}")
             logger.error(f"Error in notetype validation: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             return False
 
     def _are_notetypes_compatible(self, remote_model: NoteModel, local_notetype: Dict) -> bool:
@@ -1197,6 +1243,10 @@ class Deck(JsonSerializableAnkiDict):
             
         except Exception as e:
             logger.error(f"Error in bulk import: {str(e)}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             # Clean up any partial state
             try:
                 temp_deck_pattern = "_ankicollab_import_"
@@ -1402,6 +1452,10 @@ class Deck(JsonSerializableAnkiDict):
             
         except Exception as e:
             logger.error(f"Error in bulk note operations: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             raise
             
         return processed_count
@@ -1533,6 +1587,10 @@ class Deck(JsonSerializableAnkiDict):
                 
         except Exception as e:
             logger.error(f"Error restoring original note IDs: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             for note in notes_with_original_ids:
                 if hasattr(note, '_original_id'):
                     delattr(note, '_original_id')
