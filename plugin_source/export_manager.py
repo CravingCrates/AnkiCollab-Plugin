@@ -78,7 +78,6 @@ from . import main
 logger = get_logger("ankicollab.export_manager")
 
 ASYNC_MEDIA_REF_THRESHOLD = 250  # Tunable; keep conservative to avoid overhead on small tasks.
-ASYNC_MEDIA_LARGE_PROGRESS_THRESHOLD = 5000  # >= this many notes: show percentage progress
 BATCH_UPDATE_NOTES_SIZE = 800  # batch size for mw.col.update_notes to avoid huge single commit / UI hitch
 
 # Define and compile regexes for various media types
