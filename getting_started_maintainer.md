@@ -77,16 +77,6 @@ Your subscribers can pull missing media files by using "Download Missing Media" 
 
 As a maintainer, you are responsible for approving or denying changes. There are multiple types, and we'll cover them all here.
 
-## Auto Approve Changes
-
-For convenience purposes, you can let the system auto approve all changes you (or other maintainers) make.
-
-Once you're logged in, check the box. That's all you need to do!
-
-Card deletion requests are always required to be reviewed on the Website to prevent accidental removal of content.
-
-![Auto Approve Checkbox](https://i.imgur.com/IkRpkgi.png)
-
 ### Add notes and subdecks
 - If you happen to want to add more notes, just select them in your browser (Ctrl + B), hit right click and select "Ankicollab : Bulk suggest notes". You can then review them on the site (if you haven't turned on [auto approve changes](#auto-approve-changes)).
 
@@ -94,7 +84,7 @@ Card deletion requests are always required to be reviewed on the Website to prev
 
 - If you want to add some subdecks to the deck (keep in mind that once added they can't be removed for now), you can go on the left of the *Browse* window and right click on the master deck which you chose when first publishing, right click and select "suggest on Ankicollab"
 
-![](https://i.imgur.com/zLCt3xV.png)
+<img src="https://i.imgur.com/zLCt3xV.png" alt="Suggest on Ankicollab - Right Click" width="250">
 
 - If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*". The latter is enabled by default.
 
@@ -132,9 +122,26 @@ From here, or the previous page, simply click the check mark for suggestions you
 
 Cards in your deck can be removed by using the the **Request Note Removal** option just below the *Bulk suggest Notes* feature in the browser.
 
-![RemoveNoteRequest in Browser - White Arrow](https://i.imgur.com/lftYyBT.png)
+<img src="https://i.imgur.com/lftYyBT.png" alt="RemoveNoteRequest in Browser - White Arrow" width="700">
 
-Removal requests disregard the Auto Approve Changes feature, they always require approval on the Website.
+Removal requests disregard the Auto Approve Changes feature, they always require approval on the Website to prevent accidental removal of content.
+
+## Auto Approve Changes
+
+For convenience purposes, you can let the system auto approve all changes you (or other maintainers) make.
+
+Once you're logged in, open the Subscription Manager Pop-Up by Clicking AnkiCollab → "Edit subscriptions"
+
+Open The Global Settings
+
+![Edit Subscriptions - Arrow on Global Settings](https://i.imgur.com/Q8tYvQP.png)
+
+Check the Auto Approve Changes (Maintainer only) option and press Save Settings.
+
+![Auto Approve Checkbox - Blue Arrow](https://i.imgur.com/oshaYaB.png)
+
+As mentioned above, Card deletion requests are always required to be reviewed on the Website.
+
 ## Credits
 
 This guide was written by Andre, and we would like to extend our sincere thanks for his contributions. With his expertise and commitment, this tutorial has become a valuable resource for all those who read it. Thank you, Andre, for your hard work and dedication.
