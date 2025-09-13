@@ -157,4 +157,6 @@ As mentioned above, Card deletion requests are always required to be reviewed on
 
 ## Credits
 
-This guide was written by Andre, and we would like to extend our sincere thanks for his contributions. With his expertise and commitment, this tutorial has become a valuable resource for all those who read it. Thank you, Andre, for your hard work and dedication.
+This guide was originally written by Andre, whose work and dedication turned it into a resource many can rely on.
+
+A special thanks also goes to Mo, for his key role in AnkiCollab. His bug reports, feature ideas, and updates to this guide have been essential to its growth and improvement, and his steady involvement continues to shape the project’s direction.
