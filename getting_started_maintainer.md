@@ -85,7 +85,7 @@ This will suggest the whole deck, meaning the Addon will check every note for ch
 
 <img src="https://i.imgur.com/hxs54t4.png" alt="Suggest on Ankicollab - Right Click" width="250">
 
-If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose `Disable new subdeck creation` and/or `Disallow new notetype uploads`. The latter is enabled by default.
+If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ tab on the AnkiCollab website, select your deck and choose `Disable new subdeck creation` and/or `Disallow new notetype uploads`. The latter is enabled by default.
 
 ![Deck Management Options](https://i.imgur.com/RMKAQva.png)
 
