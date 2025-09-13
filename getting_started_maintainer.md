@@ -31,7 +31,7 @@ Inside of Anki, go to the toolbar, and click `AnkiCollab → Publish New Deck`.
 
 ![AnkiCollab Dropdown bar](https://i.imgur.com/CsMaZnq.png)
 
-Select the deck you want to upload and enter your username **exactly** as it is on [AnkiCollab.com](AnkiCollab.com).
+Select the deck you want to upload and enter your username **exactly** as it is on [AnkiCollab.com](https://ankicollab.com).
 
 <img src="https://i.imgur.com/3z4jR69.png" alt="A pop up window from AnkiCollab waiting for the user to choose which deck to publish" width="500">
 
