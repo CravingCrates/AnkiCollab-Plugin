@@ -5,10 +5,12 @@
     - [Signing Up for AnkiCollab](#signing-up-for-ankicollab)
     - [Adding a Deck to AnkiCollab](#adding-a-deck-to-ankicollab)
     - [Add Media Support](#media-support)
-    - [Auto Approve Changes](#auto-approve-changes)
     - [Add Notes and Subdecks](#add-notes-and-subdecks)
   - [Handling Suggestions](#handling-suggestions)
     - [Content Changes](#content-changes)
+    - [Tag Changes](#tag-changes)
+    - [Card Deletion](#card-deletion)
+  - [Auto Approve Changes](#auto-approve-changes)
   - [Credits](#credits)
 
 Maintainers are the ones keeping AnkiCollab decks healthy, accurate, and updated. When subscribers suggest changes, maintainers approve or deny them.
@@ -29,9 +31,9 @@ Inside of Anki, go to the toolbar, and click `AnkiCollab → Publish New Deck`.
 
 ![AnkiCollab Dropdown bar](https://i.imgur.com/CsMaZnq.png)
 
-Select the deck you want to upload and enter your username **exactly** as it is on AnkiCollab.com.
+Select the deck you want to upload and enter your username **exactly** as it is on [AnkiCollab.com](AnkiCollab.com).
 
-![A pop up window from AnkiCollab waiting for the user to choose which deck to publish.](https://i.imgur.com/3z4jR69.png)
+<img src="https://i.imgur.com/3z4jR69.png" alt="A pop up window from AnkiCollab waiting for the user to choose which deck to publish" width="500">
 
 After clicking **Publish Deck**, a confirmation message will pop up and you will be able to view your deck on [AnkiCollab.com/Decks](https://www.ankicollab.com/decks).
 
@@ -50,8 +52,7 @@ Please note that your newly published Deck is set to `Unlisted` and `New Notetyp
 ![Public checkbox and NoteType Checkbox](https://i.imgur.com/T0s0N2A.png)
 
 
-## Media Support
-
+### Media Support
 Since early 2025, AnkiCollab hosts its own Media Server supported by [Ankizin](https://www.ankizin.de/).
 
 You can share media files that are in the cards you publish without setting up anything, media files are checked and uploaded automatically when you submit a suggestion.
@@ -73,50 +74,62 @@ To bulk upload media files, you can also click the gear icon next to your deck a
 
 Your subscribers can pull missing media files by using "Download Missing Media" respectively
 
+### Add notes and subdecks
+If you happen to want to add more notes, just select them in your browser (Ctrl + B), hit right click and select "Ankicollab : Bulk suggest notes". You can then review them on the site (if you haven't turned on [auto approve changes](#auto-approve-changes)).
+
+![](https://i.imgur.com/tV2tOga.png)
+
+If you want to add some subdecks to the deck (keep in mind that once added they can't be removed for now), you can go on the left of the *Browse* window and right click on the master deck which you chose when first publishing, right click and select "Suggest on AnkiCollab"
+
+This will suggest the whole deck, meaning the Addon will check every note for changes, find new subdecks or new notes and suggest everything at once. If your deck is large, you may want to suggest the new subdeck only - this is also possible and will be quicker.
+
+<img src="https://i.imgur.com/hxs54t4.png" alt="Suggest on Ankicollab - Right Click" width="250">
+
+If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose `Disable new subdeck creation` and/or `Disallow new notetype uploads`. The latter is enabled by default.
+
+![Deck Management Options](https://i.imgur.com/RMKAQva.png)
+
 ## Handling Suggestions
 
 As a maintainer, you are responsible for approving or denying changes. There are multiple types, and we'll cover them all here.
 
-### Add notes and subdecks
-- If you happen to want to add more notes, just select them in your browser (Ctrl + B), hit right click and select "Ankicollab : Bulk suggest notes". You can then review them on the site (if you haven't turned on [auto approve changes](#auto-approve-changes)).
-
-![](https://i.imgur.com/tV2tOga.png)
-
-- If you want to add some subdecks to the deck (keep in mind that once added they can't be removed for now), you can go on the left of the *Browse* window and right click on the master deck which you chose when first publishing, right click and select "suggest on Ankicollab"
-
-<img src="https://i.imgur.com/zLCt3xV.png" alt="Suggest on Ankicollab - Right Click" width="250">
-
-- If you want to block new note types and/or subdecks to be added to your deck, you can do so by going to the __Manage Decks__ Tab on the AnkiCollab Website, select your deck and choose "*Disable new subdeck creation*" and/or "*Disallow new notetype uploads*". The latter is enabled by default.
-
-![Deck Management Options](https://i.imgur.com/RMKAQva.png)
-
 ### Content Changes
+All the different possible changes are handled the same way. Someone (or you) may submit a change — fixing typos, updating content, formatting, changing tags, or something else. You'll go to the `Review changes` page on AnkiCollab and approve or deny them.
 
-All the different possible changes are handled the same way. Someone (or you) may submit a change — fixing typos, updating content, formatting, changing tags, or something else. You'll go to the **All Reviews** page on AnkiCollab and approve or deny them.
+Let's use a sample card from the ultimate geography deck:
 
-Let's use a sample card from a trivia deck.
+This note has a mistake — the capital of Sweden is Stockholm, not Oslo. A good contributor corrects the card and suggests the change.
 
-![A flashcard with the front saying "World's Tallest Building" and the back saying "Lotte World Tower."](https://i.imgur.com/JxQGgx5.png)
+![A flashcard from the UG deck for sweden with "Oslo" in capital field"](https://i.imgur.com/MmlS4Zc.png)
 
-While the Lotte World Tower is definitely tall, it's not the tallest — that would be the Burj Khalifa. A good contributor corrects the card and suggests the change.
+After correcting the content, users need to press the `AnkiCollab` Button:
 
-Navigate to [AnkiCollab.com](https://ankicollab.com/) and click **All Reviews** to see suggestions for your published decks.
+![The corrected Flashcard with Stockholm - Blue Arrow to AnkiCollab Button](https://i.imgur.com/WJKzooV.png)
 
-![A blue arrow pointing to All Reviews on AnkiCollab.com](https://i.imgur.com/wTTUTpV.png)
+The `Commit Information Popup` will appear and the user is prompted to give information on the changes made.
 
-From here, we see we have a suggestion involving a content error.
+![The corrected Flashcard with Stockholm - PopUp open](https://i.imgur.com/qcSpLHa.png)
 
-![The All Reviews page on AnkiCollab.com](https://i.imgur.com/hWeodp4.png)
+After pressing `Submit`, the **Review changes** tab on [AnkiCollab.com](https://ankicollab.com/) will show the open suggestion. This tab contains all open suggestions for all your published decks and those you have maintainer access to:
 
-When you click on the card, you'll see what the field had before and after the change. If you'd like to see the rest of the fields for context, click **Go To Full Review**.
+![A blue arrow pointing to Review Changes on AnkiCollab.com](https://i.imgur.com/IBcJ7bK.png)
 
-![A blue arrow pointing to the Go To Full Review button.](https://i.imgur.com/hz45hrb.png)
+Here, we see the open suggestion that was made involving a content error.
 
-Here, the rest of the fields are shown.
+When you click on the card, you'll see what content the field had before the change and what changes are suggested, supported by color coding on the right-hand side. If you'd like to see the rest of the fields for context, click `Review Suggestions`.
 
-![The full review page on AnkiCollab.com](https://i.imgur.com/Ij62zmY.png)
+![A blue arrow pointing to the Go To Full Review button.](https://i.imgur.com/nPcTCT8.png)
 
-From here, or the previous page, simply click the check mark for suggestions you want to keep or the red X to reject them. After that, you're good to go!
+Here, the rest of the fields are shown:
+
+<img src="https://i.imgur.com/OFlKxBv.png" alt="Full review page" width="600">
+
+From here, or the previous page, simply click the green `Accept` check mark for suggestions you want to keep or the red `Deny` X to reject them.
+
+After that, you're good to go!
+
+### Tag changes
+Tag changes are handled the same way, any user can make changes to tags and use the suggest feature. Maintainers can accept all changes at once by clicking "Accept all", or selectively accepting / denying tag changes one by one.
 
 ### Card deletion
 
@@ -128,11 +141,11 @@ Removal requests disregard the Auto Approve Changes feature, they always require
 
 ## Auto Approve Changes
 
-For convenience purposes, you can let the system auto approve all changes you (or other maintainers) make.
+For convenience, you can let the system auto approve all changes you (or other maintainers) make.
 
 Once you're logged in, open the Subscription Manager Pop-Up by Clicking AnkiCollab → "Edit subscriptions"
 
-Open The Global Settings
+Open The Global Settings window:
 
 ![Edit Subscriptions - Arrow on Global Settings](https://i.imgur.com/Q8tYvQP.png)
 
