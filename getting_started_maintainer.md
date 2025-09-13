@@ -143,7 +143,7 @@ Removal requests disregard the Auto Approve Changes feature, they always require
 
 For convenience, you can let the system auto approve all changes you (or other maintainers) make.
 
-Once you're logged in, open the Subscription Manager Pop-Up by Clicking AnkiCollab → "Edit subscriptions"
+Once you're logged in, open the Subscription Manager Pop-Up by clicking AnkiCollab → "Edit subscriptions"
 
 Open The Global Settings window:
 
