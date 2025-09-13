@@ -79,7 +79,7 @@ If you happen to want to add more notes, just select them in your browser (Ctrl 
 
 ![](https://i.imgur.com/tV2tOga.png)
 
-If you want to add some subdecks to the deck (keep in mind that once added they can't be removed for now), you can go on the left of the *Browse* window and right click on the master deck which you chose when first publishing, right click and select "Suggest on AnkiCollab"
+If you want to add some subdecks to the deck (keep in mind that once added they can't be removed for now), you can go on the left of the *Browse* window and right click on the master deck which you chose when first publishing and select "Suggest on AnkiCollab"
 
 This will suggest the whole deck, meaning the Addon will check every note for changes, find new subdecks or new notes and suggest everything at once. If your deck is large, you may want to suggest the new subdeck only - this is also possible and will be quicker.
 
