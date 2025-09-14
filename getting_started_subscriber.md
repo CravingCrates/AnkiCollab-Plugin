@@ -135,8 +135,8 @@ If any updates are available, you will be shown the changelog and asked if you w
 
 ### Check for New Content Automatically
 
-On the toolbar, click `AnkiCollab → Settings → Check for Updates on Startup`.
+On the toolbar, click `AnkiCollab → Edit Subscriptions → Global Settings → Check for Updates on Startup`.
 
-![A cursor hovering over the Check for Updates on Startup button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/dQ9ZUbU.png)
+![A gif showing how to get to the 'Check for Updates on Startup' button.](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExNXgwYThtYmw0Y3IyNGloMXV4eGlrNTAwcW16d29neG1qNnV6d20yMiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/plmOQkIPvvc98ODpuD/giphy.gif)
 
-When you startup Anki, AnkiCollab will automatically check for updates and prompt you to install any available updates.
+When you startup Anki, AnkiCollab will automatically check for deck updates and prompt you to install any available.
