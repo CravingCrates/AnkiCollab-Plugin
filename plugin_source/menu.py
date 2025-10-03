@@ -25,7 +25,6 @@ from aqt.qt import (
     QApplication,
     Qt,
 )
-# Explicit imports to satisfy static checkers that don't follow star imports
 from aqt.theme import theme_manager
 from datetime import datetime, timezone
 import requests
@@ -49,7 +48,7 @@ links_menu = QMenu('Links', mw)
 edit_list_action = QAction('Edit Subscriptions', mw)
 push_deck_action = QAction('Publish New Deck', mw)
 push_all_stats_action = QAction('Submit All Review History', mw)
-pull_changes_action = QAction('Check for New Content', mw)
+pull_changes_action = QAction('Update Decks', mw)
 login_manager_action = QAction('Login', mw) # Default text is Login
 media_import_action = QAction('Import Media from Folder', mw)
 
@@ -1015,37 +1014,29 @@ def show_global_settings_dialog(parent_dialog):
         strings_data["settings"] = {}
     settings = strings_data["settings"]
 
-    # Deck structure options
-    structure_group = QGroupBox("Deck Structure")
-    structure_layout = QVBoxLayout(structure_group)
-    preserve_radio = QRadioButton("Preserve original deck structure (recommended)")
-    flatten_radio = QRadioButton("Flatten to single deck")
-    current_preserve_structure = settings.get("preserve_deck_structure", True)
-    preserve_radio.setChecked(current_preserve_structure)
-    flatten_radio.setChecked(not current_preserve_structure)
-    preserve_info = QLabel("   • Maintains the original deck hierarchy from AnkiCollab\n   • New notes go to the appropriate subdeck based on the cloud structure")
-    preserve_info.setStyleSheet("color: #666; font-size: 11px; margin-left: 20px;")
-    flatten_info = QLabel("   • Places all notes in your chosen local/new notes decks\n   • Ignores subdeck structure from AnkiCollab")
-    flatten_info.setStyleSheet("color: #666; font-size: 11px; margin-left: 20px;")
-    structure_layout.addWidget(preserve_radio)
-    structure_layout.addWidget(preserve_info)
-    structure_layout.addWidget(flatten_radio)
-    structure_layout.addWidget(flatten_info)
-    layout.addWidget(structure_group)
+    # Ensure legacy configs default to preserving deck structure
+    if settings.get("preserve_deck_structure") is False:
+        settings["preserve_deck_structure"] = True
+        mw.addonManager.writeConfig(__name__, strings_data)
 
     # Global config checkboxes
     global_group = QGroupBox("General Settings")
     global_layout = QVBoxLayout(global_group)
-    pull_on_startup_cb = QCheckBox("Check for Updates on Startup")
+    pull_on_startup_cb = QCheckBox("Update Decks on startup")
     pull_on_startup_cb.setChecked(bool(settings.get("pull_on_startup", False)))
+    pull_on_startup_cb.setToolTip("Automatically check for updates from AnkiCollab when Anki starts.")
     suspend_new_cards_cb = QCheckBox("Automatically suspend new Cards")
     suspend_new_cards_cb.setChecked(bool(settings.get("suspend_new_cards", False)))
+    suspend_new_cards_cb.setToolTip("Automatically suspend new cards imported from subscriptions so they won't enter your review queue until you enable them.")
     move_cards_cb = QCheckBox("Do not move Cards automatically")
     move_cards_cb.setChecked(bool(settings.get("auto_move_cards", False)))
-    auto_approve_cb = QCheckBox("Auto Approve Changes (Maintainer only)")
+    move_cards_cb.setToolTip("Prevent the add-on from automatically moving cards between decks or positions when syncing cloud changes.")
+    auto_approve_cb = QCheckBox("Auto-approve changes (maintainer only)")
     auto_approve_cb.setChecked(bool(auth_manager.get_auto_approve()))
-    error_reporting_cb = QCheckBox("Report errors anonymously (recommended)")
+    auto_approve_cb.setToolTip("Automatically approve outgoing changes for your decks. Only works if you are a maintainer.")
+    error_reporting_cb = QCheckBox("Send anonymous error reports (recommended)")
     error_reporting_cb.setChecked(bool(settings.get("error_reporting_enabled", False)))
+    error_reporting_cb.setToolTip("Send anonymized crash and error reports to help improve the add-on.")
     
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
@@ -1070,7 +1061,7 @@ def show_global_settings_dialog(parent_dialog):
     cancel_button.setStyleSheet("QPushButton { background-color: #607D8B; color: white; border: none; padding: 10px 20px; border-radius: 4px; } QPushButton:hover { background-color: #455A64; }")
 
     def save_global_settings():
-        settings["preserve_deck_structure"] = preserve_radio.isChecked()
+        settings["preserve_deck_structure"] = True
         settings["pull_on_startup"] = pull_on_startup_cb.isChecked()
         settings["suspend_new_cards"] = suspend_new_cards_cb.isChecked()
         settings["auto_move_cards"] = move_cards_cb.isChecked()

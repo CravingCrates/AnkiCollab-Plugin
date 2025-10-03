@@ -4,6 +4,7 @@ import logging
 import mimetypes
 import os
 import time
+import uuid
 import requests
 import base64
 import binascii
@@ -164,11 +165,16 @@ class MediaManager:
             # try get_event_loop as fallback?
             raise RuntimeError("No running event loop found for async_request")
 
+        # Check if executor is still available
+        if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+            raise RuntimeError(f"Thread executor is shut down, cannot make request to {url}")
 
         if "timeout" not in kwargs:
             kwargs["timeout"] = REQUEST_TIMEOUT
 
-        self.session.verify = VERIFY_SSL
+        # Ensure SSL verification is always enabled
+        if "verify" not in kwargs:
+            kwargs["verify"] = VERIFY_SSL
 
         def do_request():
             try:
@@ -207,6 +213,10 @@ class MediaManager:
         except RuntimeError:
             logger.error("_calculate_file_hash called without a running event loop!")
             raise RuntimeError("No running event loop found for hash computation")
+
+        # Check if executor is still available
+        if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+            raise MediaHashError(f"Thread executor is shut down, cannot calculate hash for {filepath}")
 
         def calculate_hash():
             md5_hash = hashlib.md5()
@@ -274,34 +284,74 @@ class MediaManager:
             if not filepath.exists():
                 logger.warning(f"File does not exist: {filepath}")
                 return False
-            if filepath.stat().st_size > MAX_FILE_SIZE:
+
+            try:
+                file_size = filepath.stat().st_size
+            except OSError as stat_err:
+                logger.warning(f"Could not read file size for {filepath}: {stat_err}")
+                return False
+
+            if file_size == 0:
+                logger.warning(f"File is empty: {filepath}")
+                return False
+
+            if file_size > MAX_FILE_SIZE:
                 logger.warning(f"File exceeds size limit ({MAX_FILE_SIZE} bytes): {filepath}")
                 return False
+
             if not self._is_allowed_file_type(filepath):
                 logger.warning(f"File type not allowed: {filepath.suffix}")
                 return False
             
             with open(filepath, "rb") as f:
-                header = f.read(16)
+                header = f.read(512)
+                if not header:
+                    logger.warning(f"Unable to read header for file: {filepath}")
+                    return False
+
                 ext = filepath.suffix.lower()
-                if ext in ['.jpg', '.jpeg'] and not header.startswith(b'\xFF\xD8\xFF'):
-                    logger.warning(f"Invalid JPEG signature for file: {filepath}")
-                    return False
-                elif ext == '.png' and not header.startswith(b'\x89PNG\r\n\x1A\n'):
-                    logger.warning(f"Invalid PNG signature for file: {filepath}")
-                    return False
-                elif ext == '.gif' and not (header.startswith(b'GIF87a') or header.startswith(b'GIF89a')):
-                    logger.warning(f"Invalid GIF signature for file: {filepath}")
-                    return False
-                elif ext == '.webp' and not header.startswith(b'RIFF'):
-                    logger.warning(f"Invalid WebP signature for file: {filepath}")
-                    return False
-                elif ext == '.mp3' and not header.startswith(b'ID3') and not header.startswith(b'\xFF\xFB') and not header.startswith(b'\xFF\xF3') and not header.startswith(b'\xFF\xF2'):
-                    logger.warning(f"Invalid MP3 signature for file: {filepath}")
-                    return False
-                elif ext == '.ogg' and not header.startswith(b'OggS'):
-                    logger.warning(f"Invalid OGG signature for file: {filepath}")
-                    return False
+
+                if ext in ['.jpg', '.jpeg']:
+                    if len(header) < 3 or not header.startswith(b'\xFF\xD8\xFF'):
+                        logger.warning(f"Invalid JPEG signature for file: {filepath}")
+                        return False
+                elif ext == '.png':
+                    if len(header) < 8 or not header.startswith(b'\x89PNG\r\n\x1A\n'):
+                        logger.warning(f"Invalid PNG signature for file: {filepath}")
+                        return False
+                elif ext == '.gif':
+                    if len(header) < 6 or not (header.startswith(b'GIF87a') or header.startswith(b'GIF89a')):
+                        logger.warning(f"Invalid GIF signature for file: {filepath}")
+                        return False
+                elif ext == '.webp':
+                    if len(header) < 12 or not header.startswith(b'RIFF') or header[8:12] != b'WEBP':
+                        logger.warning(f"Invalid WebP signature for file: {filepath}")
+                        return False
+                elif ext == '.svg':
+                    text_header = header.decode('utf-8', errors='ignore').lower()
+                    if '<svg' not in text_header:
+                        logger.warning(f"Invalid SVG content for file: {filepath}")
+                        return False
+                elif ext == '.bmp':
+                    if len(header) < 2 or not header.startswith(b'BM'):
+                        logger.warning(f"Invalid BMP signature for file: {filepath}")
+                        return False
+                elif ext in ['.tif', '.tiff']:
+                    if len(header) < 4 or not (header.startswith(b'II*\x00') or header.startswith(b'MM\x00*')):
+                        logger.warning(f"Invalid TIFF signature for file: {filepath}")
+                        return False
+                elif ext == '.mp3':
+                    if header.startswith(b'ID3'):
+                        pass
+                    elif len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
+                        pass
+                    else:
+                        logger.warning(f"Invalid MP3 signature for file: {filepath}")
+                        return False
+                elif ext == '.ogg':
+                    if len(header) < 4 or not header.startswith(b'OggS'):
+                        logger.warning(f"Invalid OGG signature for file: {filepath}")
+                        return False
             return True
         except Exception as e:
             logger.error(f"Error validating file {filepath}: {str(e)}")
@@ -342,6 +392,10 @@ class MediaManager:
                 base64_md5 = base64.b64encode(binary_hash).decode('ascii')
                 headers = {"Content-Type": content_type, "Content-MD5": base64_md5}
 
+                # Check if executor is still available
+                if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+                    raise MediaUploadError(f"Thread executor is shut down, cannot upload {filepath}")
+
                 # File upload is I/O intensive - use thread pool
                 def do_upload():
                     try:
@@ -356,7 +410,8 @@ class MediaManager:
                             presigned_url,
                             data=file_content, # Use content read previously
                             headers=headers,
-                            timeout=REQUEST_TIMEOUT * 2 # Increase timeout for upload?
+                            timeout=REQUEST_TIMEOUT * 2, # Increase timeout for upload?
+                            verify=VERIFY_SSL
                         )
                         response.raise_for_status()
                         return response
@@ -406,14 +461,21 @@ class MediaManager:
     async def download_file(self, url: str, destination: Union[str, Path]) -> bool:
         destination = Path(destination)
         os.makedirs(destination.parent, exist_ok=True)
-        temp_destination = destination.with_suffix(f"{destination.suffix}.tmp.{os.getpid()}") # Make temp name more unique
+        # Use uuid to ensure unique temp file per download attempt, avoiding concurrent access issues
+        temp_destination = destination.with_suffix(f"{destination.suffix}.tmp.{uuid.uuid4().hex[:8]}")
+        temp_file_renamed = False  # Track if temp file was successfully renamed
 
         try:
+            # Check if executor is still available
+            if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+                logger.error(f"Thread executor is shut down, cannot download {url}")
+                return False
+
             # Download operation is IO bound - use thread pool
             def do_download():
                 downloaded_ok = False
                 try:
-                    with self.session.get(url, stream=True, timeout=REQUEST_TIMEOUT * 2) as response: # Longer timeout for download
+                    with self.session.get(url, stream=True, timeout=REQUEST_TIMEOUT * 2, verify=VERIFY_SSL) as response: # Longer timeout for download, verify SSL
                         response.raise_for_status()
                         with open(temp_destination, "wb") as f:
                             for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
@@ -437,10 +499,32 @@ class MediaManager:
 
             if success and temp_destination.exists():
                 try:
+                    # Check if destination already exists (another download might have completed)
+                    if destination.exists() and destination.stat().st_size > 0:
+                        logger.debug(f"Destination {destination} already exists, discarding downloaded temp file")
+                        temp_file_renamed = True  # Mark as handled (will skip cleanup)
+                        return True
+                    
                     # Attempt atomic rename if possible, otherwise normal rename
                     os.replace(temp_destination, destination) # More atomic on most OS
-                except OSError:
-                    os.rename(temp_destination, destination) # Fallback
+                    temp_file_renamed = True  # Mark as renamed
+                except OSError as rename_err:
+                    # Check again if file exists (race condition - another thread created it)
+                    if destination.exists() and destination.stat().st_size > 0:
+                        logger.debug(f"Destination {destination} created by another download during rename, discarding temp file")
+                        temp_file_renamed = True  # Mark as handled
+                        return True
+                    try:
+                        os.rename(temp_destination, destination) # Fallback
+                        temp_file_renamed = True  # Mark as renamed
+                    except OSError as rename_err2:
+                        # Final check - maybe another download succeeded
+                        if destination.exists() and destination.stat().st_size > 0:
+                            logger.debug(f"Destination {destination} exists after rename failure, assuming success")
+                            temp_file_renamed = True
+                            return True
+                        logger.error(f"Failed to rename temp file {temp_destination} to {destination}: {rename_err2}")
+                        return False
                 return True
             else:
                  # Download failed or temp file doesn't exist
@@ -456,8 +540,8 @@ class MediaManager:
                 pass
             return False # Indicate failure
         finally:
-            # Clean up partial downloads robustly
-            if temp_destination.exists():
+            # Clean up partial downloads robustly - only if file wasn't successfully renamed
+            if not temp_file_renamed and temp_destination.exists():
                 try:
                     os.unlink(temp_destination)
                 except OSError as unlink_err:
@@ -498,6 +582,16 @@ class MediaManager:
         if total_files == 0:
             return {"success": True, "message": "No files to download", "downloaded": 0, "skipped": 0, "failed": 0}
 
+        # Deduplicate filenames to avoid downloading the same file multiple times
+        unique_filenames = list(dict.fromkeys(filenames))  # Preserves order while removing duplicates
+        duplicates_removed = total_files - len(unique_filenames)
+        if duplicates_removed > 0:
+            logger.info(f"Removed {duplicates_removed} duplicate filename(s) from download list")
+        
+        total_files = len(unique_filenames)
+        if total_files == 0:
+            return {"success": True, "message": "No files to download after deduplication", "downloaded": 0, "skipped": 0, "failed": 0}
+
         manifest_batch_size = 500
         download_batch_size = 10 # Keep small to avoid overwhelming network/disk
         total_downloaded = 0
@@ -510,7 +604,7 @@ class MediaManager:
         # Phase 1: Get manifest for all files
         logger.info(f"Getting manifest for {total_files} files...")
         for i in range(0, total_files, manifest_batch_size):
-            batch_filenames = filenames[i:i+manifest_batch_size]
+            batch_filenames = unique_filenames[i:i+manifest_batch_size]
             try:
                 manifest_data = await self.get_media_manifest(user_token, deck_hash, batch_filenames)
                 if manifest_data and "files" in manifest_data:
@@ -534,6 +628,19 @@ class MediaManager:
                      pass
                  return {"success": False, "message": f"Unexpected error getting manifest: {e}", "downloaded": 0, "skipped": 0, "failed": total_files}
 
+        # Deduplicate files from manifest (keep last occurrence to get most recent URL)
+        manifest_file_count = len(all_files_to_download)
+        seen_filenames = {}
+        for file_info in all_files_to_download:
+            filename = file_info.get("filename")
+            if filename:
+                seen_filenames[filename] = file_info  # Overwrites earlier entries with same filename
+        
+        all_files_to_download = list(seen_filenames.values())
+        duplicates_in_manifest = manifest_file_count - len(all_files_to_download)
+        if duplicates_in_manifest > 0:
+            logger.info(f"Removed {duplicates_in_manifest} duplicate file(s) from manifest response")
+
         # Phase 2: Download files
         num_to_download = len(all_files_to_download)
         logger.info(f"Manifest retrieved. Attempting to download {num_to_download} files.")
@@ -549,6 +656,7 @@ class MediaManager:
             download_batch = all_files_to_download[i:i+download_batch_size]
             batch_tasks = []
             files_in_task = []
+            seen_in_batch = set()  # Track filenames in current batch to avoid concurrent downloads
 
             for file_info in download_batch:
                 filename = file_info.get("filename")
@@ -559,6 +667,13 @@ class MediaManager:
                     total_failed += 1
                     continue
 
+                # Skip if this filename is already being downloaded in this batch
+                if filename in seen_in_batch:
+                    logger.warning(f"Duplicate filename {filename} within download batch, skipping duplicate")
+                    total_skipped += 1
+                    continue
+                
+                seen_in_batch.add(filename)
                 destination = self.media_folder / filename
 
                 # Skip if file already exists and seems valid (basic check)

@@ -24,6 +24,7 @@ except ImportError:
     from aqt.browser import Browser
 
 from aqt.qt import *
+from aqt.qt import QMenu, QAction, qconnect  # explicit imports for linters/type checkers
 
 from .media_export import DeckMediaExporter, NoteMediaExporter, get_configured_search_field, get_configured_exts, export_with_progress
 
@@ -144,10 +145,28 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
                 # Persist link on the subscribed deck's details
                 strings_data = mw.addonManager.getConfig(__name__) or {}
                 details = strings_data.get(subscriber_hash)
-                if isinstance(details, dict):
-                    details["linked_deck_hash"] = base_hash
-                    mw.addonManager.writeConfig(__name__, strings_data)
-                aqt.utils.showInfo("Deck link created successfully. Please configure the notetypes before creating any note links!")
+                if not isinstance(details, dict):
+                    details = {}
+                    strings_data[subscriber_hash] = details
+
+                # Migrate legacy single value if present
+                legacy = details.get("linked_deck_hash")
+                if isinstance(legacy, str) and legacy:
+                    details["linked_deck_hashes"] = list({legacy})
+                    try:
+                        del details["linked_deck_hash"]
+                    except Exception:
+                        pass
+
+                hashes = details.get("linked_deck_hashes")
+                if not isinstance(hashes, list):
+                    hashes = []
+                # Append new hash if not already present
+                if base_hash not in hashes:
+                    hashes.append(base_hash)
+                details["linked_deck_hashes"] = hashes
+                mw.addonManager.writeConfig(__name__, strings_data)
+                aqt.utils.showInfo("Deck link added. Configure notetypes before creating any note links!")
             elif status == 403 or (text or "").upper().find("FORBIDDEN") != -1:
                 aqt.utils.showWarning("Forbidden: you don't have permission to link these decks.")
             elif status == -1:

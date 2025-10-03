@@ -4,7 +4,7 @@ from aqt.browser import Browser, SidebarTreeView, SidebarItem, SidebarItemType
 from anki.decks import DeckId
 from anki.notes import NoteId
 from aqt.qt import *
-from aqt.qt import QMenu, QModelIndex, QCheckBox, QDialogButtonBox, QApplication
+from aqt.qt import QMenu, QModelIndex, QCheckBox, QDialogButtonBox, QApplication, QInputDialog
 from anki import hooks
 from anki.collection import Collection
 from aqt.utils import askUser, showInfo
@@ -164,17 +164,15 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
         lambda: request_note_removal(browser, nids=selected_nids),
     )
 
-    # Conditionally add note link creation if deck is subscribed and linked to a base deck
+    # Conditionally add note link creation if deck is subscribed and linked to one or more base decks
     try:
         first_note = aqt.mw.col.get_note(selected_nids[0])
         if first_note and first_note.cards():
             first_did = first_note.cards()[0].did
             subscriber_hash = get_deck_hash_from_did(first_did)
             if subscriber_hash:
-                cfg = mw.addonManager.getConfig(__name__) or {}
-                details = cfg.get(subscriber_hash)
-                base_hash = details.get("linked_deck_hash") if isinstance(details, dict) else None
-                if base_hash:
+                linked_hashes = _get_linked_base_hashes(subscriber_hash)
+                if linked_hashes:
                     # Ensure all selected notes are from this same deck
                     same_deck = True
                     for nid in selected_nids[1:]:
@@ -187,12 +185,12 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
                     if same_deck:
                         context_menu.addAction(
                             "AnkiCollab: Create note link(s)",
-                            lambda: create_note_links_handler(browser, selected_nids, subscriber_hash, base_hash),
+                            lambda: create_note_links_handler(browser, selected_nids, subscriber_hash),
                         )
     except Exception:
         pass
 
-def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscriber_hash: str, base_hash: str) -> None:
+def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscriber_hash: str, base_hash: str | None = None) -> None:
     if not auth_manager.is_logged_in():
         showInfo("Please log in to link notes.", parent=browser)
         return
@@ -208,6 +206,32 @@ def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscrib
         if get_deck_hash_from_did(note.cards()[0].did) != subscriber_hash:
             showInfo("Please select notes from the same subscribed deck.", parent=browser)
             return
+
+    # Resolve base deck hash if not provided, allowing multiple linked base decks
+    if base_hash is None:
+        linked_hashes = _get_linked_base_hashes(subscriber_hash)
+        if not linked_hashes:
+            showInfo("This subscribed deck has no linked base decks configured.", parent=browser)
+            return
+        if len(linked_hashes) == 1:
+            base_hash = linked_hashes[0]
+        else:
+            # Ask the user to pick which base deck these notes belong to
+            label = (
+                "Multiple base decks are linked to this deck.\n\n"
+                "Select the base deck that contains ALL of the selected notes to avoid partial linking mistakes.\n"
+                "Do not pick a deck if only some of these notes belong to it."
+            )
+            base_hash, ok = QInputDialog.getItem(
+                browser,
+                "Select Base Deck for Note Links",
+                label,
+                linked_hashes,
+                0,
+                False,
+            )
+            if not ok or not base_hash:
+                return
 
     guids = get_guids_from_noteids(nids)
     if not guids:
@@ -282,6 +306,33 @@ def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscrib
     QueryOp(parent=browser, op=_op, success=_on_success) \
         .with_progress("Creating note link(s)...") \
         .run_in_background()
+
+def _get_linked_base_hashes(subscriber_hash: str) -> List[str]:
+    """Return list of linked base deck hashes for a subscribed deck.
+    Migrates old single-value config (linked_deck_hash) to a list (linked_deck_hashes) on read.
+    """
+    try:
+        strings_data = mw.addonManager.getConfig(__name__) or {}
+        details = strings_data.get(subscriber_hash)
+        if not isinstance(details, dict):
+            return []
+        hashes = details.get("linked_deck_hashes")
+        if isinstance(hashes, list) and hashes:
+            return [str(h) for h in hashes if h]
+        # Fallback to migrate from legacy single hash
+        legacy = details.get("linked_deck_hash")
+        if isinstance(legacy, str) and legacy:
+            details["linked_deck_hashes"] = [legacy]
+            # Optionally remove legacy key to avoid confusion
+            try:
+                del details["linked_deck_hash"]
+            except Exception:
+                pass
+            mw.addonManager.writeConfig(__name__, strings_data)
+            return [legacy]
+        return []
+    except Exception:
+        return []
 
 def init_editor_card(buttons: List[str], editor):
     # This hook adds a button PERMANENTLY to the editor instance.
