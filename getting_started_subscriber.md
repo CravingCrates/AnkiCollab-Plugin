@@ -129,7 +129,9 @@ On the toolbar, click `AnkiCollab → Update Decks`.
 
 This will retrieve any available updates for your subscription.
 
-If a changelog is available, you will be shown the changelog and asked if you want to Install Now, Skip this Update, or Decide Later. If there is no new changelog, but changes are available, they will be installed automatically. If there were no changes to the deck since your last update, you will be informed that you are up to date.
+- If a changelog is available, you will be shown the changelog and asked if you want to Install Now, Skip this Update, or Decide Later.
+- If there is no new changelog, but changes are available, they will be installed automatically.
+- If there were no changes to the deck since your last update, you will be informed that you are up to date.
 
 ![A new update window showing a new update in AnkiCollab.](https://i.imgur.com/9uB5HMM.png)
 
