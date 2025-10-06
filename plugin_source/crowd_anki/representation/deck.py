@@ -54,10 +54,10 @@ def silent_clear_empty_cards() -> None:
             dialog = EmptyCardsDialog(aqt.mw, report)
             dialog._delete_cards(keep_notes=True)
 
-    aqt.mw.taskman.run_in_background(aqt.mw.col.get_empty_cards, on_done)
+    aqt.mw.taskman.run_in_background(aqt.mw.col.get_empty_cards, on_done) # type: ignore
 
 def silent_clear_unused_tags() -> None:
-    aqt.mw.taskman.run_in_background(aqt.mw.col.tags.clear_unused_tags)
+    aqt.mw.taskman.run_in_background(aqt.mw.col.tags.clear_unused_tags) # type: ignore
     
 class Deck(JsonSerializableAnkiDict):
     DECK_NAME_DELIMITER = "::"
@@ -117,7 +117,7 @@ class Deck(JsonSerializableAnkiDict):
 
     def _update_db(self):
         # Introduce uuid field for unique identification of entities
-        utils.add_column(self.collection.db, "notes", UUID_FIELD_NAME)
+        utils.add_column(self.collection.db, "notes", UUID_FIELD_NAME) # type: ignore
 
     def _load_metadata(self):
         if not self.metadata:
@@ -130,15 +130,15 @@ class Deck(JsonSerializableAnkiDict):
         conf_id = self.anki_dict.get("conf")
         if conf_id:
             new_config = DeckConfig.from_collection(self.collection, conf_id)
-            self.metadata.deck_configs.setdefault(new_config.get_uuid(), new_config)
+            self.metadata.deck_configs.setdefault(new_config.get_uuid(), new_config) # type: ignore
         else:
             logger.warning(f"Deck {self.anki_dict.get('name', 'unknown')} has no config ID")
 
     def serialization_dict(self):
         return utils.merge_dicts(
             super(Deck, self).serialization_dict(),
-            {"note_models": list(self.metadata.models.values()),
-             "deck_configurations": list(self.metadata.deck_configs.values())} if not self.is_child else {})
+            {"note_models": list(self.metadata.models.values()), # type: ignore
+             "deck_configurations": list(self.metadata.deck_configs.values())} if not self.is_child else {}) # type: ignore
 
     # including notetype media is kinda useless because they cannot be uploaded without a note using them too. Should have thought about that case before, but here we are.
     def get_media_file_list(self, data_from_models=True, include_children=True):
@@ -150,7 +150,7 @@ class Deck(JsonSerializableAnkiDict):
             if anki_object is None:
                 continue
             join_fields = anki_object.joined_fields if hasattr(anki_object, 'joined_fields') else anki_object.joinedFields
-            for media_file in self.collection.media.files_in_str(anki_object.mid, join_fields()):
+            for media_file in self.collection.media.files_in_str(anki_object.mid, join_fields()): # type: ignore
                 media.add(media_file)
 
         if include_children:
@@ -180,7 +180,7 @@ class Deck(JsonSerializableAnkiDict):
                 protected_field_names = [field['name'] for field in model['fields']]
                 result["model_name_to_fields"][model_name] = protected_field_names
                 
-                for note_model_uuid, note_model in self.metadata.models.items():
+                for note_model_uuid, note_model in self.metadata.models.items(): # type: ignore
                     current_model_name = note_model.anki_dict["name"]
                     if current_model_name == model_name:
                         # Find indices of protected fields
@@ -204,7 +204,7 @@ class Deck(JsonSerializableAnkiDict):
                 continue
             
             # Safely get note model with defensive check
-            note_model = self.metadata.models.get(note.note_model_uuid)
+            note_model = self.metadata.models.get(note.note_model_uuid) # type: ignore
             if not note_model:
                 logger.warning(f"Note model {note.note_model_uuid} not found in metadata, skipping note")
                 continue
@@ -222,7 +222,7 @@ class Deck(JsonSerializableAnkiDict):
                     continue
                 field = anki_object.fields[i]
                 
-                for media_file in self.collection.media.files_in_str(anki_object.mid, field):
+                for media_file in self.collection.media.files_in_str(anki_object.mid, field): # type: ignore
                     # Skip files in subdirs
                     if media_file != os.path.basename(media_file):
                         continue
@@ -239,7 +239,7 @@ class Deck(JsonSerializableAnkiDict):
         for _, note_uuid in media_file_note_pairs:
             for note in self.notes:
                 if note.get_uuid() == note_uuid:
-                    note.anki_object = self.collection.get_note(note.anki_object.id) # refreshes it bc it changed
+                    note.anki_object = self.collection.get_note(note.anki_object.id) # type: ignore # refreshes it bc it changed
                     break
         for child in self.children:
                 child.refresh_notes(media_file_note_pairs)
@@ -419,20 +419,28 @@ class Deck(JsonSerializableAnkiDict):
     
     def delete_empty_subdecks(self):
         logger.info(f"Trying to delete empty subdecks in deck {self.anki_dict.get('name', 'unknown')}")
-        for name, did in aqt.mw.col.decks.children(self.root_deck_id):
+        anki_decks = aqt.mw.col.decks # type: ignore
+        if not anki_decks:
+            logger.warning("No decks available in collection")
+            return
+        if not self.root_deck_id:
+            logger.warning("No root deck ID set for deletion")
+            return
+        
+        for name, did in anki_decks.children(self.root_deck_id):
             try:
-                if not aqt.mw.col.decks.is_filtered(did) and aqt.mw.col.decks.card_count(did, include_subdecks=True) == 0:
+                if not anki_decks.is_filtered(did) and anki_decks.card_count(did, include_subdecks=True) == 0:
                     filtered_children = [
-                        cid for _, cid in aqt.mw.col.decks.children(did)
-                        if aqt.mw.col.decks.is_filtered(cid)
+                        cid for _, cid in anki_decks.children(did)
+                        if anki_decks.is_filtered(cid)
                     ]
                     if filtered_children:
-                        parent_name = aqt.mw.col.decks.immediate_parent(name)
-                        parent_did = aqt.mw.col.decks.id_for_name(parent_name) if parent_name else self.root_deck_id
+                        parent_name = anki_decks.immediate_parent(name)
+                        parent_did = anki_decks.id_for_name(parent_name) if parent_name else self.root_deck_id
                         if parent_did:
-                            aqt.mw.col.decks.reparent(filtered_children, parent_did)
+                            anki_decks.reparent(filtered_children, parent_did)
 
-                    opchanges = aqt.mw.col.decks.remove(dids=[did])
+                    opchanges = anki_decks.remove(dids=[did])
                     if opchanges.count != 1:
                         logger.warning(f"Failed to delete deck {name}")
 
@@ -569,10 +577,10 @@ class Deck(JsonSerializableAnkiDict):
             else:
                 msg = "Deck imported successfully!\n📝 No media files needed"
                 
-            aqt.utils.tooltip(msg, parent=mw, period=4000)
+            aqt.utils.tooltip(msg, parent=mw, period=4000) # type: ignore
         else:
             error_msg = result.get('message', 'Unknown error')
-            aqt.utils.showWarning(
+            aqt.utils.showWarning( # type: ignore
                 f"Deck imported with media errors:\n{error_msg}\n\nYour notes were imported successfully, but some media files may be missing.", 
                 parent=mw,
                 title="Import Warning"

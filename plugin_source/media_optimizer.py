@@ -40,8 +40,9 @@ PNG_COMPRESSION = 9
 MAX_IMAGE_SIZE = 1920  # Maximum dimension for resizing
 
 OPTIMIZABLE_INPUT_EXTENSIONS = [
-        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tif', '.tiff'
-        # We do not optimize svgs, or audio files
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff'
+        # WebP excluded - already in target format, no re-optimization needed
+        # SVG handled separately, audio files not optimized
     ]
 
 ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff', 'mp3', 'ogg']
@@ -355,64 +356,65 @@ async def optimize_media_file(filename, filepath_obj):
     current_filename = filename
 
     # fix mislabeled .webp files (caused by a previous bug lol)
-    if OPTIMIZATION_AVAILABLE and isinstance(current_filename, str) and current_filename.lower().endswith('.webp'):
-        actual_format = None
-        try:
-            with Image.open(current_filepath_obj) as img:
-                img.load()
-                actual_format = img.format # e.g., 'JPEG', 'PNG', 'WEBP', None
-        except UnidentifiedImageError:
-             logger.warning(f"File '{current_filename}' has .webp extension, but Pillow cannot identify it as a valid image. It might be corrupt or not an image.")
-             actual_format = None
-        except Exception as img_err:
-            logger.warning(f"Could not open file '{current_filename}' with Pillow to verify format: {img_err}. Skipping correction check.")
-            actual_format = None
+    # Update October 2025: Disabled because it probably is not relevant anymore
+    # if OPTIMIZATION_AVAILABLE and isinstance(current_filename, str) and current_filename.lower().endswith('.webp'):
+    #     actual_format = None
+    #     try:
+    #         with Image.open(current_filepath_obj) as img:
+    #             img.load()
+    #             actual_format = img.format # e.g., 'JPEG', 'PNG', 'WEBP', None
+    #     except UnidentifiedImageError:
+    #          logger.warning(f"File '{current_filename}' has .webp extension, but Pillow cannot identify it as a valid image. It might be corrupt or not an image.")
+    #          actual_format = None
+    #     except Exception as img_err:
+    #         logger.warning(f"Could not open file '{current_filename}' with Pillow to verify format: {img_err}. Skipping correction check.")
+    #         actual_format = None
 
-        if actual_format and actual_format != 'WEBP':
-            logger.warning(f"File '{current_filename}' has .webp extension but Pillow identified format as {actual_format}. Attempting auto-correction.")
+    #     if actual_format and actual_format != 'WEBP':
+    #         logger.warning(f"File '{current_filename}' has .webp extension but Pillow identified format as {actual_format}. Attempting auto-correction.")
 
-            correct_extension = FORMAT_TO_EXTENSION.get(actual_format)
+    #         correct_extension = FORMAT_TO_EXTENSION.get(actual_format)
 
-            if correct_extension:
-                correct_filename_path = current_filepath_obj.with_suffix(correct_extension)
-                logger.info(f"Attempting rename: '{current_filename}' -> '{correct_filename_path.name}'.")
-                try:
-                    # Handle collision before renaming
-                    target_path_str = str(correct_filename_path)
-                    final_target_path = correct_filename_path # Store the final intended path obj
+    #         if correct_extension:
+    #             correct_filename_path = current_filepath_obj.with_suffix(correct_extension)
+    #             logger.info(f"Attempting rename: '{current_filename}' -> '{correct_filename_path.name}'.")
+    #             try:
+    #                 # Handle collision before renaming
+    #                 target_path_str = str(correct_filename_path)
+    #                 final_target_path = correct_filename_path # Store the final intended path obj
 
-                    if os.path.exists(target_path_str) and not current_filepath_obj.samefile(correct_filename_path):
-                         base = correct_filename_path.stem
-                         counter = 1
-                         # Find a unique name like file_fix1.jpg, file_fix2.jpg etc.
-                         while True:
-                             temp_name = f"{base}_fix{counter}{correct_extension}"
-                             temp_path = current_filepath_obj.with_name(temp_name)
-                             if not temp_path.exists():
-                                 final_target_path = temp_path
-                                 break
-                             counter += 1
-                             if counter > 10: # Safety break
-                                 raise OSError("Could not find a unique filename after 10 attempts.")
-                         logger.warning(f"Target '{correct_filename_path.name}' existed. Renaming to '{final_target_path.name}'.")
+    #                 if os.path.exists(target_path_str) and not current_filepath_obj.samefile(correct_filename_path):
+    #                      base = correct_filename_path.stem
+    #                      counter = 1
+    #                      # Find a unique name like file_fix1.jpg, file_fix2.jpg etc.
+    #                      while True:
+    #                          temp_name = f"{base}_fix{counter}{correct_extension}"
+    #                          temp_path = current_filepath_obj.with_name(temp_name)
+    #                          if not temp_path.exists():
+    #                              final_target_path = temp_path
+    #                              break
+    #                          counter += 1
+    #                          if counter > 10: # Safety break
+    #                              raise OSError("Could not find a unique filename after 10 attempts.")
+    #                      logger.warning(f"Target '{correct_filename_path.name}' existed. Renaming to '{final_target_path.name}'.")
 
-                    # Perform the rename using the final determined path
-                    shutil.move(str(current_filepath_obj), str(final_target_path))
+    #                 # Perform the rename using the final determined path
+    #                 shutil.move(str(current_filepath_obj), str(final_target_path))
 
-                    # Update variables to reflect the corrected file
-                    current_filepath_obj = final_target_path
-                    current_filename = final_target_path.name
-                    logger.info(f"Successfully auto-corrected mislabeled WebP to '{current_filename}'.")
+    #                 # Update variables to reflect the corrected file
+    #                 current_filepath_obj = final_target_path
+    #                 current_filename = final_target_path.name
+    #                 logger.info(f"Successfully auto-corrected mislabeled WebP to '{current_filename}'.")
 
-                except Exception as rename_err:
-                    logger.error(f"Failed to auto-correct mislabeled file '{filename}' to '{correct_filename_path.name}': {rename_err}. Proceeding with original problematic file.")
-                    # Keep original current_filepath_obj and current_filename
-            else:
-                logger.warning(f"Unknown format '{actual_format}' identified by Pillow for '{current_filename}'. Cannot map to extension for auto-correction.")
-                # Proceed with the file as-is (still mislabeled .webp)
+    #             except Exception as rename_err:
+    #                 logger.error(f"Failed to auto-correct mislabeled file '{filename}' to '{correct_filename_path.name}': {rename_err}. Proceeding with original problematic file.")
+    #                 # Keep original current_filepath_obj and current_filename
+    #         else:
+    #             logger.warning(f"Unknown format '{actual_format}' identified by Pillow for '{current_filename}'. Cannot map to extension for auto-correction.")
+    #             # Proceed with the file as-is (still mislabeled .webp)
 
-        elif actual_format == 'WEBP':
-            logger.debug(f"File '{current_filename}' confirmed as WEBP by Pillow.")
+    #     elif actual_format == 'WEBP':
+    #         logger.debug(f"File '{current_filename}' confirmed as WEBP by Pillow.")
 
     current_filepath_str = str(current_filepath_obj)
             
@@ -421,6 +423,23 @@ async def optimize_media_file(filename, filepath_obj):
         return str(filepath_obj), filename, False
     
     file_extension = current_filepath_obj.suffix.lower()
+    
+    # Skip WebP files entirely - they're already in target format and don't need re-optimization
+    # Filename sanitization has already been applied above, so we're done
+    if file_extension == '.webp':
+        logger.debug(f"Skipping re-optimization for already-optimized WebP file: {current_filename}")
+        return current_filepath_str, current_filename, False
+    
+    # Skip optimization for small files - the compression savings aren't worth the processing overhead
+    # Threshold: 100KB - small enough that network transfer is fast, savings are minimal
+    try:
+        file_size = current_filepath_obj.stat().st_size
+        if file_size < 100 * 1024:  # 100KB
+            logger.debug(f"Skipping optimization for small file: {current_filename} ({file_size} bytes)")
+            return current_filepath_str, current_filename, False
+    except OSError as e:
+        logger.warning(f"Could not check file size for {current_filename}: {e}. Proceeding with optimization.")
+    
     is_optimizable_input = file_extension in OPTIMIZABLE_INPUT_EXTENSIONS # Reuse list from optimize_image
     
     if is_optimizable_input:        

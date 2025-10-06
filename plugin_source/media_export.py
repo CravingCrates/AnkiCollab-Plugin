@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import Future
-from typing import Any
+from typing import Any, Optional
 
 import aqt
 from anki.decks import DeckId
@@ -31,11 +31,11 @@ def get_export_folder(parent: QWidget) -> str:
     )
 
 
-def get_configured_exts(config: dict[str, Any]) -> set | None:
+def get_configured_exts(config: dict[str, Any]) -> Optional[set]:
     return set(AUDIO_EXTS) if config.get("audio_only", False) else None
 
 
-def get_configured_search_field(config: dict[str, Any]) -> str | None:
+def get_configured_search_field(config: dict[str, Any]) -> Optional[str]:
     return config.get("search_in_field", None)
 
 

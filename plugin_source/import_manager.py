@@ -97,7 +97,7 @@ def get_noteids_from_uuids(guids):
             query = f"SELECT id FROM notes WHERE guid IN ({placeholders})"
             
             # Pass parameters using *batch to unpack the list
-            batch_results = mw.col.db.list(query, *batch)
+            batch_results = mw.col.db.list(query, *batch) # type: ignore
             noteids.extend(batch_results)
             
     except Exception as e:
@@ -106,7 +106,7 @@ def get_noteids_from_uuids(guids):
         for guid in guids:
             try:
                 query = "SELECT id FROM notes WHERE guid = ?"
-                note_id = mw.col.db.scalar(query, guid)
+                note_id = mw.col.db.scalar(query, guid) # type: ignore
                 if note_id:
                     noteids.append(note_id)
             except Exception as e2:
@@ -118,8 +118,8 @@ def get_noteids_from_uuids(guids):
 def delete_notes(nids):
     if not nids:
         return
-    aqt.mw.col.remove_notes(nids)
-    aqt.mw.col.reset()  # deprecated
+    aqt.mw.col.remove_notes(nids) # type: ignore
+    aqt.mw.col.reset()  # type: ignore # deprecated
     mw.reset()
     aqt.mw.taskman.run_on_main(
         lambda: aqt.utils.tooltip(
@@ -130,6 +130,9 @@ def delete_notes(nids):
 def get_guids_from_noteids(nids):
     """Get GUIDs from note IDs using prepared statements for better performance."""
     if not mw.col or not nids:
+        return []
+    database = mw.col.db
+    if not database:
         return []
     
     guids = []
@@ -145,16 +148,16 @@ def get_guids_from_noteids(nids):
             query = f"SELECT guid FROM notes WHERE id IN ({placeholders})"
             
             # Pass parameters using *batch to unpack the list
-            batch_results = mw.col.db.list(query, *batch)
+            batch_results = database.list(query, *batch)
             guids.extend(batch_results)
             
     except Exception as e:
         logger.error(f"Error getting GUIDs from note IDs using prepared statements: {e}")
         # Fallback to individual queries if batch processing fails
+        query = "SELECT guid FROM notes WHERE id = ?"
         for nid in nids:
             try:
-                query = "SELECT guid FROM notes WHERE id = ?"
-                guid = mw.col.db.scalar(query, nid)
+                guid = database.scalar(query, nid)
                 if guid:
                     guids.append(guid)
             except Exception as e2:
@@ -263,7 +266,7 @@ def _on_deck_installed(install_result, deck, subscription, input_hash=None, upda
         with DeckManager() as decks:
             details = decks.get_by_hash(input_hash)
             if details and details["deckId"] == 0 and mw.col:  # should only be the case once when they add a new subscription and never ambiguous
-                details["deckId"] = aqt.mw.col.decks.id(deck_name)
+                details["deckId"] = aqt.mw.col.decks.id(deck_name) # type: ignore
                 # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
                 details["timestamp"] = (
                         datetime.now(timezone.utc) - timedelta(days=1)
@@ -609,7 +612,7 @@ def async_start_pull(input_hash, silent=False):
                     lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
                 )
                 return (None, None, silent)
-        except (requests.exceptions.RequestException, OSError, ValueError, gzip.BadGzipFile, base64.binascii.Error) as e:
+        except (requests.exceptions.RequestException, OSError, ValueError, gzip.BadGzipFile, base64.binascii.Error) as e: # type: ignore
             logger.error(f"Error pulling changes: {e}")
             try:
                 import sentry_sdk

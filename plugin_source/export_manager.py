@@ -78,6 +78,7 @@ from . import main
 logger = get_logger("ankicollab.export_manager")
 
 ASYNC_MEDIA_REF_THRESHOLD = 250  # Tunable; keep conservative to avoid overhead on small tasks.
+ASYNC_MEDIA_LARGE_PROGRESS_THRESHOLD = 1000  # Only show progress updates for very large sets to reduce chatter
 BATCH_UPDATE_NOTES_SIZE = 800  # batch size for mw.col.update_notes to avoid huge single commit / UI hitch
 
 # Define and compile regexes for various media types
@@ -171,7 +172,7 @@ def get_personal_tags(deck_hash):
 
 def get_note_id_from_guid(guid):
     try:
-        note_id = mw.col.db.first("select id from notes where guid = ?", guid)
+        note_id = mw.col.db.first("select id from notes where guid = ?", guid) # type: ignore
         if note_id:
             return note_id[0]
     except Exception as e:
@@ -180,7 +181,7 @@ def get_note_id_from_guid(guid):
 
 def get_note_guid_from_id(note_id):
     try:
-        guid = mw.col.db.first("select guid from notes where id = ?", note_id)
+        guid = mw.col.db.first("select guid from notes where id = ?", note_id) # type: ignore
         if guid:
             return guid[0]
     except Exception as e:
@@ -753,7 +754,7 @@ def _submit_deck_op(
             logger.warning(f"Deck refresh inside submission op failed; proceeding: {e}")
 
     newName = get_local_deck_from_hash(deckHash)
-    deckPath = mw.col.decks.name(did)
+    deckPath = mw.col.decks.name(did) # type: ignore
 
     token, force_overwrite = get_maintainer_data(deckHash)
 
@@ -1121,7 +1122,7 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
         return
 
     try:
-        notes = [mw.col.get_note(nid) for nid in nids]
+        notes = [mw.col.get_note(nid) for nid in nids] # type: ignore
         if not notes or any(n is None for n in notes):
              raise ValueError("One or more selected notes could not be found.")
 
@@ -1144,7 +1145,7 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
             aqt.utils.showInfo("Cannot find the local Anki deck associated with this cloud deck.", parent=parent_widget)
             return
 
-        deck_obj = mw.col.decks.get(did, default=False)
+        deck_obj = mw.col.decks.get(did, default=False) # type: ignore
         if not deck_obj or deck_obj.get('dyn', False):
             aqt.utils.showInfo("Filtered decks are not supported for suggestions.", parent=parent_widget)
             return
@@ -1297,7 +1298,7 @@ def _on_suggest_media_uploaded(upload_result: Dict[str, Any]):
     _handle_media_upload_result(upload_result)
     # ask_for_rating() is called inside _handle_media_upload_result if not silent
 
-def get_server_missing_media(deck_hash: str) -> List[str]:
+def get_server_missing_media(deck_hash: str) -> Tuple[str, List[str]]:
     """
     Fetches the list of media files that are missing on the server for the given deck hash.
     Returns a list of filenames that are missing.
@@ -1310,7 +1311,7 @@ def get_server_missing_media(deck_hash: str) -> List[str]:
         logger.error(f"Error fetching missing media from server: {e}")
         return (deck_hash, [])  # Return empty list on error
 
-def start_suggest_missing_media(webresult):
+def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
     # Pretty expensive operation. We gather all notes from the deck, and then run only the media upload instead of the note suggestions, too
     assert mw is not None and mw.col is not None, "Anki environment not ready"
     parent_widget = QApplication.focusWidget() or mw
@@ -1329,11 +1330,11 @@ def start_suggest_missing_media(webresult):
             aqt.utils.showWarning("Config Error: Could not find the local Anki deck associated with this cloud deck. Please check the Subscriptions window.", parent=parent_widget)
             return
         
-        deck_obj = mw.col.decks.get(did, default=False)
+        deck_obj = mw.col.decks.get(did, default=False) # type: ignore
         if not deck_obj or deck_obj.get('dyn', False):
             return
 
-        deck_name = mw.col.decks.name(did)
+        deck_name = mw.col.decks.name(did) # type: ignore
         
         # Preparation
         disambiguate_note_model_uuids(mw.col)
@@ -1360,7 +1361,7 @@ def start_suggest_missing_media(webresult):
         op_optimize = QueryOp(
             parent=parent_widget,
             op=lambda col: _sync_optimize_media_and_update_refs(media_files),
-            success=lambda result: _on_suggest_media_only_optimized(result, deck_repr, media_files, did)
+            success=lambda result: _on_suggest_media_only_optimized(result, deck_repr, media_files, did) # type: ignore
         )
         op_optimize.with_progress("Optimizing media files...")
         op_optimize.run_in_background()
@@ -1381,12 +1382,12 @@ def suggest_subdeck(did: int):
     parent_widget = QApplication.focusWidget() or mw
 
     try:
-        deck_obj = mw.col.decks.get(did, default=False)
+        deck_obj = mw.col.decks.get(did, default=False) # type: ignore
         if not deck_obj or deck_obj.get('dyn', False):
             aqt.utils.showInfo("Filtered decks are not supported for suggestions.", parent=parent_widget)
             return
 
-        deck_name = mw.col.decks.name(did)
+        deck_name = mw.col.decks.name(did) # type: ignore
         deckHash = get_deck_hash_from_did(did)
         if deckHash is None:
             aqt.utils.showWarning("Config Error: Could not find the cloud deck hash for this local deck. Please check the Subscriptions window.", parent=parent_widget)
@@ -1416,7 +1417,7 @@ def handle_export(did: int, username: str):
     parent_widget = QApplication.focusWidget() or mw
 
     try:
-        deck_obj = mw.col.decks.get(did, default=False)
+        deck_obj = mw.col.decks.get(did, default=False) # type: ignore
         if not deck_obj or deck_obj.get('dyn', False):
             aqt.utils.showInfo("Filtered decks cannot be published.", parent=parent_widget)
             return
@@ -1430,7 +1431,7 @@ def handle_export(did: int, username: str):
         # Create bakcup before export
         create_backup(background=True)
         
-        deck_name = mw.col.decks.name(did)
+        deck_name = mw.col.decks.name(did) # type: ignore
         disambiguate_note_model_uuids(mw.col)
         deck_repr = deck_initializer.from_collection(mw.col, deck_name)
         deck_initializer.trim_empty_children(deck_repr)
@@ -1587,7 +1588,7 @@ def _on_export_deck_created(api_result: Dict[str, Any], did: int, user_token: st
         aqt.utils.showWarning(f"Deck publication failed: {message}", parent=parent_widget, title="Publish Failed")
     else:
         logger.error(f"Unexpected status from createDeck API: {status} - {message}")
-        aqt.utils.showCritical(f"Unexpected server response during deck publication: {message}", parent=parent_widget, title="Publish Error")
+        aqt.utils.showCritical(f"Unexpected server response during deck publication: {message}", parent=parent_widget, title="Publish Error") # type: ignore
 
 
 def _on_export_media_uploaded(upload_result: Dict[str, Any]):

@@ -11,7 +11,7 @@ from aqt.utils import askUser, showInfo
 from aqt.operations import QueryOp
 
 import json
-from typing import Sequence, List, Tuple # Import List
+from typing import Sequence, List, Tuple, Optional # Import List
 
 from .export_manager import *
 from .import_manager import *
@@ -190,7 +190,7 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
     except Exception:
         pass
 
-def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscriber_hash: str, base_hash: str | None = None) -> None:
+def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscriber_hash: str, base_hash: Optional[str] = None) -> None:
     if not auth_manager.is_logged_in():
         showInfo("Please log in to link notes.", parent=browser)
         return

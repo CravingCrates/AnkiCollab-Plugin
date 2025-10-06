@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List
+from typing import List, Optional, Union
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -80,7 +80,7 @@ def gather_media_from_template(template: TemplateDict) -> List[str]:
 
     return media_files
 
-def get_note_media(col: Collection, note: Note, field: str | None) -> list[str]:
+def get_note_media(col: Collection, note: Note, field: Optional[str]) -> List[str]:
     "Return a list of used media files in `note`."
     if field:
         flds = note[field]
@@ -102,16 +102,16 @@ class MediaExporter(ABC):
     """Abstract media exporter."""
 
     col: Collection
-    field: str
-    exts: set | None = None
+    field: Optional[str]
+    exts: Optional[set] = None
 
     @abstractmethod
-    def file_lists(self) -> Generator[list[str], None, None]:
+    def file_lists(self) -> Generator[List[str], None, None]:
         """Return a generator that yields a list of media files for each note that should be imported."""
 
     def export(
-        self, folder: Path | str
-    ) -> Generator[tuple[int, list[str]], None, None]:
+        self, folder: Union[Path, str]
+    ) -> Generator[tuple[int, List[str]], None, None]:
         """
         Export media files in `self.did` to `folder`,
         including only files that has extensions in `self.exts` if it's not None.
@@ -159,16 +159,16 @@ class NoteMediaExporter(MediaExporter):
     def __init__(
         self,
         col: Collection,
-        notes: list[Note],
-        field: str | None = None,
-        exts: set | None = None,
+        notes: List[Note],
+        field: Optional[str] = None,
+        exts: Optional[set] = None,
     ):
         self.col = col
         self.notes = notes
         self.field = field
         self.exts = exts
 
-    def file_lists(self) -> Generator[list[str], None, None]:
+    def file_lists(self) -> Generator[List[str], None, None]:
         "Return a generator that yields a list of media files for each note in `self.notes`"
 
         notetypes_in_selection = set()
@@ -191,8 +191,8 @@ class DeckMediaExporter(MediaExporter):
         self,
         col: Collection,
         did: DeckId,
-        field: str | None = None,
-        exts: set | None = None,
+        field: Optional[str] = None,
+        exts: Optional[set] = None,
     ):
         self.col = col
         self.did = did

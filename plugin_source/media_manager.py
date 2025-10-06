@@ -30,7 +30,7 @@ logger = get_logger("ankicollab.media_manager")
 # --- End File Logging ---
 
 
-MAX_REQUESTS_PER_MINUTE = 50
+MAX_REQUESTS_PER_MINUTE = 1000
 REQUEST_TRACKING_WINDOW = 60
 MAX_FILE_SIZE = 2 * 1024 * 1024 # 2 MB
 CHUNK_SIZE = 131072  # 128KB
@@ -358,7 +358,7 @@ class MediaManager:
             return False
 
     @retry(max_tries=3, delay=2, backoff=3)
-    async def upload_file(self, presigned_url: str, filepath: Union[str, Path], file_hash: Optional[str] = None) -> bool:
+    async def upload_file(self, upload_url: str, filepath: Union[str, Path], file_hash: Optional[str] = None) -> bool:
         filepath = Path(filepath)
 
         if not filepath.exists() or not filepath.is_file():
@@ -367,7 +367,9 @@ class MediaManager:
             raise MediaTypeError(f"File exceeds size limit: {filepath.stat().st_size} bytes")
         if not self.validate_file_basic(filepath):
             raise MediaTypeError(f"File failed basic validation: {filepath}")
-
+        
+        await self.rate_limiter.wait_if_needed()
+        
         semaphore = await self._get_semaphore()
         async with semaphore:
             try:
@@ -400,46 +402,49 @@ class MediaManager:
                 def do_upload():
                     try:
                         with open(filepath, "rb") as f:
-                            # Read file content once
                             file_content = f.read()
                             if len(file_content) != filepath.stat().st_size:
-                                 # Basic check if file changed during read
-                                 raise IOError(f"File size changed during read: {filepath}")
+                                raise IOError(f"File size changed during read: {filepath}")
 
                         response = self.session.put(
-                            presigned_url,
-                            data=file_content, # Use content read previously
+                            upload_url,
+                            data=file_content,
                             headers=headers,
-                            timeout=REQUEST_TIMEOUT * 2, # Increase timeout for upload?
-                            verify=VERIFY_SSL
+                            timeout=REQUEST_TIMEOUT * 2,
+                            verify=VERIFY_SSL,
                         )
                         response.raise_for_status()
                         return response
                     except requests.exceptions.RequestException as req_exc:
-                         logger.error(f"Network error during S3 PUT for {filepath}: {req_exc}")
-                         raise # Re-raise
+                        logger.error(
+                            f"Network error during media upload for {filepath}: {req_exc}"
+                        )
+                        raise
                     except IOError as io_err:
-                         logger.error(f"IOError during S3 PUT preparation for {filepath}: {io_err}")
-                         raise # Re-raise to be caught by outer try/except
+                        logger.error(
+                            f"IOError preparing media upload for {filepath}: {io_err}"
+                        )
+                        raise
 
                 try:
                     loop = asyncio.get_running_loop()
                 except RuntimeError:
-                     logger.error("upload_file (do_upload) called without a running event loop!")
-                     raise RuntimeError("No running event loop found for file upload")
+                    logger.error("upload_file (do_upload) called without a running event loop!")
+                    raise RuntimeError("No running event loop found for file upload")
                 await loop.run_in_executor(self.thread_executor, do_upload)
                 return True
 
             except requests.HTTPError as e:
                 status_code = getattr(e.response, 'status_code', None)
                 error_text = getattr(e.response, 'text', str(e))
-                logger.error(f"HTTP error {status_code} uploading to S3 ({filepath}): {error_text}")
+                logger.error(f"HTTP error {status_code} uploading media ({filepath}): {error_text}")
                 # Raise specific errors based on status code
                 if status_code == 403: raise MediaUploadError(f"Permission denied (403): {error_text}") from e
                 if status_code == 413: raise MediaTypeError(f"File too large (413): {error_text}") from e
                 if status_code == 400: raise MediaUploadError(f"Bad request (400): {error_text}") from e
-                
-                raise MediaUploadError(f"S3 upload failed with HTTP {status_code}: {error_text}") from e
+                if status_code == 401: raise MediaUploadError(f"Upload token rejected (401): {error_text}") from e
+
+                raise MediaUploadError(f"Media upload failed with HTTP {status_code}: {error_text}") from e
             except requests.RequestException as e:
                 logger.error(f"Network error during upload ({filepath}): {str(e)}")
                 raise MediaUploadError(f"Network error during upload: {str(e)}") from e
@@ -464,6 +469,8 @@ class MediaManager:
         # Use uuid to ensure unique temp file per download attempt, avoiding concurrent access issues
         temp_destination = destination.with_suffix(f"{destination.suffix}.tmp.{uuid.uuid4().hex[:8]}")
         temp_file_renamed = False  # Track if temp file was successfully renamed
+
+        await self.rate_limiter.wait_if_needed()
 
         try:
             # Check if executor is still available
@@ -783,9 +790,8 @@ class MediaManager:
 
         svg_files = []
         regular_files = []
-        small_files_to_hash = []  # Files to hash directly without optimization
 
-        # Simple file categorization - the previous benchmarks show this is already fast
+        # Simple file categorization - all files get sanitized filenames
         logger.info(f"Starting file categorization for {len(file_note_pairs)} files...")
         if progress_callback:
             progress_callback(0.05)  # 5% - started categorization
@@ -805,52 +811,19 @@ class MediaManager:
             except OSError:
                 continue
 
-            # Handle small files directly without optimization
-            if filepath_obj.suffix.lower() == '.webp' and file_size < 200 * 1024:
-                small_files_to_hash.append((filename, filepath_obj, note_guid, file_size))
-            elif filepath_obj.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff'] and file_size < 100 * 1024:
-                small_files_to_hash.append((filename, filepath_obj, note_guid, file_size))
-            elif filepath_obj.suffix.lower() == '.svg':
-                if file_size <= MAX_FILE_SIZE:
-                    svg_files.append((filename, filepath_obj, note_guid))
+            # Reject files exceeding size limit early
+            if file_size > MAX_FILE_SIZE:
+                logger.warning(f"File exceeds size limit ({MAX_FILE_SIZE} bytes), skipping: {filename} ({file_size} bytes)")
+                continue
+
+            # Categorize by type - all files get filename sanitization
+            if filepath_obj.suffix.lower() == '.svg':
+                svg_files.append((filename, filepath_obj, note_guid))
             else:
+                # All image files (including WebP, JPEG, PNG, etc.) go through regular processing
                 regular_files.append((filename, filepath_obj, note_guid))
 
-        logger.info(f"Categorization complete: {len(svg_files)} SVGs, {len(regular_files)} regular files, {len(small_files_to_hash)} small files")
-
-        # Simple parallel hash computation for small files
-        if small_files_to_hash:
-            logger.info(f"Processing {len(small_files_to_hash)} small files...")
-            
-            async def hash_small_file(file_info):
-                filename, filepath_obj, note_guid, file_size = file_info
-                try:
-                    file_hash, _ = await self.compute_file_hash_and_size(filepath_obj)
-                    return {
-                        "hash": file_hash, 
-                        "filename": filename, 
-                        "note_guid": note_guid, 
-                        "file_size": file_size
-                    }, (file_hash, str(filepath_obj))
-                except Exception as e:
-                    logger.warning(f"Error processing small file {filename}: {e}")
-                    return None, None
-
-            # Process in reasonable batches
-            batch_size = 100
-            for i in range(0, len(small_files_to_hash), batch_size):
-                batch = small_files_to_hash[i:i+batch_size]
-                hash_tasks = [hash_small_file(file_info) for file_info in batch]
-                hash_results = await asyncio.gather(*hash_tasks, return_exceptions=True)
-                
-                for result in hash_results:
-                    if isinstance(result, Exception) or not isinstance(result, tuple) or len(result) != 2:
-                        continue
-                    file_info_result, file_path_result = result
-                    if file_info_result and file_path_result:
-                        files_info.append(file_info_result)
-                        file_hash, file_path = file_path_result
-                        file_paths[file_hash] = file_path
+        logger.info(f"Categorization complete: {len(svg_files)} SVGs, {len(regular_files)} regular files")
 
         # Process SVGs in batch
         if svg_files:
@@ -1133,9 +1106,9 @@ class MediaManager:
             files_for_tasks: List[str] = []
             for file_info in batch:
                 file_hash = file_info.get("hash")
-                presigned_url = file_info.get("presigned_url")
-                if not isinstance(file_hash, str) or not isinstance(presigned_url, str):
-                    logger.warning(f"Missing hash or URL in file info, skipping upload: {file_info}")
+                upload_url = file_info.get("upload_url") or file_info.get("presigned_url")
+                if not isinstance(file_hash, str) or not isinstance(upload_url, str):
+                    logger.warning(f"Missing hash or upload URL in file info, skipping upload: {file_info}")
                     upload_failed_hashes.append(file_hash or "unknown")
                     continue
                 filepath_str = file_paths.get(file_hash)
@@ -1145,7 +1118,9 @@ class MediaManager:
                     continue
                 hashes_in_batch.append(file_hash)
                 files_for_tasks.append(file_hash)
-                upload_tasks.append(self.upload_file(presigned_url, Path(filepath_str), file_hash=file_hash))
+                upload_tasks.append(
+                    self.upload_file(upload_url, Path(filepath_str), file_hash=file_hash)
+                )
             if upload_tasks:
                 logger.debug(f"Attempting S3 upload sub-batch {i//upload_batch_size + 1}. Hashes: {hashes_in_batch}")
                 try:

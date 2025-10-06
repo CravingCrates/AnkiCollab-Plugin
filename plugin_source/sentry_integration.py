@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import platform
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 import sentry_sdk
 import logging
 
@@ -97,7 +97,7 @@ def _event_has_our_frame(event: Dict[str, Any], addon_root: str) -> bool:
 
 
 def _before_send_factory(addon_root: str):
-    def before_send(event: Dict[str, Any], hint: Dict[str, Any] | None = None):
+    def before_send(event: Dict[str, Any], hint: Optional[Dict[str, Any]] = None):
         # Only send if the stack contains frames from our add-on
         try:
             if not _event_has_our_frame(event, addon_root):
@@ -131,7 +131,7 @@ def _before_send_factory(addon_root: str):
 def _before_breadcrumb_factory(addon_root: str):
     root = _normpath(addon_root)
 
-    def before_breadcrumb(crumb: Dict[str, Any], hint: Dict[str, Any] | None = None):
+    def before_breadcrumb(crumb: Dict[str, Any], hint: Optional[Dict[str, Any]] = None):
         """Keep only breadcrumbs that originate from this add-on.
 
         - For logging breadcrumbs, the LoggingIntegration provides LogRecord in hint;

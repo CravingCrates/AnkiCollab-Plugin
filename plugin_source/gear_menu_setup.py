@@ -8,6 +8,7 @@ import aqt
 from anki.decks import DeckId
 from aqt import gui_hooks, mw
 from aqt.operations import QueryOp
+import aqt.utils
 import requests
 
 from .export_manager import get_server_missing_media, start_suggest_missing_media
