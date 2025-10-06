@@ -7,12 +7,12 @@
     - [Card Content and Tags](#card-content-and-tags)
     - [New Cards](#new-cards)
   - [Downloading Updates](#downloading-updates)
-    - [Check for New Content Manually](#check-for-new-content-manually)
-    - [Check for New Content Automatically](#check-for-new-content-automatically)
+    - [Update Decks Manually](#check-for-new-content-manually)
+    - [Update Decks Automatically](#check-for-new-content-automatically)
 
 If you don't want to maintain or publish decks, you'll still need an account. To create one, go to [AnkiCollab.com/Login](https://www.ankicollab.com/login) and click **Sign Up Here**.
 
-![The sign up page for AnkiCollab website.](https://i.imgur.com/z4I11Wm.png)
+<img src="https://i.imgur.com/LVwfVhk.png" alt="The sign up page for AnkiCollab website" width="500">
 
 After that, the **subscription key** 🔑 is all you need!
 
@@ -119,24 +119,24 @@ Now you just need to wait for the maintainer to approve your card!
 
 ## Downloading Updates
 
-To download any changes or new content for your subscribed deck, you can manually check for new content or automatically check for updates on startup.
+To download any changes or new content for your subscribed deck, you can manually update the decks at any time or automatically update decks on startup.
 
-### Check for New Content Manually
+### Update Decks Manually
 
-On the toolbar, click `AnkiCollab → Check for New Content`.
+On the toolbar, click `AnkiCollab → Update Decks`.
 
-![A cursor hovering over the Check for New Content button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/dtxRALy.png)
+<img src="https://i.imgur.com/EQ9xqlc.png" alt="A cursor hovering over the Update Decks button on the AnkiCollab toolbar tab in Anki" width="300">
 
 This will retrieve any available updates for your subscription.
 
-If any updates are available, you will be shown the changelog and asked if you want to Install Now, Skip this Update, or Decide Later.
+If a changelog is available, you will be shown the changelog and asked if you want to Install Now, Skip this Update, or Decide Later. If there is no new changelog, but changes are available, they will be installed automatically. If there were no changes to the deck since your last update, you will be informed that you are up to date.
 
 ![A new update window showing a new update in AnkiCollab.](https://i.imgur.com/9uB5HMM.png)
 
-### Check for New Content Automatically
+### Update Decks Automatically
 
-On the toolbar, click `AnkiCollab → Settings → Check for Updates on Startup`.
+On the toolbar, click `AnkiCollab → Settings → Update Decks on startup`.
 
-![A cursor hovering over the Check for Updates on Startup button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/dQ9ZUbU.png)
+<img src="https://i.imgur.com/4vr1YO0.png" alt="A cursor hovering over the Check for Updates on Startup button on the AnkiCollab toolbar tab in Anki" width="500">
 
 When you startup Anki, AnkiCollab will automatically check for updates and prompt you to install any available updates.
