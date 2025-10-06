@@ -139,6 +139,6 @@ This will retrieve any available updates for your subscription.
 
 On the toolbar, click `AnkiCollab → Settings → Update Decks on Startup`.
 
-<img src="https://i.imgur.com/4vr1YO0.png" alt="A cursor hovering over the Check for Updates on Startup button on the AnkiCollab toolbar tab in Anki" width="500">
+<img src="https://i.imgur.com/4vr1YO0.png" alt="A cursor hovering over the Update Decks on startup button on the AnkiCollab toolbar tab in Anki" width="500">
 
 When you startup Anki, AnkiCollab will automatically check for updates and prompt you to install any available updates.
