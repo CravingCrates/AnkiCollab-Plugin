@@ -45,7 +45,7 @@ import logging
 from concurrent.futures import Future # Keep for main thread sync
 import subprocess
 
-from typing import Callable, cast, Tuple, Dict, List, Any, Optional
+from typing import Callable, cast, Tuple, Dict, List, Any, Optional, Set
 from pathlib import Path
 import os
 
@@ -75,6 +75,7 @@ from .var_defs import API_BASE_URL
 from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger
 from .media_progress_indicator import show_media_progress, update_media_progress, complete_media_progress
 from . import main
+from .sentry_integration import capture_media_exception, capture_media_message
 logger = get_logger("ankicollab.export_manager")
 
 ASYNC_MEDIA_REF_THRESHOLD = 250  # Tunable; keep conservative to avoid overhead on small tasks.
@@ -525,10 +526,11 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
     batch_size = 100
     uploaded_total = 0
     skipped_total = 0
-    failed_total = 0
     failed_filenames: List[str] = []
+    failed_filenames_set: Set[str] = set()
     error_messages = []
     cancelled = False
+    processed_files = 0
 
     try:
         batches = []
@@ -537,6 +539,7 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
             batches.append((batch_start, batch_end))
 
         total_batches = len(batches)
+        processed_files = 0
 
         for batch_index, (batch_start, batch_end) in enumerate(batches):
             current_batch = all_files_info[batch_start:batch_end]
@@ -558,6 +561,23 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
                 bulk_operation_id=bulk_operation_id,
                 progress_callback=batch_progress_inner_cb # Pass the inner callback
             )
+            batch_failed = batch_result.get("failed_filenames") or []
+            batch_errors = batch_result.get("errors") or []
+            batch_context = {
+                "stage": "handle_media_upload_batch",
+                "batch_index": batch_index,
+                "total_batches": total_batches,
+                "batch_size": len(current_batch),
+                "deck_hash": deck_hash,
+                "bulk_operation_id": bulk_operation_id,
+                "uploaded": batch_result.get("uploaded"),
+                "existing": batch_result.get("existing"),
+                "failed": batch_result.get("failed"),
+                "failed_filenames_sample": batch_failed[:25],
+                "failed_filenames_total": len(batch_failed),
+                "errors_sample": batch_errors[:5],
+                "errors_total": len(batch_errors),
+            }
 
             # Check for cancellation *after* the await point
             if mw.progress.want_cancel():
@@ -569,21 +589,43 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
             if batch_result.get("success", False):
                 uploaded_total += batch_result.get("uploaded", 0)
                 skipped_total += batch_result.get("existing", 0)
-                failed_total += batch_result.get("failed", 0)
                 # Extend failed filenames if present
                 failed_batch_names = batch_result.get("failed_filenames") or []
                 if failed_batch_names:
-                    failed_filenames.extend(failed_batch_names)
+                    new_names = [name for name in failed_batch_names if name not in failed_filenames_set]
+                    if new_names:
+                        failed_filenames.extend(new_names)
+                        failed_filenames_set.update(new_names)
+                    capture_media_message(
+                        "media-upload-batch-partial",
+                        level="warning",
+                        context=batch_context,
+                    )
                 if "error" in batch_result and batch_result["error"]:
                     error_messages.append(str(batch_result["error"]))
             else:
                 error_msg = batch_result.get("message", "Unknown error")
                 error_messages.append(f"Batch {batch_index + 1}/{total_batches}: {str(error_msg)}")
-                failed_total += len(current_batch) # Assume all failed if batch failed
                 logger.error(f"Batch upload error: {error_msg}")
                 failed_batch_names = batch_result.get("failed_filenames") or []
+                if not failed_batch_names:
+                    failed_batch_names = [
+                        file_info.get("filename")
+                        for file_info in current_batch
+                        if isinstance(file_info, dict) and isinstance(file_info.get("filename"), str)
+                    ]
                 if failed_batch_names:
-                    failed_filenames.extend(failed_batch_names)
+                    new_names = [name for name in failed_batch_names if name and name not in failed_filenames_set]
+                    if new_names:
+                        failed_filenames.extend(new_names)
+                        failed_filenames_set.update(new_names)
+                capture_media_message(
+                    "media-upload-batch-failed",
+                    level="error",
+                    context={**batch_context, "error_message": str(error_msg)},
+                )
+
+            processed_files = batch_end
 
         if progress_callback_wrapper and not cancelled:
              progress_callback_wrapper(1.0) # Signal completion if not cancelled
@@ -592,7 +634,18 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
         logger.error(f"Error during media upload coroutine: {str(e)}")
         logger.error(traceback.format_exc())
         error_messages.append(f"Unexpected error: {str(e)}")
+        capture_media_exception(
+            e,
+            context={
+                "stage": "handle_media_upload",
+                "deck_hash": deck_hash,
+                "bulk_operation_id": bulk_operation_id,
+                "processed_files": processed_files,
+            },
+        )
         # Don't re-raise here, return summary
+
+    failed_total = len(failed_filenames_set)
 
     return {
         "uploaded": uploaded_total,
@@ -601,7 +654,7 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
         "errors": error_messages,
         "cancelled": cancelled,
         "silent": silent,
-        "failed_filenames": sorted(set(failed_filenames)),
+        "failed_filenames": sorted(failed_filenames_set),
     }
 
 def _sync_run_async(coro, *args, **kwargs):
@@ -839,11 +892,15 @@ def _submit_deck_op(
     except Exception as e:
         logger.error(f"Unexpected error during deck submission: {e}")
         logger.error(traceback.format_exc())
-        try:
-            import sentry_sdk
-            sentry_sdk.capture_exception(e)
-        except Exception:
-            pass
+        capture_media_exception(
+            e,
+            context={
+                "stage": "deck_submission",
+                "deck_hash": deckHash,
+                "did": did,
+            },
+            component="deck",
+        )
         raise RuntimeError(f"An unexpected error occurred during submission: {e}") from e
 
 
@@ -867,6 +924,22 @@ def _handle_media_upload_result(result: Dict[str, Any]):
                f"• {uploaded} files uploaded\n"
                f"• {existing} files already existed\n"
                f"• {failed} files failed before cancellation")
+        failed_sample = failed_filenames[:50]
+        errors_sample = errors[:5]
+        capture_media_message(
+            "media-upload-cancelled",
+            level="warning",
+            context={
+                "stage": "upload_summary",
+                "uploaded": uploaded,
+                "existing": existing,
+                "failed": failed,
+                "errors_sample": errors_sample,
+                "errors_total": len(errors),
+                "failed_filenames_sample": failed_sample,
+                "failed_filenames_total": len(failed_filenames),
+            },
+        )
         aqt.utils.showWarning(msg, title="Upload Cancelled", parent=parent_widget)
     elif failed > 0:
         # Build base message
@@ -878,6 +951,23 @@ def _handle_media_upload_result(result: Dict[str, Any]):
             base_msg += "\nRecent errors:\n" + "\n".join(errors[-3:])
             if len(errors) > 3:
                 base_msg += f"\n...and {len(errors) - 3} more errors"
+
+        failed_sample = failed_filenames[:50]
+        errors_sample = errors[:5]
+        capture_media_message(
+            "media-upload-summary-failed",
+            level="error",
+            context={
+                "stage": "upload_summary",
+                "uploaded": uploaded,
+                "existing": existing,
+                "failed": failed,
+                "errors_sample": errors_sample,
+                "errors_total": len(errors),
+                "failed_filenames_sample": failed_sample,
+                "failed_filenames_total": len(failed_filenames),
+            },
+        )
 
         if not failed_filenames:
             aqt.utils.showWarning(base_msg + "\n", title="Media Upload Summary", parent=parent_widget)
@@ -1064,14 +1154,34 @@ def _handle_media_upload_result(result: Dict[str, Any]):
             dialog.exec()
             
     elif uploaded > 0 and not silent:
-        msg = (f"Media upload: {uploaded} files uploaded"
-               )
+        msg = f"Media upload: {uploaded} files uploaded"
         aqt.utils.tooltip(msg, parent=parent_widget)
+        capture_media_message(
+            "media-upload-summary-success",
+            level="info",
+            context={
+                "stage": "upload_summary",
+                "uploaded": uploaded,
+                "existing": existing,
+                "failed": failed,
+                "errors_sample": errors[:5],
+                "errors_total": len(errors),
+            },
+        )
     elif not silent:
          # Case where there were files to upload, but all failed or were cancelled early
          # or maybe no files were actually found after optimization.
          aqt.utils.tooltip("Media upload finished. No new files were uploaded.", parent=parent_widget)
-         pass # Or show a specific message if needed
+         capture_media_message(
+             "media-upload-summary-existing",
+             level="info",
+             context={
+                 "stage": "upload_summary",
+                 "uploaded": uploaded,
+                 "existing": existing,
+                 "failed": failed,
+             },
+         )
 
     # Common post-upload actions (like rating request for suggestions)
     if not silent: # Only ask for rating after suggestions, not initial export
@@ -1369,11 +1479,14 @@ def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
     except Exception as e:
         logger.error(f"Error uploading missing media: {e}")
         logger.error(traceback.format_exc())
-        try:
-            import sentry_sdk
-            sentry_sdk.capture_exception(e)
-        except Exception:
-            pass
+        capture_media_exception(
+            e,
+            context={
+                "stage": "start_suggest_missing_media",
+                "deck_hash": deck_hash,
+                "missing_files_count": len(missing_files) if 'missing_files' in locals() else None,
+            },
+        )
         show_exception(parent=parent_widget, exception=e)
 
 def suggest_subdeck(did: int):

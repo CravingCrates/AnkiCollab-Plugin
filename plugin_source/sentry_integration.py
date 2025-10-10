@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 import sys
 import platform
-from typing import Any, Dict, Tuple, Optional
-import sentry_sdk
 import logging
+import hashlib
+from typing import Any, Dict, Tuple, Optional
+from urllib.parse import urlparse
+
+import sentry_sdk
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
@@ -49,7 +52,6 @@ SENSITIVE_KEYS = {
 
 
 def _scrub(obj: Any) -> Any:
-    # Deeply scrub sensitive keys; leave structure intact
     try:
         if isinstance(obj, dict):
             return {
@@ -61,6 +63,116 @@ def _scrub(obj: Any) -> Any:
     except Exception:
         pass
     return obj
+
+
+def _hash_identifier(value: str) -> str:
+    try:
+        digest = hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
+        return f"hash:{digest[:16]}"
+    except Exception:
+        return "hash:invalid"
+
+
+def _sanitize_media_value(key: str, value: Any) -> Any:
+    key_lower = key.lower()
+
+    def _apply(item: Any) -> Any:
+        if isinstance(item, str):
+            return _hash_identifier(item)
+        return "[filtered]"
+
+    if any(token in key_lower for token in ("filename", "filepath", "filenames", "file_name", "destination", "source", "path", "directory", "dir")):
+        if isinstance(value, (list, tuple, set)):
+            return [_apply(v) for v in value]
+        return _apply(value)
+
+    if "hash" in key_lower and isinstance(value, str):
+        return _hash_identifier(value)
+
+    if "url" in key_lower and isinstance(value, str):
+        try:
+            parsed = urlparse(value)
+            return {
+                "scheme": parsed.scheme,
+                "host": parsed.hostname,
+                "port": parsed.port,
+                "path_hash": _hash_identifier(parsed.path or ""),
+            }
+        except Exception:
+            return "[filtered-url]"
+
+    return value
+
+
+def _prepare_media_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    prepared: Dict[str, Any] = {}
+    if not context:
+        return prepared
+
+    for key, value in context.items():
+        try:
+            prepared[key] = _sanitize_media_value(key, value)
+        except Exception:
+            prepared[key] = "[error-preparing]"
+    return prepared
+
+
+def _set_scope_metadata(scope: "sentry_sdk.Scope", context: Dict[str, Any], tags: Optional[Dict[str, Any]]) -> None:
+    for key, value in context.items():
+        try:
+            scope.set_extra(key, value)
+        except Exception:
+            continue
+    if tags:
+        for key, value in tags.items():
+            try:
+                scope.set_tag(key, value)
+            except Exception:
+                continue
+
+
+def capture_media_exception(
+    exc: Exception,
+    *,
+    context: Optional[Dict[str, Any]] = None,
+    tags: Optional[Dict[str, Any]] = None,
+    level: str = "error",
+    component: str = "media",
+) -> None:
+    if not is_sentry_enabled():
+        return
+    try:
+        sentry_context = _prepare_media_context(context)
+        with sentry_sdk.push_scope() as scope:  # type: ignore[attr-defined]
+            scope.set_level(level)
+            scope.set_tag("component", component)
+            _set_scope_metadata(scope, sentry_context, tags)
+            scope.set_extra("_raw_context_keys", list((context or {}).keys()))
+            sentry_sdk.capture_exception(exc)
+    except Exception:
+        return
+
+
+def capture_media_message(
+    message: str,
+    *,
+    level: str = "info",
+    context: Optional[Dict[str, Any]] = None,
+    tags: Optional[Dict[str, Any]] = None,
+    component: str = "media",
+) -> None:
+    if not is_sentry_enabled():
+        return
+    try:
+        sentry_context = _prepare_media_context(context)
+        with sentry_sdk.push_scope() as scope:  # type: ignore[attr-defined]
+            scope.set_level(level)
+            scope.set_tag("component", component)
+            _set_scope_metadata(scope, sentry_context, tags)
+            scope.set_extra("_raw_context_keys", list((context or {}).keys()))
+            sentry_sdk.capture_message(message, level=level)
+    except Exception:
+        return
 
 
 def _event_has_our_frame(event: Dict[str, Any], addon_root: str) -> bool:
