@@ -1,4 +1,3 @@
-
 from aqt import mw
 from aqt.utils import askUser, showInfo
 from aqt.qt import *
@@ -87,7 +86,30 @@ def delete_selected_rows(table, dialog):
     on_edit_list() # This will create a fresh DeckManager() and table
 
 
+def validate_deck_hash(deck_hash: str) -> bool:
+    if not deck_hash:
+        return False
+    
+    parts = deck_hash.split('-')
+    
+    # Validate deck hash format: 3, 5, or 6 words (legacy and standard formats)
+    if len(parts) not in (3, 5, 6):
+        return False
+    
+    # Each part must be alphabetic only (lowercase for standard, mixed case for legacy)
+    if not all(part and part.isalpha() for part in parts):
+        return False
+    
+    return True
+
+
 def add_to_table(line_edit, table, dialog):
+    
+    string = line_edit.text().strip() # just to prevent issues for copy paste errors
+    if not validate_deck_hash(string):
+        showInfo("That deck subscription key doesn’t look right. Please double-check it.")
+        return
+        
     if not askUser(
             (
                 "Proceeding will download and install a file from the internet that is potentially malicious!<br>"
@@ -98,7 +120,6 @@ def add_to_table(line_edit, table, dialog):
         ):
         return
     strings_data = mw.addonManager.getConfig(__name__)
-    string = line_edit.text().strip() # just to prevent issues for copy paste errors
     if string:
         # Check if already subscribed
         if string in strings_data:

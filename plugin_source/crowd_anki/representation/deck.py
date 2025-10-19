@@ -483,7 +483,8 @@ class Deck(JsonSerializableAnkiDict):
             
         self.on_media_download_done(media_result)
                     
-        mw.progress.finish()
+        if mw.progress.busy():
+            mw.progress.finish()
         # Reset window without blocking main thread
         aqt.mw.reset()
     

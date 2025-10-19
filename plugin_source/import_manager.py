@@ -1,7 +1,13 @@
 from collections import defaultdict
 import json
 import logging
-from typing import Sequence
+import os
+import shutil
+import tempfile
+import zipfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin
 
 import requests
 from datetime import datetime, timedelta, timezone
@@ -35,9 +41,228 @@ import logging
 
 logger = get_logger("ankicollab.import_manager")
 
+CACHE_BOOTSTRAP_MODE = "cache-bootstrap"
+DEFAULT_REQUEST_TIMEOUT = (30, 120)  # connect, read
+
 
 def do_nothing(count: int):
     pass
+
+
+class CacheBootstrapError(RuntimeError):
+    """Raised when a cache bootstrap payload cannot be processed."""
+
+
+def _notify_cache_bootstrap_failure() -> None:
+    aqt.utils.showCritical(
+        "AnkiCollab could not download deck. Please try again later. If the problem persists, please contact support."
+    )
+
+
+def _fetch_manifest(manifest_url: str) -> Dict[str, Any]:
+    try:
+        response = requests.get(manifest_url, timeout=DEFAULT_REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.error("Failed to download cache manifest %s: %s", manifest_url, exc)
+        raise CacheBootstrapError(f"Unable to download cache manifest: {manifest_url}") from exc
+
+    try:
+        return response.json()
+    except ValueError as exc:
+        logger.error("Invalid JSON received for manifest %s: %s", manifest_url, exc)
+        raise CacheBootstrapError("Cache manifest payload is not valid JSON") from exc
+
+def _safe_destination(root: Path, relative_path: str) -> Path:
+    destination = (root / relative_path).resolve()
+    root_resolved = root.resolve()
+
+    if os.name == "nt":
+        if not str(destination).lower().startswith(str(root_resolved).lower()):
+            raise CacheBootstrapError(f"Media path escapes target directory: {relative_path}")
+    else:
+        if not str(destination).startswith(str(root_resolved)):
+            raise CacheBootstrapError(f"Media path escapes target directory: {relative_path}")
+
+    return destination
+
+
+def _coerce_subscription_payload(payload: Any, deck_last_modified: Optional[str]) -> Dict[str, Any]:
+    if isinstance(payload, list):
+        payload = next((item for item in payload if isinstance(item, dict)), None)
+
+    if not isinstance(payload, dict):
+        raise CacheBootstrapError("Cache archive deck data is not a valid object")
+    
+    if "deck" not in payload:
+        raise CacheBootstrapError("Cache archive deck data missing 'deck' field")
+
+    subscription = dict(payload)
+    
+    if deck_last_modified:
+        subscription["deck_last_modified"] = deck_last_modified
+
+    return subscription
+
+
+def _extract_media_entries(archive: zipfile.ZipFile, media_info: Dict[str, Any]) -> int:
+    if not media_info:
+        return 0
+
+    prefix = media_info.get("path_prefix", "") or ""
+    prefix = prefix.lstrip("/")
+    if prefix and not prefix.endswith("/"):
+        prefix = prefix + "/"
+
+    if not mw.col:
+        raise CacheBootstrapError("Anki collection is not available for media import")
+
+    media_dir = Path(mw.col.media.dir())
+    extracted = 0
+
+    for entry in archive.infolist():
+        name = entry.filename
+        if entry.is_dir():
+            continue
+        if prefix and not name.startswith(prefix):
+            continue
+        if not prefix and name.startswith("__MACOSX/"):
+            continue
+
+        relative_name = name[len(prefix) :] if prefix else name
+        if not relative_name:
+            continue
+
+        destination = _safe_destination(media_dir, relative_name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        
+        if destination.exists():
+            # Skip existing files to avoid unnecessary overwrites
+            continue
+
+        with archive.open(entry) as source, destination.open("wb") as target:
+            shutil.copyfileobj(source, target)
+
+        extracted += 1
+
+    return extracted
+
+
+def _subscription_from_manifest(
+    deck_hash: str,
+    manifest: Dict[str, Any],
+    archive_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    try:
+        if not archive_url:
+            raise CacheBootstrapError("Cache manifest missing archive URL")
+        response = requests.get(archive_url, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.error(
+            "Failed to download cache archive for %s from %s: %s",
+            deck_hash,
+            archive_url,
+            exc,
+        )
+        raise CacheBootstrapError("Unable to download cache archive") from exc
+
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_path = Path(tmp_file.name)
+        try:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    tmp_file.write(chunk)
+        finally:
+            tmp_file.flush()
+
+    try:
+        with zipfile.ZipFile(tmp_path) as archive:
+            deck_info = manifest.get("deck_data", {})
+            deck_path = deck_info.get("path")
+            if not deck_path:
+                raise CacheBootstrapError("Cache manifest missing deck data path")
+
+            try:
+                deck_bytes = archive.read(deck_path)
+            except KeyError as exc:
+                logger.error(
+                    "Deck data path %s not found in archive for %s", deck_path, deck_hash
+                )
+                raise CacheBootstrapError("Deck data not present in cache archive") from exc
+
+            compression = (deck_info.get("compression") or "none").lower()
+            if compression in {"gzip", "gz"}:
+                try:
+                    deck_bytes = gzip.decompress(deck_bytes)
+                except (OSError, EOFError) as exc:
+                    logger.error(
+                        "Failed to decompress deck data for %s (path %s): %s",
+                        deck_hash,
+                        deck_path,
+                        exc,
+                    )
+                    raise CacheBootstrapError("Unable to decompress deck data") from exc
+            elif compression not in {"none", ""}:
+                raise CacheBootstrapError(f"Unsupported deck compression: {compression}")
+
+            try:
+                deck_payload = json.loads(deck_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError) as exc:
+                logger.error("Invalid deck JSON for %s: %s", deck_hash, exc)
+                raise CacheBootstrapError("Deck data is not valid JSON") from exc
+
+            deck_last_modified = manifest.get("source_last_update")
+            subscription = _coerce_subscription_payload(deck_payload, deck_last_modified)
+
+            media_info = manifest.get("media", {})
+            extracted_media = _extract_media_entries(archive, media_info)
+            logger.info(
+                "Cache bootstrap for %s extracted %d media files", deck_hash, extracted_media
+            )
+
+            return subscription
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def _resolve_cache_bootstrap_entries(entries: List[Any]) -> List[Any]:
+    if not isinstance(entries, list):
+        return entries
+
+    resolved: List[Any] = []
+    for idx, entry in enumerate(entries):
+        try:
+            if isinstance(entry, dict) and entry.get("mode") == CACHE_BOOTSTRAP_MODE:
+                manifest_meta = entry.get("manifest") or {}
+                manifest_url = manifest_meta.get("manifest_presigned_url")
+                deck_hash = entry.get("deck_hash")
+
+                if not manifest_url or not deck_hash:
+                    logger.error("Cache bootstrap entry missing manifest URL or deck hash")
+                    raise CacheBootstrapError("Malformed cache bootstrap entry")
+
+                manifest = _fetch_manifest(manifest_url)
+
+                archive_url = manifest_meta.get("archive_presigned_url")
+                subscription = _subscription_from_manifest(
+                    deck_hash, manifest, archive_url
+                )
+                resolved.append(subscription)
+            else:
+                resolved.append(entry)
+        except CacheBootstrapError as cbe:
+            logger.exception("CacheBootstrapError while resolving cache bootstrap entry: %s", cbe)
+            raise
+        except Exception as exc:
+            logger.exception("Unexpected error while resolving cache bootstrap entry: %s", exc)
+            raise
+
+    filtered = [entry for entry in resolved if entry is not None]
+    return filtered
 
 def update_optional_tag_config(given_deck_hash, optional_tags):
     with DeckManager() as decks:
@@ -279,6 +504,24 @@ def _on_deck_installed(install_result, deck, subscription, input_hash=None, upda
     # Update timestamp if requested (for changelog updates)
     if update_timestamp_after:
         update_timestamp(subscription["deck_hash"])
+    
+    # if the deck was cached, we have the actual last modified time as rfc3339 from the server
+    if "deck_last_modified" in subscription:
+        try:
+            last_modified_dt = datetime.fromisoformat(subscription["deck_last_modified"].replace("Z", "+00:00"))
+            formatted_last_modified = last_modified_dt.strftime("%Y-%m-%d %H:%M:%S")
+            with DeckManager() as decks:
+                details = decks.get_by_hash(deck_hash)
+                if details:
+                    details["timestamp"] = formatted_last_modified
+        except Exception as e:
+            logger.error(f"Error parsing last modified time: {e}")
+            # Don't let this error break the import process
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
 
     # Now handle stats sharing dialog AFTER import is complete
     deck_hash = subscription["deck_hash"]
@@ -605,6 +848,15 @@ def async_start_pull(input_hash, silent=False):
                 compressed_data = base64.b64decode(response.content)
                 decompressed_data = gzip.decompress(compressed_data)
                 webresult = json.loads(decompressed_data.decode("utf-8"))
+
+                try:
+                    webresult = _resolve_cache_bootstrap_entries(webresult)
+                except CacheBootstrapError as exc:
+                    logger.error("Cache bootstrap failed: %s", exc)
+                    # Surface a user-visible error on the main thread.
+                    aqt.mw.taskman.run_on_main(_notify_cache_bootstrap_failure)
+                    return (None, None, silent)
+
                 return (webresult, input_hash, silent)
             else:
                 infot = "A Server Error occurred. Please notify us!"

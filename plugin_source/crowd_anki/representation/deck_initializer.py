@@ -1,5 +1,4 @@
 from typing import Optional
-from functional import seq
 
 from .deck import Deck
 from .note import Note
@@ -45,13 +44,15 @@ def from_collection(collection, name, deck_metadata=None, is_child=False, note_i
     deck._update_fields()
     deck.metadata = deck_metadata
     deck._load_metadata()
+    deck_id = deck.anki_dict["id"]
 
-    note_ids_to_load = note_ids # If we bulk suggest Notes, we know the nids beforehand
-    
-    if note_ids_to_load is None: # If we don't know the nids, we have to load all notes
-        note_ids_to_load = collection.decks.get_note_ids(deck.anki_dict["id"], include_from_dynamic=True)
-    else: # If we know the nids, we have to filter out the ones that are not in the deck to prevent duplicates and wrong deck assignments
-        note_ids_to_load = [note_id for note_id in note_ids_to_load if note_id in collection.decks.get_note_ids(deck.anki_dict["id"], include_from_dynamic=True)]
+    if note_ids is None:  # When nids are unknown, load every note in the deck
+        note_ids_to_load = collection.decks.get_note_ids(deck_id, include_from_dynamic=True)
+    elif not note_ids:  # Short-circuit empty inputs instead of querying the DB
+        note_ids_to_load = []
+    else:  # Restrict the provided nids to those that actually belong to this deck
+        deck_note_ids = set(collection.decks.get_note_ids(deck_id, include_from_dynamic=True))
+        note_ids_to_load = [note_id for note_id in note_ids if note_id in deck_note_ids]
     
     # Finally load the notes
     if note_ids_to_load:
@@ -59,13 +60,21 @@ def from_collection(collection, name, deck_metadata=None, is_child=False, note_i
     else:
         deck.notes = []
             
-    direct_children = [child_name for child_name, _ in decks.children(deck.anki_dict["id"])
-                       if Deck.DECK_NAME_DELIMITER
-                       not in child_name[len(name) + len(Deck.DECK_NAME_DELIMITER):]]
+    name_prefix_len = len(name) + len(Deck.DECK_NAME_DELIMITER)
+    direct_children = [
+        child_name
+        for child_name, _ in decks.children(deck_id)
+        if Deck.DECK_NAME_DELIMITER not in child_name[name_prefix_len:]
+    ]
 
-    deck.children = seq(direct_children) \
-        .map(lambda child_name: from_collection(collection, child_name, deck.metadata, True, note_ids)) \
-        .filter(lambda it: it is not None).order_by(lambda x: x.anki_dict["name"]).to_list()
+    child_decks = [
+        from_collection(collection, child_name, deck.metadata, True, note_ids)
+        for child_name in direct_children
+    ]
+    deck.children = sorted(
+        (child for child in child_decks if child is not None),
+        key=lambda child: child.anki_dict["name"],
+    )
 
     return deck
 

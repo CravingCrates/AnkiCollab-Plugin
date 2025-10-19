@@ -1235,6 +1235,10 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
         notes = [mw.col.get_note(nid) for nid in nids] # type: ignore
         if not notes or any(n is None for n in notes):
              raise ValueError("One or more selected notes could not be found.")
+         
+        if len(notes) > 2000:
+            aqt.utils.showInfo("Please select 2,000 notes or fewer for suggestions at a time.", parent=parent_widget)
+            return
 
         first_note_card = notes[0].cards()[0]
         deckHash = get_deck_hash_from_did(first_note_card.did)
@@ -1751,8 +1755,9 @@ def get_commit_info(default_opt = 0):
     buttonLayout = QHBoxLayout()
     cancelButton = QPushButton("Cancel")
     okButton = QPushButton("Submit")
-    buttonLayout.addWidget(cancelButton)
+    okButton.setDefault(True)
     buttonLayout.addWidget(okButton)
+    buttonLayout.addWidget(cancelButton)
     layout.addLayout(buttonLayout)
 
     dialog.setLayout(layout)

@@ -8,9 +8,10 @@ import uuid
 import requests
 import base64
 import binascii
+import threading
 from functools import wraps
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, cast
+from typing import Dict, List, NoReturn, Optional, Set, Tuple, Type, Union, cast
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 from asyncio import Lock as AsyncLock, get_running_loop # Use asyncio Lock
@@ -45,6 +46,20 @@ ALLOWED_EXTENSIONS = {
 }
 ALL_ALLOWED_EXTENSIONS = set().union(*ALLOWED_EXTENSIONS.values())
 
+CONTENT_TYPE_MAP = {
+    '.webp': 'image/webp',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.bmp': 'image/bmp',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+    '.mp3': 'audio/mpeg',
+    '.ogg': 'audio/ogg',
+}
+
 # --- Exception Classes  ---
 class MediaError(Exception): pass
 class MediaServerError(MediaError): pass
@@ -58,20 +73,56 @@ class MediaDownloadError(MediaError): pass
 # --- RateLimiter Class  ---
 class RateLimiter:
     def __init__(self, max_calls: int, period: int):
-        self.max_calls = max_calls
-        self.period = period
-        self.calls = []
+        if max_calls <= 0 or period <= 0:
+            raise ValueError("max_calls and period must be positive")
+
+        self.max_calls = float(max_calls)
+        self.period = float(period)
+
+        # Token bucket state
+        self._tokens = self.max_calls
+        self._last_refill = time.monotonic()
+        self._rate_per_sec = self.max_calls / self.period
+
+        # Per-event-loop async lock
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    async def _get_lock(self) -> asyncio.Lock:
+        """Ensure a per-event-loop asyncio.Lock exists."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            raise RuntimeError("RateLimiter called outside a running event loop")
+
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+
+        return self._lock
 
     async def wait_if_needed(self) -> None:
-        now = time.time()
-        self.calls = [t for t in self.calls if now - t < self.period]
-        if len(self.calls) >= self.max_calls:
-            oldest_call = self.calls[0]
-            wait_time = self.period - (now - oldest_call)
-            if wait_time > 0:
-                logger.debug(f"Rate limit reached. Waiting for {wait_time:.2f} seconds")
-                await asyncio.sleep(wait_time)
-        self.calls.append(now)
+        """Wait until a token is available, then consume one."""
+        lock = await self._get_lock()
+        while True:
+            async with lock:
+                now = time.monotonic()
+                elapsed = now - self._last_refill
+
+                if elapsed > 0:
+                    refill = elapsed * self._rate_per_sec
+                    if refill > 0:
+                        self._tokens = min(self.max_calls, self._tokens + refill)
+                        self._last_refill = now
+
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return  # Token acquired
+
+                missing = 1.0 - self._tokens
+                wait_time = max(missing / (self._rate_per_sec or 1e-9), 0.01)
+
+            await asyncio.sleep(wait_time)
 # --- End RateLimiter Class ---
 
 # --- retry decorator  ---
@@ -79,91 +130,137 @@ def retry(max_tries=3, delay=1, backoff=2, exceptions=(requests.RequestException
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            mtries, mdelay = max_tries, delay
-            last_exception = None
-            attempt_index = 0
-            while mtries > 0:
+            remaining = max_tries
+            attempts = 0
+            current_delay = delay
+            last_exception: Optional[Exception] = None
+
+            def _extract_metadata(exc: Exception) -> Tuple[Dict, Optional[int]]:
+                metadata = getattr(exc, "metadata", {})
+                metadata_dict = metadata if isinstance(metadata, dict) else {}
+                status_code = metadata_dict.get("status_code")
+                if status_code is None and isinstance(exc, requests.HTTPError) and exc.response is not None:
+                    status_code = exc.response.status_code
+                return metadata_dict, status_code
+
+            def _retry_after_from_response(response, fallback: float) -> float:
+                if response is None:
+                    return fallback
+                retry_after = response.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    return float(int(retry_after))
+                return fallback
+
+            while remaining > 0:
                 try:
                     result = await func(*args, **kwargs)
-                    if attempt_index > 0:
+                    if attempts:
                         capture_media_message(
                             "media-operation-recovered",
                             level="warning",
                             context={
                                 "stage": func.__name__,
-                                "attempts": attempt_index + 1,
+                                "attempts": attempts + 1,
                                 "max_tries": max_tries,
                             },
                         )
                     return result
-                except exceptions as e:
-                    last_exception = e
-                    attempt_index += 1
+                except exceptions as exc:  # noqa: PLW0703 - deliberate catch for retry logic
+                    attempts += 1
+                    last_exception = exc
+                    metadata, status_code = _extract_metadata(exc)
 
-                    metadata = getattr(e, "metadata", {})
-                    metadata_dict = metadata if isinstance(metadata, dict) else {}
-                    status_code = metadata_dict.get("status_code")
-
-                    if status_code is None and isinstance(e, requests.HTTPError) and e.response is not None:
-                        status_code = e.response.status_code
+                    # Don't retry if executor is unavailable (Anki is shutting down)
+                    if metadata.get("reason") == "executor_unavailable":
+                        logger.warning(f"Executor unavailable in {func.__name__}. Not retrying.")
+                        raise exc
 
                     if status_code == 404:
                         logger.warning(f"Resource not found (404) in {func.__name__}. Not retrying.")
-                        raise e
+                        raise exc
 
-                    # Don't retry auth errors - token won't suddenly become valid
-                    if isinstance(e, (MediaUploadError, MediaDownloadError)) and metadata_dict.get("status_code") == 401:
+                    if (
+                        isinstance(exc, (MediaUploadError, MediaDownloadError, MediaServerError))
+                        and metadata.get("status_code") == 401
+                    ):
                         logger.error(f"Authentication error (401) in {func.__name__} - not retrying")
-                        raise e
-                    
-                    # Detect rate limiting and use exponential backoff
-                    is_rate_limit = False
-                    if isinstance(e, requests.HTTPError) and e.response.status_code == 429:
-                        is_rate_limit = True
-                        retry_after = e.response.headers.get("Retry-After")
-                        if retry_after and retry_after.isdigit():
-                            mdelay = max(mdelay, int(retry_after))
-                        else:
-                            # Exponential backoff for 429: delay * backoff^attempt
-                            mdelay = delay * (backoff ** attempt_index)
-                        logger.warning(f"Rate limited (429) in {func.__name__}. Retrying in {mdelay}s... ({mtries-1} tries left)")
-                    elif isinstance(e, (MediaUploadError, MediaDownloadError)):
-                        # Check metadata for 429
-                        if metadata_dict.get("status_code") == 429:
-                            is_rate_limit = True
-                            mdelay = delay * (backoff ** attempt_index)
-                            logger.warning(f"Rate limited (429) in {func.__name__}. Retrying in {mdelay}s... ({mtries-1} tries left)")
-                        else:
-                            logger.warning(f"Upload/Download error: {str(e)}. Retrying in {mdelay}s... ({mtries-1} tries left)")
-                    elif isinstance(e, MediaServerError):
-                        logger.warning(f"Server error encountered: {str(e)}. Retrying in {mdelay}s... ({mtries-1} tries left)")
-                    else:
-                        logger.warning(f"Request failed: {str(e)}. Retrying in {mdelay}s... ({mtries-1} tries left)")
+                        raise exc
 
-                    await asyncio.sleep(mdelay)
-                    mtries -= 1
-                    # Only apply backoff if not rate limited (rate limit uses exponential above)
-                    if not is_rate_limit:
-                        mdelay *= backoff
-                    mdelay *= backoff
+                    tries_left = max(remaining - 1, 0)
+                    wait_time = float(current_delay) if current_delay else float(delay)
+                    rate_limited = False
+
+                    if isinstance(exc, requests.HTTPError) and status_code == 429:
+                        rate_limited = True
+                        fallback = delay * (backoff ** attempts)
+                        wait_time = _retry_after_from_response(exc.response, float(fallback))
+                        header_value = exc.response.headers.get("Retry-After") if exc.response else None
+                        if header_value and header_value.isdigit():
+                            logger.warning(
+                                f"Rate limited (429) in {func.__name__}. Server requested wait of {int(wait_time)}s. "
+                                f"Retrying... ({tries_left} tries left)"
+                            )
+                        else:
+                            logger.warning(
+                                f"Rate limited (429) in {func.__name__}. Retrying in {wait_time}s... ({tries_left} tries left)"
+                            )
+                    elif (
+                        isinstance(exc, (MediaUploadError, MediaDownloadError))
+                        and metadata.get("status_code") == 429
+                    ):
+                        rate_limited = True
+                        retry_after = getattr(exc, "retry_after", None)
+                        wait_time = retry_after or (delay * (backoff ** attempts))
+                        if retry_after:
+                            logger.warning(
+                                f"Rate limited (429) in {func.__name__}. Server requested wait of {wait_time}s. "
+                                f"Retrying... ({tries_left} tries left)"
+                            )
+                        else:
+                            logger.warning(
+                                f"Rate limited (429) in {func.__name__}. Retrying in {wait_time}s... ({tries_left} tries left)"
+                            )
+                    elif isinstance(exc, (MediaUploadError, MediaDownloadError)):
+                        logger.warning(
+                            f"Upload/Download error: {exc}. Retrying in {wait_time}s... ({tries_left} tries left)"
+                        )
+                    elif isinstance(exc, MediaServerError):
+                        logger.warning(
+                            f"Server error encountered: {exc}. Retrying in {wait_time}s... ({tries_left} tries left)"
+                        )
+                    else:
+                        logger.warning(
+                            f"Request failed: {exc}. Retrying in {wait_time}s... ({tries_left} tries left)"
+                        )
+
+                    if wait_time <= 0:
+                        wait_time = float(delay) if delay else 1.0
+
+                    await asyncio.sleep(wait_time)
+
+                    if not rate_limited:
+                        current_delay = (current_delay or delay) * backoff
+                    else:
+                        current_delay = wait_time
+
+                    remaining -= 1
 
             logger.error(f"Maximum retries reached for {func.__name__}. Last error: {last_exception}")
-            # Re-raise the last exception encountered
             if last_exception:
                 metadata = getattr(last_exception, "metadata", None)
                 context = {
                     "stage": func.__name__,
-                    "attempts": attempt_index,
+                    "attempts": attempts,
                     "max_tries": max_tries,
                 }
                 if isinstance(metadata, dict):
                     context.update(metadata)
                 capture_media_exception(last_exception, context=context)
                 raise last_exception
-            else:
-                # Should not happen, but raise a generic error if it does
-                raise MediaServerError(f"Failed after {max_tries} tries without specific exception")
+            raise MediaServerError(f"Failed after {max_tries} tries without specific exception")
+
         return wrapper
+
     return decorator
 # --- End retry decorator ---
 
@@ -186,10 +283,10 @@ class MediaManager:
         self.semaphore: Optional[asyncio.Semaphore] = None
         self._semaphore_lock = AsyncLock() # Use asyncio's Lock
         self._semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
-        # Reasonable thread pool sizing - the bottleneck is image processing, not our code
-        cpu_count = os.cpu_count() or 2
-        max_worker = min(32, max(4, cpu_count * 2))  # Simple: 2x cores, max 32
         
+        cpu_count = os.cpu_count() or 2
+        max_worker = min(32, max(4, cpu_count * 2))
+
         self.thread_executor = ThreadPoolExecutor(max_workers=max_worker)
         logger.debug(f"Initialized thread pool with {max_worker} workers")
         mimetypes.add_type('image/webp', '.webp') # how the fuck is this not a default
@@ -213,18 +310,120 @@ class MediaManager:
                     self._semaphore_loop = current_loop # Store the loop it's associated with
         return cast(asyncio.Semaphore, self.semaphore)
 
-    async def async_request(self, method, url, **kwargs):
+    @staticmethod
+    def _file_exists_with_size(path: Path) -> bool:
+        """Return True when file exists and has a non-zero size."""
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.error("async_request called without a running event loop!")
-            # try get_event_loop as fallback?
-            raise RuntimeError("No running event loop found for async_request")
+            return path.exists() and path.stat().st_size > 0
+        except OSError:
+            return False
 
-        # Check if executor is still available
+    @staticmethod
+    def _raise_with_metadata(exc: Exception, context: Dict, *, cause: Optional[BaseException] = None) -> NoReturn:
+        """Attach metadata to the exception and raise it, preserving the cause when provided."""
+        setattr(exc, "metadata", context)
+        if cause is not None:
+            raise exc from cause
+        raise exc
+
+    def _raise_wrapped_error(
+        self,
+        error_cls: Type[MediaError],
+        message: str,
+        base_context: Dict,
+        exc: Exception,
+    ) -> NoReturn:
+        """Create a media error with merged context and raise it."""
+        context = {**base_context, "error": str(exc), "error_type": type(exc).__name__}
+        error_instance = error_cls(message)
+        self._raise_with_metadata(error_instance, context, cause=exc)
+
+    def _handle_upload_http_error(self, exc: requests.HTTPError, base_context: Dict) -> NoReturn:
+        status_code = getattr(exc.response, "status_code", None)
+        error_text = getattr(exc.response, "text", str(exc))
+        logger.error(f"HTTP error {status_code} uploading media ({base_context.get('filename')}): {error_text}")
+        error_context = {
+            **base_context,
+            "status_code": status_code,
+            "response_text": (error_text[:512] if isinstance(error_text, str) else None),
+        }
+
+        if status_code == 403:
+            media_error: MediaError = MediaUploadError(f"Permission denied (403): {error_text}")
+        elif status_code == 413:
+            media_error = MediaTypeError(f"File too large (413): {error_text}")
+        elif status_code == 400:
+            media_error = MediaUploadError(f"Bad request (400): {error_text}")
+        elif status_code == 401:
+            media_error = MediaUploadError(f"Upload token rejected (401): {error_text}")
+        elif status_code == 429:
+            retry_after_header = exc.response.headers.get("Retry-After") if exc.response else None
+            media_error = MediaUploadError(f"Rate limit exceeded (429): {error_text}")
+            if retry_after_header:
+                try:
+                    setattr(media_error, "retry_after", int(retry_after_header))
+                except ValueError:
+                    logger.warning(f"Invalid Retry-After header value: {retry_after_header}")
+        else:
+            media_error = MediaUploadError(f"Media upload failed with HTTP {status_code}: {error_text}")
+
+        self._raise_with_metadata(media_error, error_context, cause=exc)
+
+    def _handle_download_request_exception(
+        self, exc: requests.RequestException, base_context: Dict
+    ) -> NoReturn:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None) if response is not None else None
+        response_text: Optional[str] = None
+        if response is not None:
+            try:
+                response_text = response.text
+            except Exception:  # noqa: BLE001 - background logging only
+                response_text = None
+
+        metadata = {**base_context, "error": str(exc), "error_type": type(exc).__name__}
+        if status_code is not None:
+            metadata["status_code"] = status_code
+            if status_code == 404:
+                metadata.setdefault("reason", "not_found")
+        if response_text:
+            metadata["response_text"] = response_text[:512]
+
+        error = MediaDownloadError(f"Network error during download: {exc}")
+        self._raise_with_metadata(error, metadata, cause=exc)
+
+    def _record_failed_file(
+        self,
+        failed_hashes: Set[str],
+        failed_filenames: Set[str],
+        hash_to_filename: Dict[str, str],
+        file_hash: Optional[str],
+        filename: Optional[str] = None,
+    ) -> None:
+        """Track failed hashes and filenames in a consistent way."""
+        if isinstance(file_hash, str):
+            failed_hashes.add(file_hash)
+            if filename is None:
+                filename = hash_to_filename.get(file_hash, file_hash)
+        if isinstance(filename, str) and filename:
+            failed_filenames.add(filename)
+
+    def _ensure_executor_available(self):
+        """Raise a RuntimeError if the thread executor is unavailable."""
+        # If shutdown has been requested, treat executor as unavailable
         if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
-            raise RuntimeError(f"Thread executor is shut down, cannot make request to {url}")
+            raise RuntimeError("Thread executor is shut down or unavailable")
 
+    def _get_running_loop_or_raise(self):
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            logger.error("Called without a running event loop")
+            raise RuntimeError("No running event loop found")
+
+    async def async_request(self, method, url, **kwargs):
+        loop = self._get_running_loop_or_raise()
+    
         if "timeout" not in kwargs:
             kwargs["timeout"] = REQUEST_TIMEOUT
 
@@ -256,22 +455,33 @@ class MediaManager:
         if not self.media_folder.exists():
             raise ValueError(f"Media folder not found at: {media_folder}")
 
+    def is_manager_available(self) -> bool:
+        """Check if the media manager is available for operations."""
+        return hasattr(self, 'thread_executor') and not self.thread_executor._shutdown
+    
     async def close(self):
-        if hasattr(self, 'thread_executor'):
-            self.thread_executor.shutdown(wait=True) # Wait for tasks to complete
+        print("MediaManager closing...")
+        # Close requests session early to try to interrupt any blocking network IO
         if hasattr(self, 'session'):
-            self.session.close()
+            try:
+                self.session.close()
+            except Exception:
+                pass
+
+        # Finally, shut down the executor so no new tasks run
+        if hasattr(self, 'thread_executor'):
+            try:
+                # do not wait for threads to finish; they should observe the shutdown event and exit
+                self.thread_executor.shutdown(wait=False)
+            except Exception:
+                pass
     
     async def _calculate_file_hash(self, filepath: Path) -> str:
         """Centralized hash calculation to avoid code duplication."""
+        loop = self._get_running_loop_or_raise()
         try:
-            loop = asyncio.get_running_loop()
+            self._ensure_executor_available()
         except RuntimeError:
-            logger.error("_calculate_file_hash called without a running event loop!")
-            raise RuntimeError("No running event loop found for hash computation")
-
-        # Check if executor is still available
-        if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
             raise MediaHashError(f"Thread executor is shut down, cannot calculate hash for {filepath}")
 
         def calculate_hash():
@@ -433,35 +643,29 @@ class MediaManager:
 
         if not filepath.exists() or not filepath.is_file():
             exc = FileNotFoundError(f"Missing file for upload: {filepath}")
-            setattr(exc, "metadata", {**base_context, "reason": "file_missing"})
-            raise exc
+            self._raise_with_metadata(exc, {**base_context, "reason": "file_missing"})
 
         file_size = filepath.stat().st_size
         base_context["file_size"] = file_size
 
         if file_size > MAX_FILE_SIZE:
             exc = MediaTypeError(f"File exceeds size limit: {file_size} bytes")
-            setattr(exc, "metadata", {**base_context, "reason": "file_too_large"})
-            raise exc
+            self._raise_with_metadata(exc, {**base_context, "reason": "file_too_large"})
 
         if not self.validate_file_basic(filepath):
             exc = MediaTypeError(f"File failed basic validation: {filepath}")
-            setattr(exc, "metadata", {**base_context, "reason": "validation_failed"})
-            raise exc
-
-        await self.rate_limiter.wait_if_needed()
+            self._raise_with_metadata(exc, {**base_context, "reason": "validation_failed"})
         
+        await self.rate_limiter.wait_if_needed()
+
         semaphore = await self._get_semaphore()
         async with semaphore:
             try:
                 file_ext = Path(filepath).suffix.lower()
-                content_type_map = {
-                    '.webp': 'image/webp', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                    '.png': 'image/png', '.gif': 'image/gif', '.svg': 'image/svg+xml',
-                    '.bmp': 'image/bmp', '.tif': 'image/tiff', '.tiff': 'image/tiff',
-                    '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg'
-                }
-                content_type = content_type_map.get(file_ext, mimetypes.guess_type(str(filepath))[0] or "application/octet-stream")
+                content_type = CONTENT_TYPE_MAP.get(
+                    file_ext,
+                    mimetypes.guess_type(str(filepath))[0] or "application/octet-stream",
+                )
 
                 # the fact that we cant use sha256 as default in aws s3 is embarassing
                 if file_hash is None:
@@ -479,7 +683,8 @@ class MediaManager:
 
                 # Check if executor is still available
                 if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
-                    raise MediaUploadError(f"Thread executor is shut down, cannot upload {filepath}")
+                    media_error = MediaUploadError(f"Thread executor is shut down, cannot upload {filepath}")
+                    self._raise_with_metadata(media_error, {**base_context, "reason": "executor_unavailable"})
 
                 # File upload is I/O intensive - use thread pool
                 def do_upload():
@@ -510,58 +715,41 @@ class MediaManager:
                         raise
 
                 try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
+                    loop = self._get_running_loop_or_raise()
+                except RuntimeError as exc:
                     logger.error("upload_file (do_upload) called without a running event loop!")
-                    raise RuntimeError("No running event loop found for file upload")
+                    raise RuntimeError("No running event loop found for file upload") from exc
                 await loop.run_in_executor(self.thread_executor, do_upload)
                 return True
 
-            except requests.HTTPError as e:
-                status_code = getattr(e.response, 'status_code', None)
-                error_text = getattr(e.response, 'text', str(e))
-                logger.error(f"HTTP error {status_code} uploading media ({filepath}): {error_text}")
-                error_context = {
-                    **base_context,
-                    "status_code": status_code,
-                    "response_text": (error_text[:512] if isinstance(error_text, str) else None),
-                }
-                media_error: MediaUploadError
-                # Raise specific errors based on status code
-                if status_code == 403:
-                    media_error = MediaUploadError(f"Permission denied (403): {error_text}")
-                elif status_code == 413:
-                    media_error = MediaTypeError(f"File too large (413): {error_text}")  # type: ignore[assignment]
-                elif status_code == 400:
-                    media_error = MediaUploadError(f"Bad request (400): {error_text}")
-                elif status_code == 401:
-                    media_error = MediaUploadError(f"Upload token rejected (401): {error_text}")
-                elif status_code == 429:
-                    media_error = MediaUploadError(f"Rate limit exceeded (429): Too many requests, will retry with backoff")
-                else:
-                    media_error = MediaUploadError(f"Media upload failed with HTTP {status_code}: {error_text}")
-
-                setattr(media_error, "metadata", error_context)
-                raise media_error from e
             except requests.RequestException as e:
-                logger.error(f"Network error during upload ({filepath}): {str(e)}")
-                error_context = {**base_context, "error": str(e), "error_type": type(e).__name__}
-                media_error = MediaUploadError(f"Network error during upload: {str(e)}")
-                setattr(media_error, "metadata", error_context)
-                raise media_error from e
-            except (IOError, MediaHashError) as e: # Catch errors from MD5 calc or do_upload prep
-                logger.error(f"I/O or Hash error preparing upload for {filepath}: {str(e)}")
-                error_context = {**base_context, "error": str(e), "error_type": type(e).__name__}
-                media_error = MediaUploadError(f"I/O or Hash error: {str(e)}")
-                setattr(media_error, "metadata", error_context)
-                raise media_error from e
+                if isinstance(e, requests.HTTPError):
+                    self._handle_upload_http_error(e, base_context)
+                else:
+                    logger.error(f"Network error during upload ({filepath}): {e}")
+                    self._raise_wrapped_error(
+                        MediaUploadError,
+                        f"Network error during upload: {e}",
+                        base_context,
+                        e,
+                    )
             except Exception as e:
-                 # Catch unexpected errors
-                 logger.exception(f"Unexpected error during upload_file for {filepath}: {e}")
-                 error_context = {**base_context, "error": str(e), "error_type": type(e).__name__}
-                 media_error = MediaUploadError(f"Unexpected upload error: {e}")
-                 setattr(media_error, "metadata", error_context)
-                 raise media_error from e
+                if isinstance(e, (IOError, MediaHashError)):
+                    logger.error(f"I/O or Hash error preparing upload for {filepath}: {e}")
+                    self._raise_wrapped_error(
+                        MediaUploadError,
+                        f"I/O or Hash error: {e}",
+                        base_context,
+                        e,
+                    )
+                else:
+                    logger.exception(f"Unexpected error during upload_file for {filepath}: {e}")
+                    self._raise_wrapped_error(
+                        MediaUploadError,
+                        f"Unexpected upload error: {e}",
+                        base_context,
+                        e,
+                    )
 
 
     @retry(max_tries=3, delay=2, backoff=3)
@@ -582,21 +770,23 @@ class MediaManager:
 
         try:
             # Check if executor is still available
-            if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+            try:
+                self._ensure_executor_available()
+            except RuntimeError:
                 logger.error(f"Thread executor is shut down, cannot download {url}")
                 error = MediaDownloadError(f"Executor unavailable for download: {url}")
-                setattr(error, "metadata", {**base_context, "reason": "executor_unavailable"})
-                raise error
+                self._raise_with_metadata(error, {**base_context, "reason": "executor_unavailable"})
 
             # Download operation is IO bound - use thread pool
             def do_download():
                 downloaded_ok = False
-                try:
+                try:                   
                     with self.session.get(url, stream=True, timeout=REQUEST_TIMEOUT * 2, verify=VERIFY_SSL) as response: # Longer timeout for download, verify SSL
                         response.raise_for_status()
                         with open(temp_destination, "wb") as f:
                             for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-                                f.write(chunk)
+                                if chunk:
+                                    f.write(chunk)
                         downloaded_ok = True # Mark as successful only if fully written
                     return downloaded_ok
                 except requests.exceptions.RequestException as req_exc:
@@ -607,48 +797,37 @@ class MediaManager:
                      raise io_err
 
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
+                loop = self._get_running_loop_or_raise()
+            except RuntimeError as exc:
                  logger.error("download_file called without a running event loop!")
-                 raise RuntimeError("No running event loop found for file download")
+                 raise RuntimeError("No running event loop found for file download") from exc
 
             try:
                 success = await loop.run_in_executor(self.thread_executor, do_download)
             except requests.exceptions.RequestException as req_exc:
-                status_code = None
-                response_text = None
-                response = getattr(req_exc, "response", None)
-                if response is not None:
-                    status_code = getattr(response, "status_code", None)
-                    try:
-                        response_text = response.text
-                    except Exception:
-                        response_text = None
-
-                metadata = {**base_context, "error": str(req_exc), "error_type": type(req_exc).__name__}
-                if status_code is not None:
-                    metadata["status_code"] = status_code
-                    if status_code == 404:
-                        metadata.setdefault("reason", "not_found")
-                if response_text:
-                    metadata["response_text"] = response_text[:512]
-
-                error = MediaDownloadError(f"Network error during download: {req_exc}")
-                setattr(error, "metadata", metadata)
-                raise error from req_exc
-            except IOError as io_err:
-                error = MediaDownloadError(f"IO error during download: {io_err}")
-                setattr(error, "metadata", {**base_context, "error": str(io_err), "error_type": type(io_err).__name__})
-                raise error from io_err
+                self._handle_download_request_exception(req_exc, base_context)
             except Exception as exc:
-                error = MediaDownloadError(f"Unexpected error during download: {exc}")
-                setattr(error, "metadata", {**base_context, "error": str(exc), "error_type": type(exc).__name__})
-                raise error from exc
+                if isinstance(exc, IOError):
+                    logger.error(f"IO error during download: {exc}")
+                    self._raise_wrapped_error(
+                        MediaDownloadError,
+                        f"IO error during download: {exc}",
+                        base_context,
+                        exc,
+                    )
+                else:
+                    logger.error(f"Unexpected error during download: {exc}")
+                    self._raise_wrapped_error(
+                        MediaDownloadError,
+                        f"Unexpected error during download: {exc}",
+                        base_context,
+                        exc,
+                    )
 
             if success and temp_destination.exists():
                 try:
                     # Check if destination already exists (another download might have completed)
-                    if destination.exists() and destination.stat().st_size > 0:
+                    if self._file_exists_with_size(destination):
                         logger.debug(f"Destination {destination} already exists, discarding downloaded temp file")
                         temp_file_renamed = True  # Mark as handled (will skip cleanup)
                         return True
@@ -658,7 +837,7 @@ class MediaManager:
                     temp_file_renamed = True  # Mark as renamed
                 except OSError as rename_err:
                     # Check again if file exists (race condition - another thread created it)
-                    if destination.exists() and destination.stat().st_size > 0:
+                    if self._file_exists_with_size(destination):
                         logger.debug(f"Destination {destination} created by another download during rename, discarding temp file")
                         temp_file_renamed = True  # Mark as handled
                         return True
@@ -667,7 +846,7 @@ class MediaManager:
                         temp_file_renamed = True  # Mark as renamed
                     except OSError as rename_err2:
                         # Final check - maybe another download succeeded
-                        if destination.exists() and destination.stat().st_size > 0:
+                        if self._file_exists_with_size(destination):
                             logger.debug(f"Destination {destination} exists after rename failure, assuming success")
                             temp_file_renamed = True
                             return True
@@ -675,11 +854,10 @@ class MediaManager:
                         return False
                 return True
             else:
-                 # Download failed or temp file doesn't exist
-                 logger.warning(f"Download failed or temp file missing for {url}")
-                 error = MediaDownloadError("Download failed without exception")
-                 setattr(error, "metadata", {**base_context, "reason": "missing_temp_file"})
-                 raise error
+                # Download failed or temp file doesn't exist
+                logger.warning(f"Download failed or temp file missing for {url}")
+                error = MediaDownloadError("Download failed without exception")
+                self._raise_with_metadata(error, {**base_context, "reason": "missing_temp_file"})
 
         except Exception as e:
             logger.error(f"Unexpected error downloading file {url}: {str(e)}")
@@ -688,8 +866,11 @@ class MediaManager:
                     setattr(e, "metadata", {**base_context, "reason": "unclassified"})
                 raise
             download_error = MediaDownloadError(f"Download failed: {e}")
-            setattr(download_error, "metadata", {**base_context, "error": str(e), "error_type": type(e).__name__})
-            raise download_error from e
+            self._raise_with_metadata(
+                download_error,
+                {**base_context, "error": str(e), "error_type": type(e).__name__},
+                cause=e,
+            )
         finally:
             # Clean up partial downloads robustly - only if file wasn't successfully renamed
             if not temp_file_renamed and temp_destination.exists():
@@ -732,26 +913,36 @@ class MediaManager:
                     exc = MediaRateLimitError(f"Rate limit exceeded (429): {text}")  # type: ignore[assignment]
                 else:
                     exc = MediaServerError(f"Server error {status} getting manifest: {text}")
-                setattr(exc, "metadata", {**base_context, "status_code": status, "response_text": text[:512] if isinstance(text, str) else None})
-                raise exc from e
+                context = {
+                    **base_context,
+                    "status_code": status,
+                    "response_text": text[:512] if isinstance(text, str) else None,
+                }
+                self._raise_with_metadata(exc, context, cause=e)
             except (requests.RequestException, ValueError, KeyError) as e: # Added ValueError/KeyError for bad JSON
                 logger.error(f"Error retrieving or parsing manifest data: {str(e)}")
                 exc = MediaServerError(f"Failed to get or parse server response for media manifest: {str(e)}")
-                setattr(exc, "metadata", {
+                context = {
                     "stage": "get_media_manifest",
                     "deck_hash": deck_hash,
                     "filenames_count": len(filenames),
                     "error_type": type(e).__name__,
-                })
-                raise exc from e
+                }
+                self._raise_with_metadata(exc, context, cause=e)
 
-    # --- get_media_manifest_and_download (Keep logic, ensure download_file is robust) ---
     @retry(max_tries=3, delay=2)
     async def get_media_manifest_and_download(self, user_token:str, deck_hash: str, filenames: List[str], progress_callback=None) -> Dict:
+        if not mw.col:
+            return {"success": False, "message": "Anki collection is not available", "downloaded": 0, "skipped": 0, "failed": 0}
+        
         total_files = len(filenames)
         if total_files == 0:
             return {"success": True, "message": "No files to download", "downloaded": 0, "skipped": 0, "failed": 0}
 
+        if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+            print(f"self.thread_executor: {getattr(self, 'thread_executor', None)}, _shutdown: {getattr(self.thread_executor, '_shutdown', 'N/A')}")
+            return {"success": False, "message": "Media manager is unavailable", "downloaded": 0, "skipped": 0, "failed": total_files}
+        
         # Deduplicate filenames to avoid downloading the same file multiple times
         unique_filenames = list(dict.fromkeys(filenames))  # Preserves order while removing duplicates
         duplicates_removed = total_files - len(unique_filenames)
@@ -851,7 +1042,7 @@ class MediaManager:
                 destination = self.media_folder / filename
 
                 # Skip if file already exists and seems valid (basic check)
-                if destination.exists() and destination.stat().st_size > 0:
+                if self._file_exists_with_size(destination):
                     # Could add hash check here if manifest provided hashes
                     total_skipped += 1
                     continue
@@ -864,7 +1055,15 @@ class MediaManager:
                 results = await asyncio.gather(*batch_tasks, return_exceptions=True)
                 for idx, result in enumerate(results):
                     task_filename = files_in_task[idx]
+                                        
                     if isinstance(result, Exception):
+                        # If the exception indicates executor_unavailable (shutdown), abort whole operation
+                        metadata = getattr(result, "metadata", {}) if result is not None else {}
+                        reason = metadata.get("reason") if isinstance(metadata, dict) else None
+                        if reason == "executor_unavailable":
+                            logger.info(f"Executor unavailable during download of {task_filename}; aborting remaining downloads.")
+                            return {"success": False, "message": f"Download aborted due to shutdown", "downloaded": total_downloaded, "skipped": total_skipped, "failed": total_failed + 1}
+
                         logger.error(f"Exception downloading file {task_filename}: {result}")
                         exception_context = {
                             "stage": "download_file_batch",
@@ -872,7 +1071,6 @@ class MediaManager:
                             "filename": task_filename,
                             "download_url": download_batch[idx].get("download_url") if idx < len(download_batch) else None,
                         }
-                        metadata = getattr(result, "metadata", None)
                         if isinstance(metadata, dict):
                             exception_context.update(metadata)
                         capture_media_exception(result, context=exception_context)
@@ -949,24 +1147,24 @@ class MediaManager:
                 text = e.response.text
                 logger.error(f"Check Media Bulk: HTTP error {status}: {text}")
                 exc = MediaServerError(f"Server error {status} checking media: {text}")
-                setattr(exc, "metadata", {
+                context = {
                     "stage": "check_media_bulk",
                     "deck_hash": deck_hash,
                     "bulk_operation_id": bulk_operation_id,
                     "status_code": status,
                     "file_count": len(valid_files_info),
-                })
-                raise exc from e
+                }
+                self._raise_with_metadata(exc, context, cause=e)
             except (requests.RequestException, ValueError, KeyError) as e:
                 logger.error(f"Check Media Bulk: Network or parsing error: {str(e)}")
                 exc = MediaServerError(f"Network or parsing error checking media: {str(e)}")
-                setattr(exc, "metadata", {
+                context = {
                     "stage": "check_media_bulk",
                     "deck_hash": deck_hash,
                     "bulk_operation_id": bulk_operation_id,
                     "error_type": type(e).__name__,
-                })
-                raise exc from e
+                }
+                self._raise_with_metadata(exc, context, cause=e)
 
     async def optimize_media_for_upload(self, file_note_pairs: List[Tuple[str, str]], progress_callback=None) -> Tuple[Dict[str, str], List[Dict], Dict[str, str]]:
         # Ensure media_optimizer is available
@@ -1142,7 +1340,6 @@ class MediaManager:
                 cached_entry = self.optimization_cache.get(cache_key)
                 
                 # Enhanced cache key includes file size for better cache hits
-                enhanced_cache_key = f"{cache_key}:{file_size}:{mtime}"
                 if cached_entry and cached_entry[0] == mtime and len(cached_entry) > 4 and cached_entry[4] == file_size:
                     # Cache hit - use cached result
                     logger.debug(f"Using cached optimization result for {filename}")
@@ -1261,23 +1458,24 @@ class MediaManager:
                     hash_val = entry.get("hash")
                     if isinstance(hash_val, str):
                         check_failed_hashes.add(hash_val)
+                    self._record_failed_file(
+                        failed_hashes_set,
+                        failed_filenames_set,
+                        hash_to_filename,
+                        hash_val,
+                        entry.get("filename"),
+                    )
                 elif isinstance(entry, str):
                     check_failed_hashes.add(entry)
+                    self._record_failed_file(
+                        failed_hashes_set,
+                        failed_filenames_set,
+                        hash_to_filename,
+                        entry,
+                    )
             check_failed_count = len(check_failed_hashes) if check_failed_hashes else len(check_failed_files)
             if check_failed_count:
                 logger.warning(f"{check_failed_count} files failed server-side check: {check_failed_files}")
-                for entry in check_failed_files:
-                    if isinstance(entry, dict):
-                        fn = entry.get("filename") or hash_to_filename.get(entry.get("hash"))
-                        hash_val = entry.get("hash")
-                        if isinstance(hash_val, str):
-                            failed_hashes_set.add(hash_val)
-                        if fn:
-                            failed_filenames_set.add(fn)
-                    elif isinstance(entry, str):
-                        fn = hash_to_filename.get(entry, entry)
-                        failed_filenames_set.add(fn)
-                        failed_hashes_set.add(entry)
             failed_hashes_set.update(check_failed_hashes)
 
             missing_files_to_upload = bulk_check_result.get("missing_files", []) or []
@@ -1298,10 +1496,13 @@ class MediaManager:
                 for f in missing_files_to_upload:  # treat as failed
                     fn = f.get("filename")
                     h = f.get("hash")
-                    if isinstance(h, str):
-                        failed_hashes_set.add(h)
-                    if isinstance(fn, str):
-                        failed_filenames_set.add(fn)
+                    self._record_failed_file(
+                        failed_hashes_set,
+                        failed_filenames_set,
+                        hash_to_filename,
+                        h if isinstance(h, str) else None,
+                        fn if isinstance(fn, str) else None,
+                    )
                 return {"success": False, "status": "no_batch_id", "message": "Server rejected upload batch.", "uploaded": 0, "existing": existing_count, "failed": len(failed_hashes_set), "failed_filenames": sorted(failed_filenames_set)}
         except MediaServerError as e:
             logger.error(f"Server error during media check: {e}")
@@ -1333,6 +1534,7 @@ class MediaManager:
         upload_failed_hashes: set[str] = set()
         num_to_upload = len(missing_files_to_upload)
         upload_batch_size = 10
+        upload_delay = 0.5  # Delay between batches to respect rate limits
         logger.info(f"Starting upload for {num_to_upload} files...")
         for i in range(0, num_to_upload, upload_batch_size):
             batch = missing_files_to_upload[i:i+upload_batch_size]
@@ -1345,15 +1547,24 @@ class MediaManager:
                 if not isinstance(file_hash, str) or not isinstance(upload_url, str):
                     logger.warning(f"Missing hash or upload URL in file info, skipping upload: {file_info}")
                     upload_failed_hashes.add((file_hash or "unknown"))
-                    if isinstance(file_hash, str):
-                        failed_hashes_set.add(file_hash)
+                    self._record_failed_file(
+                        failed_hashes_set,
+                        failed_filenames_set,
+                        hash_to_filename,
+                        file_hash if isinstance(file_hash, str) else None,
+                    )
                     continue
                 filepath_str = file_paths.get(file_hash)
                 if not filepath_str or not Path(filepath_str).exists():
                     logger.error(f"Local file path missing or file not found for hash {file_hash}, skipping upload.")
                     if isinstance(file_hash, str):
                         upload_failed_hashes.add(file_hash)
-                        failed_hashes_set.add(file_hash)
+                        self._record_failed_file(
+                            failed_hashes_set,
+                            failed_filenames_set,
+                            hash_to_filename,
+                            file_hash,
+                        )
                     continue
                 hashes_in_batch.append(file_hash)
                 files_for_tasks.append(file_hash)
@@ -1364,10 +1575,21 @@ class MediaManager:
                 logger.debug(f"Attempting S3 upload sub-batch {i//upload_batch_size + 1}. Hashes: {hashes_in_batch}")
                 try:
                     batch_results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+
+                    # Add delay between batches to avoid overwhelming the server
+                    if i + upload_batch_size < num_to_upload:
+                        await asyncio.sleep(upload_delay)
                     logger.debug(f"Completed S3 upload sub-batch for hashes: {hashes_in_batch}")
                     for idx, result in enumerate(batch_results):
                         current_hash = files_for_tasks[idx]
+
                         if isinstance(result, Exception):
+                            metadata = getattr(result, "metadata", {}) if result is not None else {}
+                            reason = metadata.get("reason") if isinstance(metadata, dict) else None
+                            if reason == "executor_unavailable":
+                                logger.info(f"Executor unavailable during upload of {current_hash}; aborting remaining uploads.")
+                                return {"success": False, "status": "upload_aborted_shutdown", "message": "Upload aborted due to shutdown", "uploaded": len(uploaded_hashes), "existing": existing_count, "failed": len(upload_failed_hashes) + 1, "failed_filenames": sorted(failed_filenames_set)}
+
                             logger.error(f"Failed to upload file {current_hash}: {type(result).__name__}: {result}")
                             exception_context = {
                                 "stage": "upload_media_file",
@@ -1376,12 +1598,16 @@ class MediaManager:
                                 "deck_hash": deck_hash,
                                 "bulk_operation_id": bulk_operation_id,
                             }
-                            metadata = getattr(result, "metadata", None)
                             if isinstance(metadata, dict):
                                 exception_context.update(metadata)
                             capture_media_exception(result, context=exception_context)
                             upload_failed_hashes.add(current_hash)
-                            failed_hashes_set.add(current_hash)
+                            self._record_failed_file(
+                                failed_hashes_set,
+                                failed_filenames_set,
+                                hash_to_filename,
+                                current_hash,
+                            )
                         elif not result:
                             logger.error(f"Upload function returned False for file {current_hash}")
                             capture_media_message(
@@ -1396,7 +1622,12 @@ class MediaManager:
                                 },
                             )
                             upload_failed_hashes.add(current_hash)
-                            failed_hashes_set.add(current_hash)
+                            self._record_failed_file(
+                                failed_hashes_set,
+                                failed_filenames_set,
+                                hash_to_filename,
+                                current_hash,
+                            )
                         else:
                             uploaded_hashes.append(current_hash)
                 except Exception as e:
@@ -1412,7 +1643,12 @@ class MediaManager:
                     )
                     for h in hashes_in_batch:
                         upload_failed_hashes.add(h)
-                        failed_hashes_set.add(h)
+                        self._record_failed_file(
+                            failed_hashes_set,
+                            failed_filenames_set,
+                            hash_to_filename,
+                            h,
+                        )
             if progress_callback:
                 progress_value = 0.3 + (0.6 * min(i + upload_batch_size, num_to_upload) / num_to_upload)
                 progress_callback(progress_value)
@@ -1424,9 +1660,14 @@ class MediaManager:
         total_failed_count = len(failed_hashes_set)
         logger.info(f"Upload phase complete. Succeeded: {final_uploaded_count}, Failed during upload: {final_upload_failed_count}")
         for fh in upload_failed_hashes:
-            fn = hash_to_filename.get(fh)
-            if fn:
-                failed_filenames_set.add(fn)
+            if fh == "unknown":
+                continue
+            self._record_failed_file(
+                failed_hashes_set,
+                failed_filenames_set,
+                hash_to_filename,
+                fh,
+            )
 
         if uploaded_hashes_unique:
             try:
@@ -1460,9 +1701,12 @@ class MediaManager:
                 failed_hashes_set.update(uploaded_hashes_unique)
                 total_failed_count = len(failed_hashes_set)
                 for fh in uploaded_hashes:
-                    fn = hash_to_filename.get(fh)
-                    if fn:
-                        failed_filenames_set.add(fn)
+                    self._record_failed_file(
+                        failed_hashes_set,
+                        failed_filenames_set,
+                        hash_to_filename,
+                        fh,
+                    )
                 hashes_sample = uploaded_hashes[:50]
                 capture_media_exception(
                     e,
@@ -1492,9 +1736,12 @@ class MediaManager:
                 failed_hashes_set.update(uploaded_hashes_unique)
                 total_failed_count = len(failed_hashes_set)
                 for fh in uploaded_hashes:
-                    fn = hash_to_filename.get(fh)
-                    if fn:
-                        failed_filenames_set.add(fn)
+                    self._record_failed_file(
+                        failed_hashes_set,
+                        failed_filenames_set,
+                        hash_to_filename,
+                        fh,
+                    )
                 return {"success": False, "status": "confirmation_failed_unexpected", "message": f"Unexpected error confirming upload: {e}", "uploaded": 0, "existing": existing_count, "failed": total_failed_count, "error": str(e), "failed_filenames": sorted(failed_filenames_set)}
         else:
             if progress_callback:
@@ -1541,25 +1788,25 @@ class MediaManager:
                 text = e.response.text
                 logger.error(f"Confirm Media Bulk: HTTP error {status}: {text}")
                 exc = MediaServerError(f"Server error {status} confirming upload: {text}")
-                setattr(exc, "metadata", {
+                context = {
                     "stage": "confirm_media_bulk_upload",
                     "batch_id": batch_id,
                     "bulk_operation_id": bulk_operation_id,
                     "status_code": status,
                     "confirmed_count": len(confirmed_files),
-                })
-                raise exc from e
+                }
+                self._raise_with_metadata(exc, context, cause=e)
             except requests.RequestException as e:
                 logger.error(f"Confirm Media Bulk: Network error: {str(e)}")
                 exc = MediaServerError(f"Network error confirming upload: {str(e)}")
-                setattr(exc, "metadata", {
+                context = {
                     "stage": "confirm_media_bulk_upload",
                     "batch_id": batch_id,
                     "bulk_operation_id": bulk_operation_id,
                     "error_type": type(e).__name__,
                     "confirmed_count": len(confirmed_files),
-                })
-                raise exc from e
+                }
+                self._raise_with_metadata(exc, context, cause=e)
             except Exception as e:
                  logger.exception(f"Unexpected error during confirm_media_bulk_upload: {e}")
                  capture_media_exception(

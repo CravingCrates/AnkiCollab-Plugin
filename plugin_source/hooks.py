@@ -11,7 +11,9 @@ from aqt.utils import askUser, showInfo
 from aqt.operations import QueryOp
 
 import json
-from typing import Sequence, List, Tuple, Optional # Import List
+from typing import Sequence, List, Tuple, Optional
+
+from .media_manager import MediaManager # Import List
 
 from .export_manager import *
 from .import_manager import *
@@ -491,10 +493,36 @@ def patch_image_occlusion_enhanced():
 def onProfileLoaded():
     """Called when the Anki profile finishes loading."""
     from . import main
+
+    if not main.media_manager.is_manager_available(): # re-init after profile switching
+        main.media_manager = MediaManager(
+            api_base_url=API_BASE_URL,
+            media_folder=""
+        )
     main.media_manager.set_media_folder(mw.col.media.dir())
+    
     autoUpdate()
     patch_successful = patch_image_occlusion_enhanced()
     logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
+
+def onProfileWillClose():
+    """Called when the Anki profile is about to close."""
+    import asyncio
+    from . import main
+    
+    # Create a task to close the media manager
+    async def close_media_manager():
+        await main.media_manager.close()
+    
+    # Run the close operation
+    try:
+        # Try to get the current event loop
+        loop = asyncio.get_running_loop()
+        # If we're in an async context, create a task
+        loop.create_task(close_media_manager())
+    except RuntimeError:
+        # No running loop, run synchronously
+        asyncio.run(close_media_manager())
 
 def update_hooks_for_login_state(logged_in: bool):
     #placeholder for future use
@@ -504,6 +532,7 @@ def update_hooks_for_login_state(logged_in: bool):
 def hooks_init():
     """Registers all hooks. Internal checks within callbacks manage behavior."""
     gui_hooks.profile_did_open.append(onProfileLoaded)
+    gui_hooks.profile_will_close.append(onProfileWillClose)
 
     # Add Cards related
     gui_hooks.add_cards_did_init.append(init_add_card)
