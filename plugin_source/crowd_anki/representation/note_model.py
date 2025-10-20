@@ -71,7 +71,7 @@ class NoteModel(JsonSerializableAnkiDict):
         Returns:
             Tuple[Optional[NotetypeDict], Optional[List[int]]]: (note_type, field_mapping)
             - note_type: The updated notetype dictionary if changes were made, None otherwise
-            - field_mapping: List mapping new field indices to old field indices if fields changed
+            - field_mapping: List mapping new field indices to old field indices if fields changed or 1:1 mapping 
         """
         try:
             note_type_name = self.anki_dict.get("name", "").lower()
@@ -81,14 +81,18 @@ class NoteModel(JsonSerializableAnkiDict):
             changes_needed = self._detect_changes_needed(existing_model_dict, should_preserve_templates)
             
             if not changes_needed:
-                return None, None
+                return None, list(range(len(existing_model_dict["flds"])))
             
             # Capture field mapping BEFORE updating the notetype
+            trivial_mapping = False
             field_mapping = None
             if self._fields_need_update(existing_model_dict["flds"], self.anki_dict["flds"]):
                 # Build the field mapping from old to new structure
                 field_mapping = self._build_intelligent_field_map(existing_model_dict, self.anki_dict)
                 logger.info(f"Generated field mapping for {existing_model_dict['name']}: {field_mapping}")
+            else:
+                trivial_mapping = True
+                logger.info(f"No field changes detected for {existing_model_dict['name']}, using trivial mapping")
             
             # Create updated notetype dict
             updated_notetype = copy.deepcopy(existing_model_dict)
@@ -122,6 +126,9 @@ class NoteModel(JsonSerializableAnkiDict):
             
             self.anki_dict["id"] = updated_notetype["id"]
             
+            if trivial_mapping and not field_mapping:
+                field_mapping = list(range(len(updated_notetype["flds"])))
+                
             logger.info(f"Successfully updated notetype {updated_notetype['name']} (ID: {updated_notetype['id']})")
             return updated_notetype, field_mapping
             
