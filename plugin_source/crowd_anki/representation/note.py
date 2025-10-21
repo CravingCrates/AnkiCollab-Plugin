@@ -84,9 +84,7 @@ class Note(JsonSerializableAnkiObject):
     @staticmethod
     def _move_notes_to_decks(collection, note_to_deck_map, import_config):
         """Move NEW notes from temp deck to their correct decks (updated notes handled separately)"""
-        if import_config.ignore_deck_movement:
-            return
-            
+
         # Only move notes that are currently in temp decks (these are new notes)
         temp_deck_pattern = "_ankicollab_import_"
         temp_deck_ids = []
