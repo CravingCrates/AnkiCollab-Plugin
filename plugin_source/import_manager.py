@@ -628,6 +628,7 @@ def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
         use_media=False,
         ignore_deck_movement=get_deck_movement_status(),
         suspend_new_cards=get_card_suspension_status(),
+        keep_empty_subdecks=get_keep_empty_subdeck_status(),
         home_deck=home_deck or "",  # Provide empty string as default
         new_notes_home_deck=new_notes_home_deck or "",  # Provide empty string as default
         deck_hash=deck_hash,
@@ -720,6 +721,14 @@ def get_deck_movement_status():
     val = True
     if strings_data is not None and strings_data["settings"] is not None:
         val = bool(strings_data["settings"]["auto_move_cards"])
+    return val
+
+
+def get_keep_empty_subdeck_status():
+    strings_data = mw.addonManager.getConfig(__name__)
+    val = False
+    if strings_data is not None and strings_data.get("settings") is not None:
+        val = bool(strings_data["settings"].get("keep_empty_subdecks", False))
     return val
 
 

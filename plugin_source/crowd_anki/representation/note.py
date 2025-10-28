@@ -23,7 +23,6 @@ from ..config.config_settings import ConfigSettings
 from ..utils.constants import UUID_FIELD_NAME
 
 logger = logging.getLogger("ankicollab")
-logging.basicConfig(level=logging.DEBUG)
 
 #from .benchmarking import benchmark, BenchmarkStats
 # call with @benchmark before the method you want to benchmark, evaluate on finish with BenchmarkStats.print_stats()

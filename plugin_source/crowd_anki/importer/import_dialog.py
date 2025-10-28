@@ -1,7 +1,7 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from aqt.qt import QDialog, QListWidgetItem, Qt, QFont, QSize
 
@@ -14,7 +14,7 @@ from ..utils.utils import string_cs_to_list
 @dataclass
 class ConfigEntry:
     config_name: str
-    default_value: any
+    default_value: Any
 
 
 @dataclass
@@ -42,6 +42,7 @@ class ImportConfig(PersonalFieldsHolder):
 
     ignore_deck_movement: bool    
     suspend_new_cards: bool
+    keep_empty_subdecks: bool
     
     home_deck: Optional[str] = None
     deck_hash: Optional[str] = None

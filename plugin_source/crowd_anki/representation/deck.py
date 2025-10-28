@@ -39,6 +39,8 @@ from anki.notes import Note as AnkiNote
 from aqt import mw
 from anki.errors import NotFoundError
 
+from anki.utils import point_version
+
 from ...var_defs import API_BASE_URL
 
 CHUNK_SIZE = 1000
@@ -97,6 +99,7 @@ class Deck(JsonSerializableAnkiDict):
         self.children = []
         self.metadata = None
         self.root_deck_id = None
+        self.keep_empty_subdecks = False
         
         # Store field mappings for intelligent note import
         self._field_mappings = {}  # notetype_uuid -> field_mapping
@@ -398,9 +401,12 @@ class Deck(JsonSerializableAnkiDict):
             op=lambda _: download_media_operation(),
             success=on_download_complete
         )
-        
+
+        if point_version() >= 231000:
+            op.without_collection()
+
         # Run without collection access to avoid blocking
-        op.without_collection().run_in_background()
+        op.run_in_background()
     
     def on_success_wrapper(self, result):
         """Wrapper for on_success that unpacks the tuple result"""
@@ -469,7 +475,7 @@ class Deck(JsonSerializableAnkiDict):
             silent_clear_unused_tags()
             silent_clear_empty_cards()
         
-        if self.root_deck_id:            
+        if self.root_deck_id and not self.keep_empty_subdecks:
             self.delete_empty_subdecks()
             
         # Show completion at 100%
@@ -1223,6 +1229,7 @@ class Deck(JsonSerializableAnkiDict):
             raise ValueError("Import config is required")
         if not self.metadata:
             raise ValueError("Deck metadata is required")
+        self.keep_empty_subdecks = getattr(import_config, "keep_empty_subdecks", False)
         
         # Track temp deck for guaranteed cleanup
         temp_deck_id = None

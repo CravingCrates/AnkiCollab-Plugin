@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 
 import sentry_sdk
 
-logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 # Anki

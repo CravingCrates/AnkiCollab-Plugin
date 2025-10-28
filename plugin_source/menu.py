@@ -39,6 +39,7 @@ from .hooks import async_update, update_hooks_for_login_state
 from .dialogs import LoginDialog
 from .auth_manager import auth_manager
 from .sentry_integration import init_sentry
+from anki.utils import point_version
 
 collab_menu = QMenu('AnkiCollab', mw)
 links_menu = QMenu('Links', mw)
@@ -64,6 +65,9 @@ def force_logout(with_dialog = True):
     mw.reset()
 
 def delete_selected_rows(table, dialog):
+    if table.selectedIndexes() == []:
+        showInfo("Please select at least one subscription to delete.")
+        return
     dialog.accept()
     strings_data = mw.addonManager.getConfig(__name__)
     selected_rows = sorted(set(index.row() for index in table.selectedIndexes()), reverse=True)
@@ -73,11 +77,15 @@ def delete_selected_rows(table, dialog):
         if table.item(row, 0) is not None:
             deck_hash = table.item(row, 0).text()
             logger.debug(f"found: {deck_hash}")
-            QueryOp(
+            op = QueryOp(
                 parent=mw,
                 op=lambda col: unsubscribe_from_deck(deck_hash),
                 success=lambda result: None
-            ).without_collection().run_in_background()
+            )
+            if point_version() >= 231000:
+                op = op.without_collection()
+            op.run_in_background()
+            
             if deck_hash in strings_data:
                 logger.debug(f"Unsubscribing from deck: {deck_hash}")
                 strings_data.pop(deck_hash)
@@ -240,10 +248,23 @@ def on_edit_list():
 
     layout.addWidget(table)
 
-    # Add new subscription section
+    # Add new subscription section    
     add_section = QGroupBox("Add New Subscription")
-    add_section.setStyleSheet("QGroupBox { font-weight: bold; margin: 5px 0; }")
+    add_section.setStyleSheet("""
+        QGroupBox { 
+            font-weight: bold; 
+            margin-top: 15px;
+            padding-top: 15px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            padding: 0 5px;
+            margin-top: 0px;
+        }
+    """)
     add_layout = QVBoxLayout(add_section)
+    add_layout.setContentsMargins(10, 10, 10, 10)  # Add some internal padding
     
     add_input_layout = QHBoxLayout()
     line_edit = QLineEdit()
@@ -302,6 +323,12 @@ def edit_subscription_details(deck_hash, parent_dialog):
     dialog.setMinimumSize(500, 400)
     layout = QVBoxLayout()
     dialog.setLayout(layout)
+
+    # Guard against missing collection to avoid crashes on startup
+    if not mw.col:
+        showInfo("Anki collection is not available. Please try again.")
+        dialog.deleteLater()
+        return
 
     # Header
     header_label = QLabel(f"Subscription Settings")
@@ -1052,6 +1079,9 @@ def show_global_settings_dialog(parent_dialog):
     move_cards_cb = QCheckBox("Do not move Cards automatically")
     move_cards_cb.setChecked(bool(settings.get("auto_move_cards", False)))
     move_cards_cb.setToolTip("Prevent the add-on from automatically moving cards between decks or positions when syncing cloud changes.")
+    keep_empty_subdecks_cb = QCheckBox("Keep empty subdecks")
+    keep_empty_subdecks_cb.setChecked(bool(settings.get("keep_empty_subdecks", False)))
+    keep_empty_subdecks_cb.setToolTip("Skip cleanup of empty subdecks after imports. Enable if you rely on placeholder decks.")
     auto_approve_cb = QCheckBox("Auto-approve changes (maintainer only)")
     auto_approve_cb.setChecked(bool(auth_manager.get_auto_approve()))
     auto_approve_cb.setToolTip("Automatically approve outgoing changes for your decks. Only works if you are a maintainer.")
@@ -1062,6 +1092,7 @@ def show_global_settings_dialog(parent_dialog):
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
     global_layout.addWidget(move_cards_cb)
+    global_layout.addWidget(keep_empty_subdecks_cb)
     global_layout.addWidget(auto_approve_cb)
     
     # Add to group
@@ -1086,6 +1117,7 @@ def show_global_settings_dialog(parent_dialog):
         settings["pull_on_startup"] = pull_on_startup_cb.isChecked()
         settings["suspend_new_cards"] = suspend_new_cards_cb.isChecked()
         settings["auto_move_cards"] = move_cards_cb.isChecked()
+        settings["keep_empty_subdecks"] = keep_empty_subdecks_cb.isChecked()
         settings["error_reporting_enabled"] = error_reporting_cb.isChecked()
         mw.addonManager.writeConfig(__name__, strings_data)
         auth_manager.set_auto_approve(auto_approve_cb.isChecked())
@@ -1163,6 +1195,7 @@ def store_default_config():
         "pull_on_startup": False,
         "suspend_new_cards": False,
         "auto_move_cards": False, # Note: Action text is "Do not move", so False means "Do move"
+    "keep_empty_subdecks": False,
         "rated_addon": False,
         "last_ratepls": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         "pull_counter": 0,
