@@ -14,7 +14,8 @@ from aqt import mw
 
 from .var_defs import API_BASE_URL
 
-logger = logging.getLogger("ankicollab")
+from .utils import get_logger
+logger = get_logger("ankicollab.media_optimizer")
 
 from .main import media_manager
 

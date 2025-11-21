@@ -10,7 +10,8 @@ from urllib.parse import urlparse
 
 import sentry_sdk
 
-LOGGER = logging.getLogger(__name__)
+from .utils import get_logger
+LOGGER = get_logger("ankicollab.sentry")
 
 # Anki
 try:

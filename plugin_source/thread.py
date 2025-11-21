@@ -7,8 +7,8 @@ import aqt
 import anki
 from aqt import mw
 
-
-logger = logging.getLogger("ankicollab")
+from .utils import get_logger
+logger = get_logger("ankicollab.thread")
 
 def thread_exception_handler(args):
     """Handle uncaught exceptions in threads"""

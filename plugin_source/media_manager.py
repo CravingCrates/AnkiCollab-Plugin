@@ -1210,8 +1210,8 @@ class MediaManager:
                 continue
 
             # Reject files exceeding size limit early
-            if file_size > MAX_FILE_SIZE:
-                logger.warning(f"File exceeds size limit ({MAX_FILE_SIZE} bytes), skipping: {filename} ({file_size} bytes)")
+            if file_size > MAX_FILE_SIZE * 5:
+                logger.warning(f"File exceeds size limit ({MAX_FILE_SIZE * 5} bytes), skipping: {filename} ({file_size} bytes)")
                 continue
 
             # Categorize by type - all files get filename sanitization

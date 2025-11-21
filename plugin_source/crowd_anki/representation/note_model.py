@@ -8,8 +8,9 @@ from anki.models import NotetypeDict, NotetypeId
 from .json_serializable import JsonSerializableAnkiDict
 from ..utils import utils
 from ..utils.uuid import UuidFetcher
+from ...utils import get_logger
 
-logger = logging.getLogger("ankicollab")
+logger = get_logger("ankicollab.note_model")
 
 
 class NoteModel(JsonSerializableAnkiDict):

@@ -22,7 +22,9 @@ from .note_model import NoteModel
 from ..config.config_settings import ConfigSettings
 from ..utils.constants import UUID_FIELD_NAME
 
-logger = logging.getLogger("ankicollab")
+from ...utils import get_logger
+
+logger = get_logger("ankicollab.note")
 
 #from .benchmarking import benchmark, BenchmarkStats
 # call with @benchmark before the method you want to benchmark, evaluate on finish with BenchmarkStats.print_stats()
@@ -101,13 +103,13 @@ class Note(JsonSerializableAnkiObject):
         if not temp_deck_ids:
             return
             
-        # Batch all operations by target deck for maximum efficiency
         deck_operations = defaultdict(list)  # deck_id -> [card_ids]
         
-        # Get all note IDs in one query for better performance
         note_uuids = list(note_to_deck_map.keys())
         if not note_uuids:
             return
+        
+        deck_name_to_id_cache = {}
             
         # Batch fetch all note and card info for notes currently in temp decks
         for i in range(0, len(note_uuids), CHUNK_SIZE):
@@ -129,7 +131,11 @@ class Note(JsonSerializableAnkiObject):
                 for note_uuid, note_id, card_id, current_deck_id, odid in note_card_data:
                     if note_uuid in note_to_deck_map:
                         target_deck_name = note_to_deck_map[note_uuid]
-                        target_deck_id = collection.decks.id(target_deck_name)
+                        
+                        # Cache deck ID lookup
+                        if target_deck_name not in deck_name_to_id_cache:
+                            deck_name_to_id_cache[target_deck_name] = collection.decks.id(target_deck_name)
+                        target_deck_id = deck_name_to_id_cache[target_deck_name]
                         
                         # Move all cards from temp deck to target deck
                         # (New cards don't need the odid check since they're in temp deck)
@@ -139,10 +145,8 @@ class Note(JsonSerializableAnkiObject):
                 logger.warning(f"Error fetching cards for note chunk: {e}")
                 continue
         
-        # Execute all deck movements in large batches
         for deck_id, all_card_ids in deck_operations.items():
             try:
-                # Move cards in chunks for memory efficiency
                 for i in range(0, len(all_card_ids), CHUNK_SIZE):
                     chunk = all_card_ids[i:i + CHUNK_SIZE]
                     collection.set_deck(chunk, deck_id)
@@ -179,52 +183,66 @@ class Note(JsonSerializableAnkiObject):
         
         # Then handle deck movement if not ignored
         if not import_config.ignore_deck_movement:
-            cards_to_move = []
+            deck_groups = defaultdict(list)  # target_deck_id -> [card_ids]
+            
+            # Collect all card IDs we need to check
+            all_card_ids = []
+            card_to_note_uuid = {}  # card_id -> note_uuid
             
             for note in update_notes:
                 note_uuid = note.get_uuid()
                 if note_uuid not in note_to_deck_map:
                     continue
-                    
-                target_deck_name = note_to_deck_map[note_uuid]
-                target_deck_id = collection.decks.id(target_deck_name)
                 
                 card_ids = note.anki_object.card_ids()
-                
-                # Only move cards that:
-                # 1. Are not already in the target deck
-                # 2. Have odid=0 (not in a filtered deck)
+                all_card_ids.extend(card_ids)
                 for card_id in card_ids:
-                    try:
-                        card = collection.get_card(card_id)
-                        if card.did != target_deck_id and card.odid == 0:
-                            cards_to_move.append(card_id)
-                    except Exception as e:
-                        logger.warning(f"Error checking card {card_id}: {e}")
-                        continue
+                    card_to_note_uuid[card_id] = note_uuid
             
-            # Move cards in batches
-            if cards_to_move:
-                for i in range(0, len(cards_to_move), CHUNK_SIZE):
-                    chunk = cards_to_move[i:i + CHUNK_SIZE]
-                    # Group by target deck to minimize API calls
-                    deck_groups = defaultdict(list)
-                    for card_id in chunk:
-                        # Find the target deck for this card
-                        card = collection.get_card(card_id)
-                        note = collection.get_note(card.nid)
-                        note_uuid = note.guid
-                        if note_uuid in note_to_deck_map:
-                            target_deck_name = note_to_deck_map[note_uuid]
-                            target_deck_id = collection.decks.id(target_deck_name)
-                            deck_groups[target_deck_id].append(card_id)
+            if not all_card_ids:
+                return
+            
+            deck_name_to_id_cache = {}
+            
+            for i in range(0, len(all_card_ids), CHUNK_SIZE):
+                chunk = all_card_ids[i:i + CHUNK_SIZE]
+                placeholders = ','.join('?' * len(chunk))
+                
+                try:
+                    # Get card deck info in a single query
+                    card_data = collection.db.all(
+                        f"SELECT id, did, odid FROM cards WHERE id IN ({placeholders})",
+                        *chunk
+                    )
                     
-                    # Move cards grouped by deck
-                    for deck_id, card_ids_for_deck in deck_groups.items():
-                        try:
-                            collection.set_deck(card_ids_for_deck, deck_id)
-                        except Exception as e:
-                            logger.warning(f"Error moving cards to deck {deck_id}: {e}")
+                    for card_id, current_deck_id, odid in card_data:
+                        note_uuid = card_to_note_uuid.get(card_id)
+                        if not note_uuid or note_uuid not in note_to_deck_map:
+                            continue
+                        
+                        target_deck_name = note_to_deck_map[note_uuid]
+                        
+                        # Cache deck ID lookup
+                        if target_deck_name not in deck_name_to_id_cache:
+                            deck_name_to_id_cache[target_deck_name] = collection.decks.id(target_deck_name)
+                        target_deck_id = deck_name_to_id_cache[target_deck_name]
+                        
+                        # Only move if not already in target and not in filtered deck
+                        if current_deck_id != target_deck_id and odid == 0:
+                            deck_groups[target_deck_id].append(card_id)
+                            
+                except Exception as e:
+                    logger.warning(f"Error fetching card data for chunk: {e}")
+                    continue
+            
+            # Move cards grouped by deck
+            for deck_id, card_ids_for_deck in deck_groups.items():
+                try:
+                    for i in range(0, len(card_ids_for_deck), CHUNK_SIZE):
+                        chunk = card_ids_for_deck[i:i + CHUNK_SIZE]
+                        collection.set_deck(chunk, deck_id)
+                except Exception as e:
+                    logger.warning(f"Error moving cards to deck {deck_id}: {e}")
         
     @staticmethod
     def bulk_add_notes(collection, notes, deck_id, import_config):
@@ -271,7 +289,6 @@ class Note(JsonSerializableAnkiObject):
         }
         
         # Get protected fields set by maintainer (indices in NEW structure)
-        # BUGFIX: Only check fields that exist in the note model definition
         max_fields = min(len(self.anki_object_dict["fields"]), len(note_model.anki_dict['flds']))
         
         # use note_model original_name if it exists, otherwise use note_model name
@@ -282,11 +299,8 @@ class Note(JsonSerializableAnkiObject):
                                             note_model.anki_dict['flds'][num]['name'])
         ]
         
-        # Step 1: The anki_object_dict["fields"] already contains the NEW remote content
-        # We don't need to remap it - it's already in the correct new structure
-        # We just need to extend it for new fields that might be missing
         logger.debug("Handling import config changes for note")
-        # Step 2: Add local-only fields to anki_object_dict (user's custom fields at the bottom)
+        # Add local-only fields to anki_object_dict (user's custom fields at the bottom)
         if (field_mapping and self.anki_object and hasattr(self.anki_object, 'fields') and 
             len(self.anki_object.fields) > len(self.anki_object_dict["fields"])):
             start_index = len(self.anki_object_dict["fields"])
@@ -315,7 +329,7 @@ class Note(JsonSerializableAnkiObject):
                 self.anki_object_dict["fields"].append("")
                 
         logger.debug(f"Local fields processed - final count: {len(self.anki_object_dict['fields'])}")
-        # Step 3: Override protected fields with OLD content (maintainer wants to preserve old values)
+        # Override protected fields with OLD content (maintainer wants to preserve old values)
         # This overrides the NEW remote content for specific fields the maintainer marked as protected
         if field_mapping and protected_fields and self.anki_object and hasattr(self.anki_object, 'fields'):
             for new_field_idx in protected_fields:

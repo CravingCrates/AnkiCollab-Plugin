@@ -1792,16 +1792,18 @@ class Deck(JsonSerializableAnkiDict):
             else:
                 logger.info(f"Restoring original creation timestamps for {len(safe_notes)} notes ({len(conflicted_notes)} skipped for safety)")
                 
-                # Process safe notes in chunks for UPDATE statements too
                 for i in range(0, len(safe_notes), SQL_VARIABLE_LIMIT):
                     chunk_notes = safe_notes[i:i + SQL_VARIABLE_LIMIT]
                     
-                    case_conditions = " ".join(
-                        f"WHEN {note.anki_object.id} THEN {note._original_id}"
-                        for note in chunk_notes
-                    )
+                    case_parts = []
+                    current_ids = []
                     
-                    current_anki_ids = ", ".join(str(note.anki_object.id) for note in chunk_notes)
+                    for note in chunk_notes:
+                        case_parts.append(f"WHEN {note.anki_object.id} THEN {note._original_id}")
+                        current_ids.append(str(note.anki_object.id))
+                    
+                    case_conditions = " ".join(case_parts)
+                    current_anki_ids = ", ".join(current_ids)
                     
                     collection.db.execute(
                         f"UPDATE notes SET id = CASE id {case_conditions} END WHERE id IN ({current_anki_ids});"

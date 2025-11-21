@@ -351,7 +351,7 @@ def init_editor_card(buttons: List[str], editor):
     b = editor.addButton(
         None, # icon_path
         "AnkiCollab",
-        lambda editor=editor: suggest_notes([editor.note.id], 0, editor=editor),
+        lambda editor=editor: suggest_notes([editor.note.id], 2, editor=editor),
         tip="Suggest Changes (AnkiCollab)",
         keys=None, # shortcut
         disables=False # disables automatically when no note is selected
