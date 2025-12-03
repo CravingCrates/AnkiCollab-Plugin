@@ -94,6 +94,34 @@ def get_deck_hash_from_did(did):
     return deck_hash
 
 
+def get_deck_hash_from_card(card) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Get the deck hash for a card, handling filtered decks via odid.
+    
+    Returns:
+        Tuple of (deck_hash, error_message).
+        If successful, deck_hash is set and error_message is None.
+        If failed, deck_hash is None and error_message explains the issue.
+    """
+    # If card is in a filtered deck, odid contains the original deck id
+    if card.odid and card.odid != 0:
+        did = card.odid
+    else:
+        did = card.did
+    
+    # Check if the resolved deck is itself a filtered deck (edge case: odid=0 in filtered deck)
+    deck_obj = mw.col.decks.get(did, default=False)
+    if deck_obj and deck_obj.get('dyn', False):
+        # Card is in a filtered deck with no valid original deck
+        return None, "This card is in a filtered deck with no valid original deck. Cannot suggest changes."
+    
+    deck_hash = get_deck_hash_from_did(did)
+    if deck_hash is None:
+        return None, "Cannot find the Cloud Deck for this card. Ensure the parent deck is subscribed."
+    
+    return deck_hash, None
+
+
 def get_did_from_hash(given_deck_hash):
     decks = DeckManager()
     details = decks.get_by_hash(given_deck_hash)

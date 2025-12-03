@@ -281,7 +281,7 @@ class MediaManager:
         self.session.verify = VERIFY_SSL
 
         self.semaphore: Optional[asyncio.Semaphore] = None
-        self._semaphore_lock = AsyncLock() # Use asyncio's Lock
+        self._semaphore_lock: Optional[asyncio.Lock] = None
         self._semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
         
         cpu_count = os.cpu_count() or 2
@@ -300,14 +300,20 @@ class MediaManager:
             logger.error("_get_semaphore called without a running event loop!")
             raise RuntimeError("Cannot get semaphore without a running event loop")
 
-        # Check if semaphore is None OR if it belongs to a different loop
-        if self.semaphore is None or self._semaphore_loop is not current_loop:
+        # Ensure lock exists and is bound to the current loop
+        if self._semaphore_lock is None or self._semaphore_loop is not current_loop:
+            self._semaphore_lock = asyncio.Lock()
+            self._semaphore_loop = current_loop
+            self.semaphore = None
+
+        # Check if semaphore is None (it will be if we just reset the loop)
+        if self.semaphore is None:
             async with self._semaphore_lock:
                 # Double-check after acquiring lock
-                if self.semaphore is None or self._semaphore_loop is not current_loop:
+                if self.semaphore is None:
                     logger.debug(f"Initializing asyncio.Semaphore for loop {id(current_loop)}")
                     self.semaphore = asyncio.Semaphore(5)
-                    self._semaphore_loop = current_loop # Store the loop it's associated with
+                    # self._semaphore_loop is already set
         return cast(asyncio.Semaphore, self.semaphore)
 
     @staticmethod
@@ -411,7 +417,7 @@ class MediaManager:
     def _ensure_executor_available(self):
         """Raise a RuntimeError if the thread executor is unavailable."""
         # If shutdown has been requested, treat executor as unavailable
-        if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+        if not hasattr(self, 'thread_executor') or getattr(self.thread_executor, '_shutdown', False):
             raise RuntimeError("Thread executor is shut down or unavailable")
 
     def _get_running_loop_or_raise(self):
@@ -457,7 +463,9 @@ class MediaManager:
 
     def is_manager_available(self) -> bool:
         """Check if the media manager is available for operations."""
-        return hasattr(self, 'thread_executor') and not self.thread_executor._shutdown
+        if not hasattr(self, 'thread_executor'):
+            return False
+        return not getattr(self.thread_executor, '_shutdown', False)
     
     async def close(self):
         print("MediaManager closing...")
@@ -582,7 +590,8 @@ class MediaManager:
                         logger.warning(f"Invalid JPEG signature for file: {filepath}")
                         return False
                 elif ext == '.png':
-                    if len(header) < 8 or not header.startswith(b'\x89PNG\r\n\x1A\n'):
+                    # PNG signature: 89 50 4E 47 0D 0A 1A 0A (also covers APNG)
+                    if len(header) < 8 or not header.startswith(b'\x89PNG\r\n\x1a\n'):
                         logger.warning(f"Invalid PNG signature for file: {filepath}")
                         return False
                 elif ext == '.gif':
@@ -594,33 +603,28 @@ class MediaManager:
                         logger.warning(f"Invalid WebP signature for file: {filepath}")
                         return False
                 elif ext == '.svg':
-                    text_header = header.decode('utf-8', errors='ignore').lower()
-                    if '<svg' not in text_header:
-                        logger.warning(f"Invalid SVG content for file: {filepath}")
+                    # SVG validation: handle BOM, whitespace, and various XML prologs
+                    # Match server-side behavior for consistency
+                    if not self._is_valid_svg_header(header, filepath):
                         return False
                 elif ext == '.bmp':
                     if len(header) < 2 or not header.startswith(b'BM'):
                         logger.warning(f"Invalid BMP signature for file: {filepath}")
                         return False
                 elif ext in ['.tif', '.tiff']:
-                    if len(header) < 4 or not (header.startswith(b'II*\x00') or header.startswith(b'MM\x00*')):
+                    # Standard TIFF and BigTIFF signatures (little-endian and big-endian)
+                    valid_tiff_sigs = (
+                        b'II*\x00',  # TIFF little-endian
+                        b'MM\x00*',  # TIFF big-endian
+                        b'II+\x00',  # BigTIFF little-endian
+                        b'MM\x00+',  # BigTIFF big-endian
+                    )
+                    if len(header) < 4 or not any(header.startswith(sig) for sig in valid_tiff_sigs):
                         logger.warning(f"Invalid TIFF signature for file: {filepath}")
                         return False
                 elif ext == '.mp3':
-                    # MP3 files can have ID3 tags, padding, or start directly with frame sync
-                    # Search for valid MP3 frame sync (0xFF followed by 0xE0-0xFF) within header
-                    has_valid_mp3_marker = False
-                    if header.startswith(b'ID3'):
-                        has_valid_mp3_marker = True
-                    else:
-                        # Search for frame sync pattern in the header
-                        for i in range(len(header) - 1):
-                            if header[i] == 0xFF and (header[i + 1] & 0xE0) == 0xE0:
-                                has_valid_mp3_marker = True
-                                break
-                    
-                    if not has_valid_mp3_marker:
-                        logger.warning(f"Invalid MP3 signature for file: {filepath}")
+                    # MP3 validation: ID3 tag or valid frame sync with full header validation
+                    if not self._is_valid_mp3_header(header, filepath):
                         return False
                 elif ext == '.ogg':
                     if len(header) < 4 or not header.startswith(b'OggS'):
@@ -630,6 +634,100 @@ class MediaManager:
         except Exception as e:
             logger.error(f"Error validating file {filepath}: {str(e)}")
             return False
+
+    def _is_valid_svg_header(self, header: bytes, filepath: Path) -> bool:
+        """
+        Validate SVG file header. Handles BOM, whitespace, and various XML prologs.
+        Matches server-side validation for consistency.
+        """
+        idx = 0
+        
+        # Skip UTF-8 BOM if present
+        if len(header) >= 3 and header[0:3] == b'\xef\xbb\xbf':
+            idx = 3
+        
+        # Skip leading ASCII whitespace
+        while idx < len(header) and header[idx:idx+1] in (b' ', b'\t', b'\n', b'\r'):
+            idx += 1
+        
+        if idx + 4 > len(header):
+            logger.warning(f"SVG header too short after skipping whitespace: {filepath}")
+            return False
+        
+        remaining = header[idx:]
+        remaining_lower = remaining.lower()
+        
+        # Direct <svg> tag
+        if remaining_lower.startswith(b'<svg'):
+            return True
+        
+        # Check for XML prologs that precede the <svg> tag
+        has_prolog = (
+            remaining_lower.startswith(b'<?xml') or
+            remaining_lower.startswith(b'<!doctype') or
+            remaining_lower.startswith(b'<!--')
+        )
+        
+        if has_prolog:
+            # Search for <svg within the header (case-insensitive)
+            if b'<svg' in remaining_lower:
+                return True
+            # If not found in initial 512 bytes, we need to read more for large prologs
+            # For basic validation, we'll accept it if it has a valid prolog
+            # The server will do final validation with a larger search window
+            logger.debug(f"SVG has XML prolog but <svg> not found in first 512 bytes, accepting for now: {filepath}")
+            return True
+        
+        logger.warning(f"Invalid SVG content for file: {filepath}")
+        return False
+
+    def _is_valid_mp3_header(self, header: bytes, filepath: Path) -> bool:
+        """
+        Validate MP3 file header. Checks for ID3 tag or valid MP3 frame sync.
+        Matches server-side validation for consistency.
+        """
+        # ID3 tag present - valid MP3
+        if header.startswith(b'ID3'):
+            return True
+        
+        if len(header) < 4:
+            logger.warning(f"MP3 header too short: {filepath}")
+            return False
+        
+        # Search for valid MP3 frame sync within first 512 bytes
+        # This handles padding, junk data, or other metadata before the audio
+        search_limit = min(len(header) - 3, 512)
+        
+        for i in range(search_limit):
+            # Frame sync: 11 bits set (0xFF followed by 0xE0-0xFF)
+            if header[i] != 0xFF or (header[i + 1] & 0xE0) != 0xE0:
+                continue
+            
+            # Validate MPEG version bits (bits 4-3 of byte 1)
+            version_bits = (header[i + 1] >> 3) & 0x03
+            if version_bits == 0b01:  # Reserved MPEG version
+                continue
+            
+            # Validate layer bits (bits 2-1 of byte 1)
+            layer_bits = (header[i + 1] >> 1) & 0x03
+            if layer_bits == 0b00:  # Reserved layer
+                continue
+            
+            # Validate bitrate index (bits 7-4 of byte 2)
+            bitrate_index = (header[i + 2] >> 4) & 0x0F
+            if bitrate_index == 0x0F or bitrate_index == 0x00:  # Bad or free bitrate
+                continue
+            
+            # Validate sample rate index (bits 3-2 of byte 2)
+            sample_rate_index = (header[i + 2] >> 2) & 0x03
+            if sample_rate_index == 0x03:  # Reserved sample rate
+                continue
+            
+            # Found valid MP3 frame header
+            return True
+        
+        logger.warning(f"Invalid MP3 signature for file: {filepath}")
+        return False
 
     @retry(max_tries=3, delay=2, backoff=3)
     async def upload_file(self, upload_url: str, filepath: Union[str, Path], file_hash: Optional[str] = None) -> bool:
@@ -939,7 +1037,7 @@ class MediaManager:
         if total_files == 0:
             return {"success": True, "message": "No files to download", "downloaded": 0, "skipped": 0, "failed": 0}
 
-        if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
+        if not hasattr(self, 'thread_executor') or getattr(self.thread_executor, '_shutdown', False):
             print(f"self.thread_executor: {getattr(self, 'thread_executor', None)}, _shutdown: {getattr(self.thread_executor, '_shutdown', 'N/A')}")
             return {"success": False, "message": "Media manager is unavailable", "downloaded": 0, "skipped": 0, "failed": total_files}
         

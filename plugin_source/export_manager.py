@@ -72,7 +72,7 @@ from .crowd_anki.representation.deck import Deck
 from .auth_manager import auth_manager
 from .var_defs import API_BASE_URL
 
-from .utils import get_deck_hash_from_did, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger
+from .utils import get_deck_hash_from_did, get_deck_hash_from_card, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger
 from .media_progress_indicator import show_media_progress, update_media_progress, complete_media_progress
 from . import main
 from .sentry_integration import capture_media_exception, capture_media_message
@@ -1241,15 +1241,16 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
             return
 
         first_note_card = notes[0].cards()[0]
-        deckHash = get_deck_hash_from_did(first_note_card.did)
+        deckHash, error = get_deck_hash_from_card(first_note_card)
 
         if deckHash is None:
-            aqt.utils.showInfo("Cannot find the Cloud Deck for these notes. Ensure the parent deck is subscribed.", parent=parent_widget)
+            aqt.utils.showInfo(error or "Cannot find the Cloud Deck for these notes.", parent=parent_widget)
             return
 
         # Verify all notes belong to the same cloud deck
         for note in notes[1:]:
-            if get_deck_hash_from_did(note.cards()[0].did) != deckHash:
+            note_hash, _ = get_deck_hash_from_card(note.cards()[0])
+            if note_hash != deckHash:
                 aqt.utils.showInfo("Please only select cards from the same cloud deck subscription.", parent=parent_widget)
                 return
 
@@ -1257,11 +1258,6 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
         if did is None:
             # This case implies a config mismatch, should be rare
             aqt.utils.showInfo("Cannot find the local Anki deck associated with this cloud deck.", parent=parent_widget)
-            return
-
-        deck_obj = mw.col.decks.get(did, default=False) # type: ignore
-        if not deck_obj or deck_obj.get('dyn', False):
-            aqt.utils.showInfo("Filtered decks are not supported for suggestions.", parent=parent_widget)
             return
 
         # --- Start Background Operations ---

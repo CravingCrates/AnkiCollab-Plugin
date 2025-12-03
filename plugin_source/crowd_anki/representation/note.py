@@ -171,15 +171,88 @@ class Note(JsonSerializableAnkiObject):
             logger.warning(f"Error cleaning up temp deck: {e}")
     
     @staticmethod
+    def _sync_sibling_suspension_status(collection, notes, cards_before_update):
+        """
+        Sync suspension status for newly generated cards based on their siblings.
+        
+        If all sibling cards of a note are suspended, new cards should be suspended too.
+        If siblings are not suspended, new cards remain unsuspended (default behavior).
+        
+        Args:
+            collection: Anki collection
+            notes: List of notes that were updated
+            cards_before_update: Dict mapping note_id -> set of card_ids that existed before update
+        """
+        cards_to_suspend = []
+        
+        for note in notes:
+            if not note.anki_object:
+                continue
+                
+            note_id = note.anki_object.id
+            current_card_ids = set(note.anki_object.card_ids())
+            previous_card_ids = cards_before_update.get(note_id, set())
+            
+            # Find newly created cards
+            new_card_ids = current_card_ids - previous_card_ids
+            
+            if not new_card_ids or not previous_card_ids:
+                # No new cards or no previous cards to check suspension status
+                continue
+            
+            # Check if all previous sibling cards are suspended
+            try:
+                placeholders = ','.join('?' * len(previous_card_ids))
+                sibling_data = collection.db.all(
+                    f"SELECT id, queue FROM cards WHERE id IN ({placeholders})",
+                    *list(previous_card_ids)
+                )
+                
+                if not sibling_data:
+                    continue
+                
+                # queue = -1 means suspended in Anki
+                all_siblings_suspended = all(queue == -1 for _, queue in sibling_data)
+                
+                if all_siblings_suspended:
+                    # All siblings are suspended, so suspend new cards too
+                    cards_to_suspend.extend(new_card_ids)
+                    logger.debug(f"Note {note_id}: Suspending {len(new_card_ids)} new cards to match suspended siblings")
+                    
+            except Exception as e:
+                logger.warning(f"Error checking sibling suspension status for note {note_id}: {e}")
+                continue
+        
+        # Bulk suspend new cards
+        if cards_to_suspend:
+            try:
+                for i in range(0, len(cards_to_suspend), CHUNK_SIZE):
+                    chunk = cards_to_suspend[i:i + CHUNK_SIZE]
+                    collection.sched.suspend_cards(chunk)
+                logger.info(f"Suspended {len(cards_to_suspend)} new cards to match sibling suspension status")
+            except Exception as e:
+                logger.warning(f"Error suspending new sibling cards: {e}")
+    
+    @staticmethod
     def _bulk_update_notes_preserving_placement(collection, update_notes, note_to_deck_map, import_config):
         """Update notes while preserving user's manual deck placements"""
         if not update_notes:
             return
         
+        # Track existing cards before update to detect newly generated cards
+        cards_before_update = {}  # note_id -> set of card_ids
+        for note in update_notes:
+            if note.anki_object:
+                note_id = note.anki_object.id
+                cards_before_update[note_id] = set(note.anki_object.card_ids())
+        
         # First, update all the note content in chunks
         for i in range(0, len(update_notes), CHUNK_SIZE):
             chunk = update_notes[i:i + CHUNK_SIZE]
             collection.update_notes([note.anki_object for note in chunk if note.anki_object])
+        
+        # Sync suspension status for newly generated cards based on siblings
+        Note._sync_sibling_suspension_status(collection, update_notes, cards_before_update)
         
         # Then handle deck movement if not ignored
         if not import_config.ignore_deck_movement:

@@ -5,10 +5,14 @@ Shows download progress in the toolbar without stealing focus or interrupting us
 
 import time
 from typing import Optional
-from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QProgressBar, 
-                           QFrame, QGraphicsOpacityEffect, QApplication)
-from PyQt6.QtCore import QTimer, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QFont, QPalette
+
+from aqt.qt import (
+    QWidget, QHBoxLayout, QLabel, QProgressBar, 
+    QFrame, QGraphicsOpacityEffect, QApplication,
+    QTimer, QPropertyAnimation, QEasingCurve,
+    QFont, QPalette
+)
+
 from aqt import mw
 
 class MediaProgressIndicator(QWidget):

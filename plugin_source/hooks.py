@@ -17,6 +17,7 @@ from .media_manager import MediaManager # Import List
 
 from .export_manager import *
 from .import_manager import *
+from .utils import get_deck_hash_from_card
 from .thread import run_function_in_thread
 
 from .gear_menu_setup import add_browser_menu_item, on_deck_browser_will_show_options_menu
@@ -82,17 +83,17 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
     if not nids: return # Nothing to remove
 
     # Check if all notes belong to the *same* published deck
-    first_note_did = aqt.mw.col.get_note(nids[0]).cards()[0].did
-    deckHash = get_deck_hash_from_did(first_note_did)
+    first_note_card = aqt.mw.col.get_note(nids[0]).cards()[0]
+    deckHash, error = get_deck_hash_from_card(first_note_card)
 
     if deckHash is None:
-        showInfo("The selected note(s) do not belong to a published AnkiCollab deck.", parent=window if window is not None else mw)
+        showInfo(error or "The selected note(s) do not belong to a published AnkiCollab deck.", parent=window if window is not None else mw)
         return
 
     for nid in nids[1:]: # Check subsequent notes against the first one's deck hash
         note = aqt.mw.col.get_note(nid)
         if not note or not note.cards(): continue # Skip if note or cards are missing
-        current_hash = get_deck_hash_from_did(note.cards()[0].did)
+        current_hash, _ = get_deck_hash_from_card(note.cards()[0])
         if current_hash != deckHash:
             showInfo("Please only select cards from the same published deck.", parent=window if window is not None else mw)
             return
@@ -170,8 +171,7 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
     try:
         first_note = aqt.mw.col.get_note(selected_nids[0])
         if first_note and first_note.cards():
-            first_did = first_note.cards()[0].did
-            subscriber_hash = get_deck_hash_from_did(first_did)
+            subscriber_hash, _ = get_deck_hash_from_card(first_note.cards()[0])
             if subscriber_hash:
                 linked_hashes = _get_linked_base_hashes(subscriber_hash)
                 if linked_hashes:
@@ -181,7 +181,8 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
                         note = aqt.mw.col.get_note(nid)
                         if not note or not note.cards():
                             continue
-                        if get_deck_hash_from_did(note.cards()[0].did) != subscriber_hash:
+                        note_hash, _ = get_deck_hash_from_card(note.cards()[0])
+                        if note_hash != subscriber_hash:
                             same_deck = False
                             break
                     if same_deck:
@@ -205,7 +206,8 @@ def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscrib
         note = aqt.mw.col.get_note(nid)
         if not note or not note.cards():
             continue
-        if get_deck_hash_from_did(note.cards()[0].did) != subscriber_hash:
+        note_hash, _ = get_deck_hash_from_card(note.cards()[0])
+        if note_hash != subscriber_hash:
             showInfo("Please select notes from the same subscribed deck.", parent=browser)
             return
 
