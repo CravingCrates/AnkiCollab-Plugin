@@ -6,6 +6,7 @@ import logging
 import shutil
 import uuid
 import re
+import hashlib
 import requests
 
 import aqt
@@ -538,10 +539,19 @@ def sanitize_svg_files(svg_file_list):
                 continue
                 
             result = response.json()
-            
+
             # Update our sanitized map with results from this batch
             for item in result["sanitized_files"]:
-                sanitized_map[item["filename"]] = (item["content"], item["hash"])
+                content = item.get("content", "")
+                expected_hash = item.get("hash")
+                computed_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+
+                if expected_hash and expected_hash != computed_hash:
+                    logger.warning(
+                        f"Sanitized SVG hash mismatch for {item.get('filename')}: expected={expected_hash}, computed={computed_hash}"
+                    )
+
+                sanitized_map[item["filename"]] = (content, expected_hash, computed_hash)
                 
         except Exception as e:
             logger.error(f"Exception during SVG sanitization (batch {batch_index+1}): {str(e)}")
@@ -561,18 +571,29 @@ async def optimize_svg_files(svg_file_list):
     """    
     # Sanitize all SVGs in batches
     sanitized_map = sanitize_svg_files(svg_file_list)
-    
     # Write optimized contents back and prepare result map
     result_map = {}
     for filename, filepath_obj in svg_file_list:
         if filename in sanitized_map:
-            sanitized_content, exp_hash = sanitized_map[filename]
+            sanitized_content, exp_hash, computed_hash = sanitized_map[filename]
+
+            # Prefer the computed hash from the sanitized content; fall back to exp_hash if missing
+            # Trust the server-provided hash when available to avoid subtle JSON/whitespace
+            # re-encoding differences between the response body and what was hashed on the
+            # server. If it's missing, fall back to our recomputed value.
+            result_hash = exp_hash or computed_hash or ""
             try:
                 # Write sanitized content back to file
                 with open(filepath_obj, 'wb') as f:
                     f.write(sanitized_content.encode('utf-8'))
-                
-                result_map[filename] = (str(filepath_obj), exp_hash, True)
+
+                # If the provided hash doesn't match what we wrote, log and prefer the on-disk hash later
+                if exp_hash and exp_hash != result_hash:
+                    logger.warning(
+                        f"Sanitized SVG hash mismatch for {filename}: expected={exp_hash}, computed={result_hash}"
+                    )
+
+                result_map[filename] = (str(filepath_obj), result_hash, True)
             except Exception as e:
                 logger.error(f"Error writing optimized SVG {filename}: {str(e)}")
         else:

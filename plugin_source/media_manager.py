@@ -39,6 +39,10 @@ MAX_FILE_SIZE = 2 * 1024 * 1024 # 2 MB
 CHUNK_SIZE = 131072  # 128KB
 REQUEST_TIMEOUT = 30
 VERIFY_SSL = True
+UPLOAD_REQUESTS_PER_MINUTE = 900  # ~15 req/s spread across concurrency
+UPLOAD_BATCH_SIZE = 8
+UPLOAD_BATCH_DELAY = 0.3
+UPLOAD_CONCURRENCY = 5
 
 ALLOWED_EXTENSIONS = {
     "image": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff"},
@@ -269,6 +273,7 @@ class MediaManager:
         self.api_base_url = api_base_url.rstrip("/")
         self.media_folder = Path(media_folder)
         self.rate_limiter = RateLimiter(MAX_REQUESTS_PER_MINUTE, REQUEST_TRACKING_WINDOW)
+        self.upload_rate_limiter = RateLimiter(UPLOAD_REQUESTS_PER_MINUTE, REQUEST_TRACKING_WINDOW)
 
         if not self.media_folder.exists():
             raise ValueError(f"Media folder not found at: {media_folder}")
@@ -283,6 +288,12 @@ class MediaManager:
         self.semaphore: Optional[asyncio.Semaphore] = None
         self._semaphore_lock: Optional[asyncio.Lock] = None
         self._semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
+        self.semaphore_size = 5
+
+        self.upload_semaphore: Optional[asyncio.Semaphore] = None
+        self._upload_semaphore_lock: Optional[asyncio.Lock] = None
+        self._upload_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
+        self.upload_semaphore_size = UPLOAD_CONCURRENCY
         
         cpu_count = os.cpu_count() or 2
         max_worker = min(32, max(4, cpu_count * 2))
@@ -312,9 +323,29 @@ class MediaManager:
                 # Double-check after acquiring lock
                 if self.semaphore is None:
                     logger.debug(f"Initializing asyncio.Semaphore for loop {id(current_loop)}")
-                    self.semaphore = asyncio.Semaphore(5)
+                    self.semaphore = asyncio.Semaphore(self.semaphore_size)
                     # self._semaphore_loop is already set
         return cast(asyncio.Semaphore, self.semaphore)
+
+    async def _get_upload_semaphore(self) -> asyncio.Semaphore:
+        """Separate semaphore for uploads to keep concurrency low."""
+        try:
+            current_loop = get_running_loop()
+        except RuntimeError:
+            logger.error("_get_upload_semaphore called without a running event loop!")
+            raise RuntimeError("Cannot get upload semaphore without a running event loop")
+
+        if self._upload_semaphore_lock is None or self._upload_semaphore_loop is not current_loop:
+            self._upload_semaphore_lock = asyncio.Lock()
+            self._upload_semaphore_loop = current_loop
+            self.upload_semaphore = None
+
+        if self.upload_semaphore is None:
+            async with self._upload_semaphore_lock:
+                if self.upload_semaphore is None:
+                    logger.debug(f"Initializing upload asyncio.Semaphore for loop {id(current_loop)}")
+                    self.upload_semaphore = asyncio.Semaphore(self.upload_semaphore_size)
+        return cast(asyncio.Semaphore, self.upload_semaphore)
 
     @staticmethod
     def _file_exists_with_size(path: Path) -> bool:
@@ -511,7 +542,7 @@ class MediaManager:
         ext = Path(filename).suffix.lower()
         return ext in ALL_ALLOWED_EXTENSIONS
 
-    async def compute_file_hash_and_size(self, filepath: Union[str, Path]) -> Tuple[str, int]:
+    async def compute_file_hash_and_size(self, filepath: Union[str, Path], *, bypass_cache: bool = False) -> Tuple[str, int]:
         filepath = Path(filepath)
         if not filepath.exists() or not filepath.is_file():
             # Use specific exception type
@@ -520,16 +551,17 @@ class MediaManager:
         file_size = filepath.stat().st_size
         cache_key = str(filepath)
 
-        try:
-            mtime = os.path.getmtime(filepath)
-            if cache_key in self.hash_cache and self.hash_cache[cache_key][0] == mtime:
-                return (self.hash_cache[cache_key][1], file_size)
-        except OSError as e:
-            # Log error but proceed to calculate hash if possible
-            logger.warning(f"Could not get mtime for hash cache check: {filepath} - {e}")
-        except KeyError:
-             # Cache entry might exist but tuple access failed - recalculate
-             pass
+        if not bypass_cache:
+            try:
+                mtime = os.path.getmtime(filepath)
+                if cache_key in self.hash_cache and self.hash_cache[cache_key][0] == mtime:
+                    return (self.hash_cache[cache_key][1], file_size)
+            except OSError as e:
+                # Log error but proceed to calculate hash if possible
+                logger.warning(f"Could not get mtime for hash cache check: {filepath} - {e}")
+            except KeyError:
+                 # Cache entry might exist but tuple access failed - recalculate
+                 pass
 
         try:
             file_hash = await self._calculate_file_hash(filepath)
@@ -555,7 +587,7 @@ class MediaManager:
 
     def validate_file_basic(self, filepath: Path) -> bool:
         try:
-            if not filepath.exists():
+            if not filepath.exists() or not filepath.is_file():
                 logger.warning(f"File does not exist: {filepath}")
                 return False
 
@@ -565,169 +597,19 @@ class MediaManager:
                 logger.warning(f"Could not read file size for {filepath}: {stat_err}")
                 return False
 
-            if file_size == 0:
+            if file_size <= 0:
                 logger.warning(f"File is empty: {filepath}")
-                return False
-
-            if file_size > MAX_FILE_SIZE:
-                logger.warning(f"File exceeds size limit ({MAX_FILE_SIZE} bytes): {filepath}")
                 return False
 
             if not self._is_allowed_file_type(filepath):
                 logger.warning(f"File type not allowed: {filepath.suffix}")
                 return False
-            
-            with open(filepath, "rb") as f:
-                header = f.read(512)
-                if not header:
-                    logger.warning(f"Unable to read header for file: {filepath}")
-                    return False
 
-                ext = filepath.suffix.lower()
-
-                if ext in ['.jpg', '.jpeg']:
-                    if len(header) < 3 or not header.startswith(b'\xFF\xD8\xFF'):
-                        logger.warning(f"Invalid JPEG signature for file: {filepath}")
-                        return False
-                elif ext == '.png':
-                    # PNG signature: 89 50 4E 47 0D 0A 1A 0A (also covers APNG)
-                    if len(header) < 8 or not header.startswith(b'\x89PNG\r\n\x1a\n'):
-                        logger.warning(f"Invalid PNG signature for file: {filepath}")
-                        return False
-                elif ext == '.gif':
-                    if len(header) < 6 or not (header.startswith(b'GIF87a') or header.startswith(b'GIF89a')):
-                        logger.warning(f"Invalid GIF signature for file: {filepath}")
-                        return False
-                elif ext == '.webp':
-                    if len(header) < 12 or not header.startswith(b'RIFF') or header[8:12] != b'WEBP':
-                        logger.warning(f"Invalid WebP signature for file: {filepath}")
-                        return False
-                elif ext == '.svg':
-                    # SVG validation: handle BOM, whitespace, and various XML prologs
-                    # Match server-side behavior for consistency
-                    if not self._is_valid_svg_header(header, filepath):
-                        return False
-                elif ext == '.bmp':
-                    if len(header) < 2 or not header.startswith(b'BM'):
-                        logger.warning(f"Invalid BMP signature for file: {filepath}")
-                        return False
-                elif ext in ['.tif', '.tiff']:
-                    # Standard TIFF and BigTIFF signatures (little-endian and big-endian)
-                    valid_tiff_sigs = (
-                        b'II*\x00',  # TIFF little-endian
-                        b'MM\x00*',  # TIFF big-endian
-                        b'II+\x00',  # BigTIFF little-endian
-                        b'MM\x00+',  # BigTIFF big-endian
-                    )
-                    if len(header) < 4 or not any(header.startswith(sig) for sig in valid_tiff_sigs):
-                        logger.warning(f"Invalid TIFF signature for file: {filepath}")
-                        return False
-                elif ext == '.mp3':
-                    # MP3 validation: ID3 tag or valid frame sync with full header validation
-                    if not self._is_valid_mp3_header(header, filepath):
-                        return False
-                elif ext == '.ogg':
-                    if len(header) < 4 or not header.startswith(b'OggS'):
-                        logger.warning(f"Invalid OGG signature for file: {filepath}")
-                        return False
+            # Server now performs content validation; keep only minimal local checks
             return True
         except Exception as e:
             logger.error(f"Error validating file {filepath}: {str(e)}")
             return False
-
-    def _is_valid_svg_header(self, header: bytes, filepath: Path) -> bool:
-        """
-        Validate SVG file header. Handles BOM, whitespace, and various XML prologs.
-        Matches server-side validation for consistency.
-        """
-        idx = 0
-        
-        # Skip UTF-8 BOM if present
-        if len(header) >= 3 and header[0:3] == b'\xef\xbb\xbf':
-            idx = 3
-        
-        # Skip leading ASCII whitespace
-        while idx < len(header) and header[idx:idx+1] in (b' ', b'\t', b'\n', b'\r'):
-            idx += 1
-        
-        if idx + 4 > len(header):
-            logger.warning(f"SVG header too short after skipping whitespace: {filepath}")
-            return False
-        
-        remaining = header[idx:]
-        remaining_lower = remaining.lower()
-        
-        # Direct <svg> tag
-        if remaining_lower.startswith(b'<svg'):
-            return True
-        
-        # Check for XML prologs that precede the <svg> tag
-        has_prolog = (
-            remaining_lower.startswith(b'<?xml') or
-            remaining_lower.startswith(b'<!doctype') or
-            remaining_lower.startswith(b'<!--')
-        )
-        
-        if has_prolog:
-            # Search for <svg within the header (case-insensitive)
-            if b'<svg' in remaining_lower:
-                return True
-            # If not found in initial 512 bytes, we need to read more for large prologs
-            # For basic validation, we'll accept it if it has a valid prolog
-            # The server will do final validation with a larger search window
-            logger.debug(f"SVG has XML prolog but <svg> not found in first 512 bytes, accepting for now: {filepath}")
-            return True
-        
-        logger.warning(f"Invalid SVG content for file: {filepath}")
-        return False
-
-    def _is_valid_mp3_header(self, header: bytes, filepath: Path) -> bool:
-        """
-        Validate MP3 file header. Checks for ID3 tag or valid MP3 frame sync.
-        Matches server-side validation for consistency.
-        """
-        # ID3 tag present - valid MP3
-        if header.startswith(b'ID3'):
-            return True
-        
-        if len(header) < 4:
-            logger.warning(f"MP3 header too short: {filepath}")
-            return False
-        
-        # Search for valid MP3 frame sync within first 512 bytes
-        # This handles padding, junk data, or other metadata before the audio
-        search_limit = min(len(header) - 3, 512)
-        
-        for i in range(search_limit):
-            # Frame sync: 11 bits set (0xFF followed by 0xE0-0xFF)
-            if header[i] != 0xFF or (header[i + 1] & 0xE0) != 0xE0:
-                continue
-            
-            # Validate MPEG version bits (bits 4-3 of byte 1)
-            version_bits = (header[i + 1] >> 3) & 0x03
-            if version_bits == 0b01:  # Reserved MPEG version
-                continue
-            
-            # Validate layer bits (bits 2-1 of byte 1)
-            layer_bits = (header[i + 1] >> 1) & 0x03
-            if layer_bits == 0b00:  # Reserved layer
-                continue
-            
-            # Validate bitrate index (bits 7-4 of byte 2)
-            bitrate_index = (header[i + 2] >> 4) & 0x0F
-            if bitrate_index == 0x0F or bitrate_index == 0x00:  # Bad or free bitrate
-                continue
-            
-            # Validate sample rate index (bits 3-2 of byte 2)
-            sample_rate_index = (header[i + 2] >> 2) & 0x03
-            if sample_rate_index == 0x03:  # Reserved sample rate
-                continue
-            
-            # Found valid MP3 frame header
-            return True
-        
-        logger.warning(f"Invalid MP3 signature for file: {filepath}")
-        return False
 
     @retry(max_tries=3, delay=2, backoff=3)
     async def upload_file(self, upload_url: str, filepath: Union[str, Path], file_hash: Optional[str] = None) -> bool:
@@ -754,9 +636,9 @@ class MediaManager:
             exc = MediaTypeError(f"File failed basic validation: {filepath}")
             self._raise_with_metadata(exc, {**base_context, "reason": "validation_failed"})
         
-        await self.rate_limiter.wait_if_needed()
+        await self.upload_rate_limiter.wait_if_needed()
 
-        semaphore = await self._get_semaphore()
+        semaphore = await self._get_upload_semaphore()
         async with semaphore:
             try:
                 file_ext = Path(filepath).suffix.lower()
@@ -1052,7 +934,8 @@ class MediaManager:
             return {"success": True, "message": "No files to download after deduplication", "downloaded": 0, "skipped": 0, "failed": 0}
 
         manifest_batch_size = 500
-        download_batch_size = 10 # Keep small to avoid overwhelming network/disk
+        # Keep download concurrency modest to avoid 429s from the media backend
+        download_batch_size = 10
         total_downloaded = 0
         total_skipped = 0
         total_failed = 0
@@ -1195,6 +1078,10 @@ class MediaManager:
                 progress_value = processed_count / num_to_download if num_to_download > 0 else 1.0
                 progress_callback(progress_value)
 
+            # Short pause between batches to ease server rate limits
+            if i + download_batch_size < num_to_download:
+                await asyncio.sleep(0.25)
+
         logger.info(f"Download complete. Downloaded: {total_downloaded}, Skipped: {total_skipped}, Failed: {total_failed}")
         return {
             "success": total_failed == 0, # Consider success only if no failures
@@ -1307,11 +1194,6 @@ class MediaManager:
             except OSError:
                 continue
 
-            # Reject files exceeding size limit early
-            if file_size > MAX_FILE_SIZE * 5:
-                logger.warning(f"File exceeds size limit ({MAX_FILE_SIZE * 5} bytes), skipping: {filename} ({file_size} bytes)")
-                continue
-
             # Categorize by type - all files get filename sanitization
             if filepath_obj.suffix.lower() == '.svg':
                 svg_files.append((filename, filepath_obj, note_guid))
@@ -1342,13 +1224,21 @@ class MediaManager:
 
             for filename, filepath_obj, note_guid in svg_files:
                 if filename in svg_optimized:
-                    opt_filepath, exp_hash, was_optimized = svg_optimized[filename]
-                    if was_optimized and exp_hash:
+                    opt_filepath, reported_hash, was_optimized = svg_optimized[filename]
+                    if was_optimized and reported_hash:
                         try:
-                            file_hash, file_size = await self.compute_file_hash_and_size(opt_filepath)
-                            if file_hash == exp_hash and file_size <= MAX_FILE_SIZE:
-                                files_info.append({"hash": file_hash, "filename": filename, "note_guid": note_guid, "file_size": file_size})
-                                file_paths[file_hash] = str(opt_filepath)
+                            # Always recompute from disk to ensure the hash matches the bytes we will upload
+                            disk_hash, file_size = await self.compute_file_hash_and_size(opt_filepath, bypass_cache=True)
+
+                            final_hash = disk_hash
+                            if reported_hash != disk_hash:
+                                logger.warning(
+                                    f"SVG hash differed after write for {filename}: reported={reported_hash}, on_disk={disk_hash}. Using on-disk hash."
+                                )
+
+                            if file_size <= MAX_FILE_SIZE:
+                                files_info.append({"hash": final_hash, "filename": filename, "note_guid": note_guid, "file_size": file_size})
+                                file_paths[final_hash] = str(opt_filepath)
                         except Exception as e:
                             logger.error(f"Error processing optimized SVG {filename}: {e}")
 
@@ -1631,8 +1521,8 @@ class MediaManager:
         uploaded_hashes: List[str] = []
         upload_failed_hashes: set[str] = set()
         num_to_upload = len(missing_files_to_upload)
-        upload_batch_size = 10
-        upload_delay = 0.5  # Delay between batches to respect rate limits
+        upload_batch_size = UPLOAD_BATCH_SIZE
+        upload_delay = UPLOAD_BATCH_DELAY  # Delay between batches to respect rate limits
         logger.info(f"Starting upload for {num_to_upload} files...")
         for i in range(0, num_to_upload, upload_batch_size):
             batch = missing_files_to_upload[i:i+upload_batch_size]
