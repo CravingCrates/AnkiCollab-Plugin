@@ -46,7 +46,7 @@ UPLOAD_CONCURRENCY = 5
 
 ALLOWED_EXTENSIONS = {
     "image": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff"},
-    "audio": {".mp3", ".ogg"},
+    "audio": {".mp3", ".ogg", ".oga"},
 }
 ALL_ALLOWED_EXTENSIONS = set().union(*ALLOWED_EXTENSIONS.values())
 
@@ -295,11 +295,9 @@ class MediaManager:
         self._upload_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
         self.upload_semaphore_size = UPLOAD_CONCURRENCY
         
-        cpu_count = os.cpu_count() or 2
-        max_worker = min(32, max(4, cpu_count * 2))
-
-        self.thread_executor = ThreadPoolExecutor(max_workers=max_worker)
-        logger.debug(f"Initialized thread pool with {max_worker} workers")
+        max_workers = self._get_executor_max_workers()
+        self.thread_executor = ThreadPoolExecutor(max_workers=max_workers)
+        logger.debug(f"Initialized thread pool with {max_workers} workers")
         mimetypes.add_type('image/webp', '.webp') # how the fuck is this not a default
 
     async def _get_semaphore(self) -> asyncio.Semaphore:
@@ -445,11 +443,42 @@ class MediaManager:
         if isinstance(filename, str) and filename:
             failed_filenames.add(filename)
 
+    def _get_executor_max_workers(self) -> int:
+        """Calculate the optimal number of thread pool workers."""
+        cpu_count = os.cpu_count() or 2
+        return min(32, max(4, cpu_count * 2))
+
+    def _is_anki_available(self) -> bool:
+        """Check if Anki is still running and collection is available."""
+        try:
+            return mw is not None and mw.col is not None
+        except Exception:
+            return False
+
     def _ensure_executor_available(self):
-        """Raise a RuntimeError if the thread executor is unavailable."""
-        # If shutdown has been requested, treat executor as unavailable
-        if not hasattr(self, 'thread_executor') or getattr(self.thread_executor, '_shutdown', False):
-            raise RuntimeError("Thread executor is shut down or unavailable")
+        """Ensure the thread executor is available, recreating it if necessary.
+        
+        Raises:
+            RuntimeError: If the executor is shut down and Anki is closing (cannot recover).
+        """
+        needs_recreation = False
+        
+        if not hasattr(self, 'thread_executor') or self.thread_executor is None:
+            needs_recreation = True
+            logger.warning("Thread executor missing, will recreate")
+        elif getattr(self.thread_executor, '_shutdown', False):
+            needs_recreation = True
+            logger.warning("Thread executor was shut down")
+        
+        if needs_recreation:
+            # Only recreate if Anki is still running - otherwise abort gracefully
+            if not self._is_anki_available():
+                logger.info("Anki is closing, not recreating executor - aborting operation")
+                raise RuntimeError("Anki is closing, media operation aborted")
+            
+            max_workers = self._get_executor_max_workers()
+            self.thread_executor = ThreadPoolExecutor(max_workers=max_workers)
+            logger.info(f"Recreated thread pool with {max_workers} workers")
 
     def _get_running_loop_or_raise(self):
         try:
@@ -460,6 +489,9 @@ class MediaManager:
 
     async def async_request(self, method, url, **kwargs):
         loop = self._get_running_loop_or_raise()
+
+        # Ensure executor is available, recreating if necessary
+        self._ensure_executor_available()
     
         if "timeout" not in kwargs:
             kwargs["timeout"] = REQUEST_TIMEOUT
@@ -493,10 +525,12 @@ class MediaManager:
             raise ValueError(f"Media folder not found at: {media_folder}")
 
     def is_manager_available(self) -> bool:
-        """Check if the media manager is available for operations."""
-        if not hasattr(self, 'thread_executor'):
-            return False
-        return not getattr(self.thread_executor, '_shutdown', False)
+        """Check if the media manager is available for operations.
+        
+        Returns True if Anki is running and the executor can be used (or recreated).
+        Returns False if Anki is closing - operations should abort.
+        """
+        return self._is_anki_available()
     
     async def close(self):
         print("MediaManager closing...")
@@ -518,10 +552,8 @@ class MediaManager:
     async def _calculate_file_hash(self, filepath: Path) -> str:
         """Centralized hash calculation to avoid code duplication."""
         loop = self._get_running_loop_or_raise()
-        try:
-            self._ensure_executor_available()
-        except RuntimeError:
-            raise MediaHashError(f"Thread executor is shut down, cannot calculate hash for {filepath}")
+        # Ensure executor is available, recreating if necessary
+        self._ensure_executor_available()
 
         def calculate_hash():
             md5_hash = hashlib.md5()
@@ -661,10 +693,8 @@ class MediaManager:
                 base64_md5 = base64.b64encode(binary_hash).decode('ascii')
                 headers = {"Content-Type": content_type, "Content-MD5": base64_md5}
 
-                # Check if executor is still available
-                if not hasattr(self, 'thread_executor') or self.thread_executor._shutdown:
-                    media_error = MediaUploadError(f"Thread executor is shut down, cannot upload {filepath}")
-                    self._raise_with_metadata(media_error, {**base_context, "reason": "executor_unavailable"})
+                # Ensure executor is available, recreating if necessary
+                self._ensure_executor_available()
 
                 # File upload is I/O intensive - use thread pool
                 def do_upload():
@@ -919,9 +949,8 @@ class MediaManager:
         if total_files == 0:
             return {"success": True, "message": "No files to download", "downloaded": 0, "skipped": 0, "failed": 0}
 
-        if not hasattr(self, 'thread_executor') or getattr(self.thread_executor, '_shutdown', False):
-            print(f"self.thread_executor: {getattr(self, 'thread_executor', None)}, _shutdown: {getattr(self.thread_executor, '_shutdown', 'N/A')}")
-            return {"success": False, "message": "Media manager is unavailable", "downloaded": 0, "skipped": 0, "failed": total_files}
+        # Ensure executor is available, recreating if necessary
+        self._ensure_executor_available()
         
         # Deduplicate filenames to avoid downloading the same file multiple times
         unique_filenames = list(dict.fromkeys(filenames))  # Preserves order while removing duplicates

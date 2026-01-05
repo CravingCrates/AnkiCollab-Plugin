@@ -21,7 +21,8 @@ from .utils import get_deck_hash_from_card
 from .thread import run_function_in_thread
 
 from .gear_menu_setup import add_browser_menu_item, on_deck_browser_will_show_options_menu
-from .dialogs import AddChangelogDialog
+from .dialogs import AddChangelogDialog, ProtectFieldsDialog
+from .var_defs import PREFIX_PROTECTED_FIELDS
 
 from .auth_manager import auth_manager
 from .utils import get_logger
@@ -150,6 +151,128 @@ def request_note_removal(browser: Browser, nids: Sequence[NoteId]) -> None:
         return
     remove_notes(nids, browser)
 
+
+def protect_fields_handler(browser: Browser, nids: Sequence[NoteId]) -> None:
+    """Handler for protecting fields of selected notes using tags."""
+    if not nids:
+        showInfo("Please select at least one note.", parent=browser)
+        return
+    
+    # Get the note types (mids) of selected notes
+    mids = set()
+    for nid in nids:
+        note = aqt.mw.col.get_note(nid)
+        if note:
+            mids.add(note.mid)
+    
+    if len(mids) != 1:
+        showInfo(
+            "Please select notes of only one note type.",
+            parent=browser,
+        )
+        return
+    
+    # Get field names from the first note
+    first_note = aqt.mw.col.get_note(nids[0])
+    field_names = list(first_note.keys())
+    
+    # Get currently protected fields from tags (for single note selection)
+    current_protected = []
+    if len(nids) == 1:
+        current_protected = _get_protected_fields_from_tags(first_note)
+    
+    # Show dialog
+    dialog = ProtectFieldsDialog(field_names, current_protected, parent=browser)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return
+    
+    result = dialog.get_selected_fields()
+    if result is None:
+        return
+    
+    selected_fields, protect_tags = result
+    
+    # Determine which tags to apply
+    new_protect_tags = []
+    
+    if selected_fields:
+        if set(selected_fields) == set(field_names):
+            # All fields selected - use the All tag
+            new_protect_tags.append(f"{PREFIX_PROTECTED_FIELDS}::All")
+        else:
+            # Individual fields - create tag for each
+            for field in selected_fields:
+                # Replace spaces with underscores (spaces not allowed in tags)
+                safe_field = field.replace(' ', '_')
+                new_protect_tags.append(f"{PREFIX_PROTECTED_FIELDS}::{safe_field}")
+    
+    if protect_tags:
+        new_protect_tags.append(f"{PREFIX_PROTECTED_FIELDS}::Tags")
+    
+    def update_notes_task():
+        """Background task to update note tags."""
+        notes = [aqt.mw.col.get_note(nid) for nid in nids]
+        for note in notes:
+            # Remove existing protection tags
+            note.tags = [
+                tag for tag in note.tags 
+                if not tag.lower().startswith(PREFIX_PROTECTED_FIELDS.lower())
+            ]
+            # Add new protection tags
+            note.tags.extend(new_protect_tags)
+        
+        # Update notes with undo support
+        undo_id = aqt.mw.col.add_custom_undo_entry("Protect fields of note(s)")
+        aqt.mw.col.update_notes(notes)
+        aqt.mw.col.merge_undo_entries(undo_id)
+    
+    def on_done(future):
+        """Callback when task completes."""
+        try:
+            future.result()
+        except Exception as e:
+            showInfo(f"Error updating notes: {e}", parent=browser)
+            logger.exception("Error protecting fields")
+            return
+        
+        aqt.mw.update_undo_actions()
+        browser.table.reset()
+        
+        if new_protect_tags:
+            aqt.utils.tooltip(f"Protected {len(new_protect_tags)} field(s)/tag(s) on {len(nids)} note(s)")
+        else:
+            aqt.utils.tooltip(f"Removed field protection from {len(nids)} note(s)")
+        
+        logger.info(f"Updated protection tags for {len(nids)} notes: {new_protect_tags}")
+    
+    aqt.mw.taskman.with_progress(
+        task=update_notes_task,
+        on_done=on_done,
+        label="Updating field protection tags",
+    )
+
+
+def _get_protected_fields_from_tags(note) -> List[str]:
+    """Extract currently protected field names from note tags."""
+    protected = []
+    prefix_lower = PREFIX_PROTECTED_FIELDS.lower()
+    
+    for tag in note.tags:
+        tag_lower = tag.lower()
+        if tag_lower.startswith(prefix_lower + "::"):
+            # Extract the field name part
+            field_part = tag[len(PREFIX_PROTECTED_FIELDS) + 2:]  # Skip "AnkiCollab_Protect::"
+            if field_part.lower() == "all":
+                # If "All" tag exists, return all field names
+                return list(note.keys()) + ["Tags"]
+            elif field_part.lower() == "tags":
+                protected.append("Tags")
+            else:
+                # Convert underscores back to spaces for display
+                protected.append(field_part.replace('_', ' '))
+    
+    return protected
+
 def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
     if not auth_manager.is_logged_in():
         return # Don't add menu items if not logged in
@@ -165,6 +288,10 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
     context_menu.addAction(
         "AnkiCollab: Request note removal",
         lambda: request_note_removal(browser, nids=selected_nids),
+    )
+    context_menu.addAction(
+        "AnkiCollab: Protect fields of note(s)",
+        lambda: protect_fields_handler(browser, nids=selected_nids),
     )
 
     # Conditionally add note link creation if deck is subscribed and linked to one or more base decks

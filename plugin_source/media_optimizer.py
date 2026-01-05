@@ -39,7 +39,6 @@ except ImportError as e:
 WEBP_QUALITY = 85
 JPEG_QUALITY = 85
 PNG_COMPRESSION = 9
-MAX_IMAGE_SIZE = 1920  # Maximum dimension for resizing
 
 OPTIMIZABLE_INPUT_EXTENSIONS = [
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff'
@@ -199,7 +198,6 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
         with Image.open(filepath) as img:
             original_format = img.format
             original_mode = img.mode
-            resized = False
 
             # Convert RGBA to RGB with white background only for formats that don't support transparency
             # WebP, PNG, and TIFF support transparency, so preserve it when converting to those formats
@@ -221,16 +219,6 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
                 except Exception as bg_err:
                     logger.warning(f"Could not apply alpha mask for {filepath.name}, converting directly to RGB: {bg_err}")
                     img = img.convert('RGB')
-
-
-            # Resize if too large
-            if max(img.size) > MAX_IMAGE_SIZE:
-                ratio = MAX_IMAGE_SIZE / max(img.size)
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                logger.debug(f"Resizing {filepath.name} from {img.size} to {new_size}")
-                resample_filter = PIL_Resampling.LANCZOS if PIL_Resampling else Image.LANCZOS
-                img = img.resize(new_size, resample=resample_filter)
-                resized = True
 
             save_options = {}
             target_format = None
@@ -288,7 +276,6 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
             # Determine if the destination file should be used
             use_destination = (
                 optimized_size < original_size or # Smaller size
-                resized or                      # Image dimensions changed
                 will_change_format              # Format is different
             )
 

@@ -146,7 +146,7 @@ class MediaProgressIndicator(QWidget):
         self.fade_animation.start()
         
         # Start rotation animation
-        self.rotation_timer.start(100)
+        self.rotation_timer.start(1000)
         
     def update_progress(self, progress_ratio: float, current_files: Optional[int] = None):
         """Update progress with smooth transitions"""

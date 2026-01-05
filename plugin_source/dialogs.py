@@ -498,3 +498,201 @@ class RateAddonDialog(QDialog):
     def needs_work_button_click(self):
         self.close()
         webbrowser.open('https://discord.gg/9x4DRxzqwM')
+
+
+class ProtectFieldsDialog(QDialog):
+    """Dialog for selecting which fields to protect from AnkiCollab updates."""
+    
+    def __init__(self, field_names: list, current_protected: list = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AnkiCollab - Protect Fields")
+        self.setModal(True)
+        self.setMinimumWidth(350)
+        
+        self.field_names = field_names
+        self.current_protected = current_protected or []
+        self.result_fields = None
+        
+        # Theme-aware colors
+        dark_mode = theme_manager.night_mode
+        
+        if dark_mode:
+            colors = {
+                'background': '#2d2d2d',
+                'surface': '#3d3d3d',
+                'primary': '#64B5F6',
+                'accent': '#4CAF50',
+                'text': '#ffffff',
+                'border': '#555555'
+            }
+        else:
+            colors = {
+                'background': '#ffffff',
+                'surface': '#f5f5f5',
+                'primary': '#2196F3',
+                'accent': '#4CAF50',
+                'text': '#212121',
+                'border': '#ddd'
+            }
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Title
+        title = QLabel("🛡️ Protect Fields from Updates")
+        title.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {colors['primary']}; margin-bottom: 5px;")
+        layout.addWidget(title)
+        
+        # Description
+        desc = QLabel(
+            "Select fields to protect from AnkiCollab updates.<br>"
+            "Protected fields will not be overwritten when syncing."
+        )
+        desc.setStyleSheet(f"color: {colors['text']}; font-size: 12px; margin-bottom: 10px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        
+        # Checkboxes for fields
+        self.checkboxes = {}
+        
+        # "Select All" checkbox
+        self.select_all_cb = QCheckBox("Select All Fields")
+        self.select_all_cb.setStyleSheet(f"""
+            QCheckBox {{
+                color: {colors['text']};
+                font-weight: bold;
+                padding: 5px;
+            }}
+        """)
+        self.select_all_cb.stateChanged.connect(self._on_select_all_changed)
+        layout.addWidget(self.select_all_cb)
+        
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"background-color: {colors['border']};")
+        layout.addWidget(sep)
+        
+        # Scroll area for field checkboxes
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(250)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                border: 1px solid {colors['border']};
+                border-radius: 5px;
+                background-color: {colors['surface']};
+            }}
+        """)
+        
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(5)
+        
+        for field in field_names:
+            cb = QCheckBox(field)
+            cb.setStyleSheet(f"color: {colors['text']}; padding: 3px;")
+            cb.setChecked(field in self.current_protected)
+            cb.stateChanged.connect(self._update_select_all_state)
+            self.checkboxes[field] = cb
+            scroll_layout.addWidget(cb)
+        
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+        
+        # Separator
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"background-color: {colors['border']};")
+        layout.addWidget(sep2)
+        
+        # Tags protection option
+        self.protect_tags_cb = QCheckBox("Protect Tags")
+        self.protect_tags_cb.setStyleSheet(f"""
+            QCheckBox {{
+                color: {colors['text']};
+                font-weight: bold;
+                padding: 5px;
+            }}
+        """)
+        self.protect_tags_cb.setChecked("Tags" in self.current_protected)
+        layout.addWidget(self.protect_tags_cb)
+        
+        tags_desc = QLabel("Prevents tag changes from being overwritten during sync.")
+        tags_desc.setStyleSheet(f"color: {colors['text']}; font-size: 11px; margin-left: 20px; opacity: 0.8;")
+        layout.addWidget(tags_desc)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        save_btn = QPushButton("Save")
+        save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors['accent']};
+                color: white;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #45a049; }}
+        """)
+        save_btn.clicked.connect(self._on_save)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #666;
+                color: white;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 5px;
+            }}
+            QPushButton:hover {{ background-color: #555; }}
+        """)
+        cancel_btn.clicked.connect(self.reject)
+        
+        button_layout.addStretch()
+        button_layout.addWidget(save_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        self.setStyleSheet(f"QDialog {{ background-color: {colors['background']}; color: {colors['text']}; }}")
+        
+        # Update select all state based on current selection
+        self._update_select_all_state()
+    
+    def _on_select_all_changed(self, state):
+        """Handle Select All checkbox state change."""
+        # Block signals to prevent recursive updates
+        for cb in self.checkboxes.values():
+            cb.blockSignals(True)
+            cb.setChecked(state == Qt.CheckState.Checked.value)
+            cb.blockSignals(False)
+    
+    def _update_select_all_state(self):
+        """Update Select All checkbox based on individual selections."""
+        all_checked = all(cb.isChecked() for cb in self.checkboxes.values())
+        none_checked = not any(cb.isChecked() for cb in self.checkboxes.values())
+        
+        self.select_all_cb.blockSignals(True)
+        if all_checked:
+            self.select_all_cb.setCheckState(Qt.CheckState.Checked)
+        elif none_checked:
+            self.select_all_cb.setCheckState(Qt.CheckState.Unchecked)
+        else:
+            self.select_all_cb.setCheckState(Qt.CheckState.PartiallyChecked)
+        self.select_all_cb.blockSignals(False)
+    
+    def _on_save(self):
+        """Save the selected fields."""
+        selected = [field for field, cb in self.checkboxes.items() if cb.isChecked()]
+        protect_tags = self.protect_tags_cb.isChecked()
+        self.result_fields = (selected, protect_tags)
+        self.accept()
+    
+    def get_selected_fields(self):
+        """Returns (list of selected field names, protect_tags bool) or None if cancelled."""
+        return self.result_fields

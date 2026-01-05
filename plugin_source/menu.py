@@ -217,7 +217,8 @@ def on_edit_list():
         if new_notes_deck_id and mw.col:
             try:
                 new_notes_deck_name = mw.col.decks.name_if_exists(new_notes_deck_id) or "Same as Local Deck"
-            except:
+            except (KeyError, AttributeError, TypeError):
+                # Deck may have been deleted or collection unavailable
                 new_notes_deck_name = "Same as Local Deck"
         else:
             new_notes_deck_name = "Same as Local Deck"
@@ -358,7 +359,8 @@ def edit_subscription_details(deck_hash, parent_dialog):
             current_deck_name = mw.col.decks.name_if_exists(current_deck_id)
             if current_deck_name and current_deck_name in deck_names:
                 local_deck_combo.setCurrentText(current_deck_name)
-        except:
+        except (KeyError, AttributeError, TypeError):
+            # Deck may have been deleted or collection unavailable - leave combo at default
             pass
     
     local_deck_layout.addWidget(QLabel("Choose where existing notes will be placed:"))
@@ -389,7 +391,8 @@ def edit_subscription_details(deck_hash, parent_dialog):
                 same_deck_radio.setChecked(False)
                 new_notes_combo.setEnabled(True)
                 new_notes_combo.setCurrentText(current_new_notes_deck_name)
-        except:
+        except (KeyError, AttributeError, TypeError):
+            # Deck may have been deleted or collection unavailable - leave at default
             pass
     
     # Radio button functionality

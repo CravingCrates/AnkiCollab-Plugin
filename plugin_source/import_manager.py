@@ -222,6 +222,10 @@ def _subscription_from_manifest(
             )
 
             return subscription
+    except requests.exceptions.ChunkedEncodingError as exc:
+        # Surface a user-friendly error when the upstream terminates the transfer early
+        logger.error("Cache archive download interrupted for %s: %s", deck_hash, exc)
+        raise CacheBootstrapError("Download interrupted; please retry.") from exc
     finally:
         try:
             tmp_path.unlink()

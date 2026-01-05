@@ -156,6 +156,10 @@ def get_maintainer_data(deckHash):
     return token, auto_approve
 
 def get_personal_tags(deck_hash):
+    """
+    Get personal tags that should be stripped during export.
+    Returns DEFAULT_PROTECTED_TAGS + PREFIX_PROTECTED_FIELDS if no deck-specific config exists.
+    """
     strings_data = mw.addonManager.getConfig(__name__)
     combined_tags = set()
 
@@ -169,7 +173,10 @@ def get_personal_tags(deck_hash):
                 combined_tags.update(personal_tags)
                 combined_tags.add(PREFIX_PROTECTED_FIELDS)
                 return list(combined_tags)
-    return []
+    
+    # Fallback: deck not found in config, use default protected tags
+    # This ensures tags like "leech", "marked" are always stripped from exports
+    return DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS]
 
 def get_note_id_from_guid(guid):
     try:
@@ -871,7 +878,7 @@ def _submit_deck_op(
         status_code = e.response.status_code
         logger.debug(f"Submission error body: {error_text}")
         
-        if status_code == 500 and error_text:
+        if error_text:
             if "Notetype Error: " in error_text:
                 missing_note_uuid = error_text.split("Notetype Error: ")[1]
                 # Cannot easily get notetype name here without collection access issues

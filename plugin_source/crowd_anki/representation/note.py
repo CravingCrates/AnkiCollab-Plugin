@@ -16,7 +16,7 @@ CHUNK_SIZE = 1000
 if ANKI_INT_VERSION >= ANKI_VERSION_23_10_00:
     from anki.collection import AddNoteRequest
     
-from ...var_defs import PREFIX_OPTIONAL_TAGS, PREFIX_PROTECTED_FIELDS
+from ...var_defs import PREFIX_OPTIONAL_TAGS, PREFIX_PROTECTED_FIELDS, DEFAULT_PROTECTED_TAGS
 from .json_serializable import JsonSerializableAnkiObject
 from .note_model import NoteModel
 from ..config.config_settings import ConfigSettings
@@ -429,6 +429,16 @@ class Note(JsonSerializableAnkiObject):
                 if tag.startswith(PREFIX_PROTECTED_FIELDS)
             ]
         
+        # Preserve DEFAULT_PROTECTED_TAGS (leech, marked, missing-media) from local note
+        # These tags are stripped during export but should be kept during import updates
+        preserved_default_tags = []
+        if self.anki_object and hasattr(self.anki_object, 'tags'):
+            preserved_default_tags = [
+                tag for tag in self.anki_object.tags
+                if tag in DEFAULT_PROTECTED_TAGS or 
+                   any(tag.startswith(f"{pt}::") for pt in DEFAULT_PROTECTED_TAGS)
+            ]
+        
         for tag in protected_tags:
             # Ensure tags list exists and protected tags are preserved
             if 'tags' not in self.anki_object_dict:
@@ -439,16 +449,22 @@ class Note(JsonSerializableAnkiObject):
             protected_field = tag.split('::', 1)[1]
             
             if protected_field == "Tags" and self.anki_object and hasattr(self.anki_object, 'tags'):
-                self.anki_object_dict["tags"] = self.anki_object.tags
+                self.anki_object_dict["tags"] = list(self.anki_object.tags)  # Copy to avoid reference issues
                 
             if protected_field == "All":
-                # If "All" is protected, copy all fields from anki_object to anki_object_dict using field mapping
-                if field_mapping and self.anki_object and hasattr(self.anki_object, 'fields'):
-                    for new_idx, old_idx in enumerate(field_mapping):
-                        if (old_idx is not None and 
-                            new_idx < len(self.anki_object_dict["fields"]) and
-                            old_idx < len(self.anki_object.fields)):
-                            self.anki_object_dict["fields"][new_idx] = self.anki_object.fields[old_idx]
+                # If "All" is protected, copy all fields AND tags from anki_object to anki_object_dict
+                if self.anki_object and hasattr(self.anki_object, 'fields'):
+                    if field_mapping:
+                        # Use field mapping when available
+                        for new_idx, old_idx in enumerate(field_mapping):
+                            if (old_idx is not None and 
+                                new_idx < len(self.anki_object_dict["fields"]) and
+                                old_idx < len(self.anki_object.fields)):
+                                self.anki_object_dict["fields"][new_idx] = self.anki_object.fields[old_idx]
+                    else:
+                        # Fallback: no field mapping, copy fields by position (same structure)
+                        for idx in range(min(len(self.anki_object_dict["fields"]), len(self.anki_object.fields))):
+                            self.anki_object_dict["fields"][idx] = self.anki_object.fields[idx]
                 break
                 
             # Handle individual field protection using field mapping
@@ -479,6 +495,16 @@ class Note(JsonSerializableAnkiObject):
                         logger.warning(f"User protected field '{protected_field}' index {field_idx} is out of range")
 
         logger.debug(f"Protected tags handled")
+        
+        # Merge preserved default tags (leech, marked, missing-media) back into tags
+        # These were on the local note and should be kept even though the server doesn't have them
+        if preserved_default_tags:
+            if 'tags' not in self.anki_object_dict:
+                self.anki_object_dict['tags'] = []
+            for tag in preserved_default_tags:
+                if tag not in self.anki_object_dict["tags"]:
+                    self.anki_object_dict["tags"].append(tag)
+            logger.debug(f"Preserved default protected tags: {preserved_default_tags}")
         
         if import_config.has_optional_tags and 'tags' in self.anki_object_dict:
             self.anki_object_dict["tags"] = [
