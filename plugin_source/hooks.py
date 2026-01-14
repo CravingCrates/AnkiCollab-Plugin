@@ -498,6 +498,7 @@ def init_add_card(addCardsDialog):
         return
 
     checkbox = QCheckBox("Suggest on AnkiCollab")
+    checkbox.setChecked(True)
     addCardsDialog.ankicollab_suggest_checkbox = checkbox # Store reference on the dialog instance
 
     button_box = None
