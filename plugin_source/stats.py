@@ -91,6 +91,8 @@ class ReviewHistory:
             return
 
         user_hash = get_user_hash()
+        if not user_hash:
+            return
         data = {
             'user_hash': user_hash,
             'deck_hash': self.deck_hash,
@@ -107,6 +109,8 @@ class ReviewHistory:
     def dump_review_history(self):
         review_history = self.get_card_data(0)
         user_hash = get_user_hash()
+        if not user_hash:
+            return None
         data = {
             'user_hash': user_hash,
             'review_history': review_history

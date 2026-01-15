@@ -43,7 +43,10 @@ class AnkiModalNotifier(Notifier):
 class AnkiTooltipNotifier(Notifier):
     @staticmethod
     def show_message(title: str, message: str, prefix=""):
-        aqt.utils.tooltip(f"{prefix} {title}\n{message}", period=5000)
+        display = f"{prefix}{title}" if prefix else title
+        if message:
+            display += f"\n{message}"
+        aqt.utils.tooltip(display, period=5000)
 
     def info(self, title: str, message: str):
         self.show_message(title, message)

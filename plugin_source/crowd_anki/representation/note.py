@@ -545,14 +545,18 @@ class Note(JsonSerializableAnkiObject):
             
     
     def remove_tags(self, tags): # Option to remove personal tags from notes before uploading them
-        if not self.anki_object_dict or 'tags' not in self.anki_object_dict:
+        if not self.anki_object or not hasattr(self.anki_object, 'tags'):
             return
             
         for personal_tag in tags:
-            if personal_tag in self.anki_object_dict["tags"]:
-                self.anki_object_dict["tags"].remove(personal_tag)
-            # Remove tags that start with the personal_tag prefix
-            self.anki_object_dict["tags"] = [tag for tag in self.anki_object_dict["tags"] if not tag.startswith(f"{personal_tag}::")]
+            # Remove exact matches
+            if personal_tag in self.anki_object.tags:
+                self.anki_object.tags.remove(personal_tag)
+            # Remove tags that start with the personal_tag prefix (hierarchical tags)
+            self.anki_object.tags = [
+                tag for tag in self.anki_object.tags
+                if not tag.startswith(f"{personal_tag}::")
+            ]
 
         # Remove any tags that are just whitespace
-        self.anki_object_dict["tags"] = [tag for tag in self.anki_object_dict["tags"] if tag.strip()]
+        self.anki_object.tags = [tag for tag in self.anki_object.tags if tag.strip()]

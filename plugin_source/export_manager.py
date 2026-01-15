@@ -813,6 +813,11 @@ def _submit_deck_op(
         except Exception as e:
             logger.warning(f"Deck refresh inside submission op failed; proceeding: {e}")
 
+    # Always remove personal tags before serialization (must be after refresh if refresh occurred)
+    personal_tags = get_personal_tags(deckHash)
+    if personal_tags:
+        deck_initializer.remove_tags_from_notes(deck, personal_tags)
+
     newName = get_local_deck_from_hash(deckHash)
     deckPath = mw.col.decks.name(did) # type: ignore
 
@@ -838,7 +843,7 @@ def _submit_deck_op(
 
     # Prepare and send data
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    
+
     data = {
         "remote_deck": deckHash,
         "deck_path": deckPath,
@@ -1558,9 +1563,6 @@ def handle_export(did: int, username: str):
         note_sorter = NoteSorter(ConfigSettings.get_instance())
         note_sorter.sort_deck(deck_repr)
 
-        # Remove standard protected tags for initial export
-        deck_initializer.remove_tags_from_notes(deck_repr, DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS])
-
         # --- Media Preparation (Main Thread) ---
         protected_fields = deck_repr.get_protected_fields(None) # No hash yet
         media_files = deck_repr.get_media_file_note_map(protected_fields)
@@ -1633,6 +1635,10 @@ def _create_deck_op(
             deck_repr.refresh_notes(media_files_refresh)
         except Exception as e:
             logger.warning(f"Deck refresh inside create op failed; proceeding: {e}")
+    
+    # Always remove protected tags before serialization (must be after refresh if refresh occurred)
+    deck_initializer.remove_tags_from_notes(deck_repr, DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS])
+    
     deck_res = json.dumps(deck_repr, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     data = {"deck": deck_res, "username": username}
     try:
@@ -1802,10 +1808,6 @@ def _prepare_deck_for_suggestion(did: Any, nids: List[int], deckHash: str) -> Tu
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck_repr)
 
-    personal_tags = get_personal_tags(deckHash)
-    if personal_tags:
-        deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
-
     # --- Media Preparation (Background Thread) ---
     protected_fields = deck_repr.get_protected_fields(deckHash)
     media_files = deck_repr.get_media_file_note_map(protected_fields)
@@ -1887,9 +1889,6 @@ def _prepare_subdeck_for_suggestion(did: Any, deck_name: str, deckHash: str) -> 
         raise RuntimeError(f"Failed to process deck timestamps: {e}") from e
 
     deck_initializer.trim_empty_children(deck_repr)
-    personal_tags = get_personal_tags(deckHash)
-    if personal_tags:
-        deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
 
     # Fix name to be relative
     deck_repr.anki_dict["name"] = deck_name.split("::")[-1]

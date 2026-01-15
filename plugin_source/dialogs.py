@@ -48,15 +48,15 @@ class ChangelogDialog(QDialog):
         changelog_text = QTextBrowser()
         
         if not changelog:
-            changelog = "The maintainer left no changelog message for this update."
+            changelog = "No changelog provided for this update."
             
         changelog_text.setPlainText(changelog)
         layout.addWidget(changelog_text)
 
         button_box = QDialogButtonBox()
-        install_button = button_box.addButton("Install Now", QDialogButtonBox.ButtonRole.AcceptRole)
-        later_button = button_box.addButton("Decide Later", QDialogButtonBox.ButtonRole.RejectRole)
-        skip_button = QPushButton("Skip this Update")
+        install_button = button_box.addButton("✓ Install Update", QDialogButtonBox.ButtonRole.AcceptRole)
+        later_button = button_box.addButton("Remind Me Later", QDialogButtonBox.ButtonRole.RejectRole)
+        skip_button = QPushButton("Skip This Version")
         button_box.addButton(skip_button, QDialogButtonBox.ButtonRole.ActionRole)
 
         layout.addWidget(button_box)
@@ -184,6 +184,7 @@ class LoginDialog(QDialog):
         button_layout = QHBoxLayout()
         
         login_button = QPushButton("Login")
+        login_button.setToolTip("Sign in with your AnkiCollab account")
         login_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {colors['accent']};
@@ -237,7 +238,7 @@ class LoginDialog(QDialog):
         password = self.password_input.text()
         
         if not username or not password:
-            aqt.utils.showInfo("Please enter a username and password.")
+            aqt.utils.showInfo("Please enter both your username and password to continue.")
             return
         
         payload = {
@@ -339,9 +340,9 @@ class DeletedNotesDialog(QDialog):
         layout.addWidget(scroll_area)
 
         button_box = QDialogButtonBox()
-        delete_button = button_box.addButton("Delete Notes", QDialogButtonBox.ButtonRole.AcceptRole)
-        open_in_browser_button = button_box.addButton("Show in Browser", QDialogButtonBox.ButtonRole.RejectRole)
-        button_box.addButton("Keep Notes", QDialogButtonBox.ButtonRole.ActionRole)
+        delete_button = button_box.addButton("🗑️ Delete Notes", QDialogButtonBox.ButtonRole.AcceptRole)
+        open_in_browser_button = button_box.addButton("👁️ Review in Browser", QDialogButtonBox.ButtonRole.RejectRole)
+        button_box.addButton("Keep Notes (Don't Delete)", QDialogButtonBox.ButtonRole.ActionRole)
 
         layout.addWidget(button_box)
 

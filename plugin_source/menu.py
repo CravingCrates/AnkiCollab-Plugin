@@ -45,17 +45,18 @@ collab_menu = QMenu('AnkiCollab', mw)
 links_menu = QMenu('Links', mw)
 
 # Main Actions
-edit_list_action = QAction('Edit Subscriptions', mw)
+edit_list_action = QAction('Manage Subscriptions', mw)
 push_deck_action = QAction('Publish New Deck', mw)
-push_all_stats_action = QAction('Submit All Review History', mw)
+push_all_stats_action = QAction('Submit Review History', mw)
 pull_changes_action = QAction('Update Decks', mw)
+pull_changes_action.setToolTip("Download updates from AnkiCollab (does NOT upload your changes)")
 login_manager_action = QAction('Login', mw) # Default text is Login
 media_import_action = QAction('Import Media from Folder', mw)
 
 # Links Actions
-community_action = QAction('Join the Community', mw)
-website_action = QAction('Open Website', mw)
-donation_action = QAction('Leave a review', mw)
+community_action = QAction('Join Community (Discord)', mw)
+website_action = QAction('Visit Website', mw)
+donation_action = QAction('Rate this Add-on', mw)
 
 def force_logout(with_dialog = True):
     auth_manager.logout()
@@ -66,7 +67,7 @@ def force_logout(with_dialog = True):
 
 def delete_selected_rows(table, dialog):
     if table.selectedIndexes() == []:
-        showInfo("Please select at least one subscription to delete.")
+        showInfo("No subscription selected.\n\nClick on a row in the table to select it first.")
         return
     dialog.accept()
     strings_data = mw.addonManager.getConfig(__name__)
@@ -122,7 +123,7 @@ def add_to_table(line_edit, table, dialog):
             (
                 "Proceeding will download and install a file from the internet that is potentially malicious!<br>"
                 "We are not able to check every upload, so only download and install Decks that you know and trust!<br><br>"
-                "Do you want to proceed?"
+                "Continue with download?"
             ),
             title="AnkiCollab",
         ):
@@ -131,7 +132,7 @@ def add_to_table(line_edit, table, dialog):
     if string:
         # Check if already subscribed
         if string in strings_data:
-            showInfo(f"You are already subscribed to '{string}'.")
+            showInfo(f"You're already subscribed to this deck.\n\nUse 'Update Decks' to get the latest changes.")
             line_edit.setText('')
             return
 
@@ -238,7 +239,7 @@ def on_edit_list():
         actions_layout.setContentsMargins(5, 2, 5, 2)
         
         edit_button = QPushButton("⚙️")
-        edit_button.setToolTip("Edit subscription settings")
+        edit_button.setToolTip("Configure deck location and sync settings")
         edit_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; border: none; padding: 6px 8px; border-radius: 3px; font-size: 12px; } QPushButton:hover { background-color: #45a049; }")
         edit_button.clicked.connect(lambda checked, h=deck_hash, d=dialog: edit_subscription_details(h, d))
         actions_layout.addWidget(edit_button)
@@ -269,7 +270,7 @@ def on_edit_list():
     
     add_input_layout = QHBoxLayout()
     line_edit = QLineEdit()
-    line_edit.setPlaceholderText("Enter Subscription Key...")
+    line_edit.setPlaceholderText("e.g. word-word-word-word-word")
     line_edit.setStyleSheet("QLineEdit { padding: 8px; border: 2px solid #ddd; border-radius: 4px; } QLineEdit:focus { border-color: #2196F3; }")
     add_button = QPushButton('Add Subscription')
     add_button.setStyleSheet("QPushButton { background-color: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #1976D2; }")
@@ -278,7 +279,7 @@ def on_edit_list():
     add_input_layout.addWidget(add_button)
     add_layout.addLayout(add_input_layout)
 
-    disclaimer = QLabel("⚠️ Adding a subscription may take time to download. Anki might seem unresponsive during this process.")
+    disclaimer = QLabel("⏳ Tip: Adding a subscription may take a minute. Anki might freeze briefly - this is normal.")
     disclaimer.setWordWrap(True)
     disclaimer.setStyleSheet("color: #ff9800; font-style: italic; margin: 5px 0;")
     add_layout.addWidget(disclaimer)
@@ -1075,22 +1076,22 @@ def show_global_settings_dialog(parent_dialog):
     global_layout = QVBoxLayout(global_group)
     pull_on_startup_cb = QCheckBox("Update Decks on startup")
     pull_on_startup_cb.setChecked(bool(settings.get("pull_on_startup", False)))
-    pull_on_startup_cb.setToolTip("Automatically check for updates from AnkiCollab when Anki starts.")
+    pull_on_startup_cb.setToolTip("Automatically fetch updates when Anki opens (may slow startup)")
     suspend_new_cards_cb = QCheckBox("Automatically suspend new Cards")
     suspend_new_cards_cb.setChecked(bool(settings.get("suspend_new_cards", False)))
-    suspend_new_cards_cb.setToolTip("Automatically suspend new cards imported from subscriptions so they won't enter your review queue until you enable them.")
+    suspend_new_cards_cb.setToolTip("New cards from updates start suspended - unsuspend them when ready to study")
     move_cards_cb = QCheckBox("Do not move Cards automatically")
     move_cards_cb.setChecked(bool(settings.get("auto_move_cards", False)))
-    move_cards_cb.setToolTip("Prevent the add-on from automatically moving cards between decks or positions when syncing cloud changes.")
+    move_cards_cb.setToolTip("Keep cards in their current deck even if the maintainer reorganizes them")
     keep_empty_subdecks_cb = QCheckBox("Keep empty subdecks")
     keep_empty_subdecks_cb.setChecked(bool(settings.get("keep_empty_subdecks", False)))
-    keep_empty_subdecks_cb.setToolTip("Skip cleanup of empty subdecks after imports. Enable if you rely on placeholder decks.")
+    keep_empty_subdecks_cb.setToolTip("Don't delete empty subdecks after sync - useful for custom organization")
     auto_approve_cb = QCheckBox("Auto-approve changes (maintainer only)")
     auto_approve_cb.setChecked(bool(auth_manager.get_auto_approve()))
     auto_approve_cb.setToolTip("Automatically approve outgoing changes for your decks. Only works if you are a maintainer.")
     error_reporting_cb = QCheckBox("Send anonymous error reports (recommended)")
     error_reporting_cb.setChecked(bool(settings.get("error_reporting_enabled", False)))
-    error_reporting_cb.setToolTip("Send anonymized crash and error reports to help improve the add-on.")
+    error_reporting_cb.setToolTip("Help us fix bugs faster - no personal data is collected")
     
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
@@ -1129,7 +1130,7 @@ def show_global_settings_dialog(parent_dialog):
             init_sentry()
         except Exception:
             pass
-        showInfo("Global settings saved!")
+        showInfo("Settings saved!\n\nChanges will apply on the next sync.")
         dialog.accept()
 
     save_button.clicked.connect(save_global_settings)
@@ -1164,7 +1165,6 @@ def open_community_site():
     webbrowser.open('https://discord.gg/9x4DRxzqwM')
 
 def open_support_site():
-    #webbrowser.open('https://www.ankicollab.com/leavereview')
     rated_dialog = RateAddonDialog(mw)
     result = rated_dialog.exec()
 
@@ -1174,13 +1174,13 @@ def open_website():
 def on_login_manager_btn():
     if auth_manager.is_logged_in():
         force_logout(False)
-        showInfo("You have been logged out.")
+        showInfo("You've been logged out successfully.\n\nYour subscriptions are still saved locally.")
     else:
         # Show Login Dialog
         dialog = LoginDialog(mw)
         result = dialog.exec()
         if auth_manager.is_logged_in(): # Verify login status *after* dialog closes
-            showInfo("Login successful!")
+            showInfo("Welcome back! You're now logged in.")
             update_ui_for_login_state() # Update UI after successful login
 
 
@@ -1198,7 +1198,7 @@ def store_default_config():
         "pull_on_startup": False,
         "suspend_new_cards": False,
         "auto_move_cards": False, # Note: Action text is "Do not move", so False means "Do move"
-    "keep_empty_subdecks": False,
+        "keep_empty_subdecks": False,
         "rated_addon": False,
         "last_ratepls": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         "pull_counter": 0,

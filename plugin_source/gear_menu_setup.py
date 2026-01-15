@@ -184,7 +184,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
     action = links_menu.addAction("Export Media to Disk")
     action2 = links_menu.addAction("Download Missing Media")
     action4 = links_menu.addAction("Upload Missing Media")
-    action3 = links_menu.addAction("Reset Deck Timestamp")
+    action3 = links_menu.addAction("Reset Sync Timestamp")
     action5 = links_menu.addAction("Create Deck Link")
     qconnect(action.triggered, export_media)
     qconnect(action2.triggered, download_missing_media)
