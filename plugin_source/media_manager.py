@@ -35,7 +35,7 @@ logger = get_logger("ankicollab.media_manager")
 
 MAX_REQUESTS_PER_MINUTE = 1000
 REQUEST_TRACKING_WINDOW = 60
-MAX_FILE_SIZE = 2 * 1024 * 1024 # 2 MB
+MAX_FILE_SIZE = 10 * 1024 * 1024 # 10 MB
 CHUNK_SIZE = 131072  # 128KB
 REQUEST_TIMEOUT = 30
 VERIFY_SSL = True
@@ -533,7 +533,6 @@ class MediaManager:
         return self._is_anki_available()
     
     async def close(self):
-        print("MediaManager closing...")
         # Close requests session early to try to interrupt any blocking network IO
         if hasattr(self, 'session'):
             try:

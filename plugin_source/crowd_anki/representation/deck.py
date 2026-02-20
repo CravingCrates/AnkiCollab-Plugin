@@ -14,7 +14,7 @@ from ..utils.constants import UUID_FIELD_NAME
 from ..utils.uuid import UuidFetcher
 from ..utils.notifier import AnkiModalNotifier
 from ...thread import run_function_in_thread, sync_run_async
-from ...utils import get_logger
+from ...utils import get_logger, check_collection_or_abort, OperationAbortedError
 import uuid
                                 
 from ... import main
@@ -173,7 +173,7 @@ class Deck(JsonSerializableAnkiDict):
         if not deckHash:
             return result
         
-        response = requests.get(f"{API_BASE_URL}/GetProtectedFields/" + deckHash)
+        response = requests.get(f"{API_BASE_URL}/GetProtectedFields/" + deckHash, timeout=15)
         
         if response and response.status_code == 200:
             result["models"] = response.json()
@@ -496,71 +496,68 @@ class Deck(JsonSerializableAnkiDict):
     
     def create_unified_progress_tracker(self, total_notes):
         class UnifiedProgressTracker:
+            """
+            Unified progress tracker that provides a smooth import experience.
+            
+            Strategy:
+            - Notes use 0-90% of the bar (so n/n never shows a "full" bar)
+            - Post-processing phases use 90-100%
+            - This prevents users from thinking import is complete when it isn't
+            """
+            
+            # Use 1000 as our scale for smooth progress
+            TOTAL_SCALE = 1000
+            NOTES_PORTION = 900  # 90% for notes
+            POST_PORTION = 100   # 10% for post-processing
+            
             def __init__(self, total_notes):
                 self.total_notes = total_notes
-                self.total_work = total_notes
                 self.completed_notes = 0
                 self.completed_media = 0
-                
-                # Pre-calculate phase percentages for smooth transitions
-                if self.total_work > 0:
-                    self.notes_phase_end = (total_notes / self.total_work) * 100
-                    self.media_phase_end = 100
-                else:
-                    self.notes_phase_end = 100
-                    self.media_phase_end = 100
             
-            def update_notes_progress(self, completed_notes, deck_name=""):                
-                self.completed_notes = completed_notes                                    
+            def update_notes_progress(self, completed_notes, deck_name=""):
+                self.completed_notes = completed_notes
                 
-                if self.total_work == 0:
-                    return
-                    
-                progress_value = min(self.completed_notes + self.completed_media, self.total_work)
+                label = f"Processing notes..."
                 
-                label = f"Importing notes: {completed_notes:,} / {self.total_notes:,}"
+                # Scale notes to 0-90% of progress bar
+                if self.total_notes > 0:
+                    scaled_value = int((completed_notes / self.total_notes) * self.NOTES_PORTION)
+                else:
+                    scaled_value = 0
                 
                 aqt.mw.taskman.run_on_main(
                     lambda: aqt.mw.progress.update(
                         label=label,
-                        value=progress_value,
-                        max=self.total_work,
+                        value=scaled_value,
+                        max=self.TOTAL_SCALE,
                     ) if aqt.mw.progress.busy() else None
                 )
             
-            def update_media_progress(self, completed_media, downloading_count=0):                
+            def update_media_progress(self, completed_media, downloading_count=0):
                 self.completed_media = completed_media
-                    
-                if self.total_work == 0:
-                    return
-                    
-                progress_value = min(self.completed_notes + self.completed_media, self.total_work)
                 
                 if downloading_count > 0:
-                    label = f"Downloading media: {completed_media:,}"
+                    label = f"Downloading media: {completed_media:,} / {downloading_count:,}"
                 else:
-                    label = f"Processing media: {completed_media:,}"
+                    label = f"Processing media..."
                 
+                # Media processing is in the 90-95% range
                 aqt.mw.taskman.run_on_main(
                     lambda: aqt.mw.progress.update(
                         label=label,
-                        value=progress_value,
-                        max=self.total_work,
+                        value=self.NOTES_PORTION + (self.POST_PORTION // 2),
+                        max=self.TOTAL_SCALE,
                     ) if aqt.mw.progress.busy() else None
                 )
             
             def set_phase_label(self, label, percentage=None):
-                """Set a custom label for transition phases"""
-                if percentage is not None:
-                    progress_value = int((percentage / 100) * self.total_work)
-                else:
-                    progress_value = self.completed_notes + self.completed_media
-                    
+                """Set a custom label for post-processing phases. Bar shows 95%."""
                 aqt.mw.taskman.run_on_main(
                     lambda: aqt.mw.progress.update(
                         label=label,
-                        value=progress_value,
-                        max=self.total_work,
+                        value=self.NOTES_PORTION + (self.POST_PORTION * 3 // 4),
+                        max=self.TOTAL_SCALE,
                     ) if aqt.mw.progress.busy() else None
                 )
         
@@ -578,11 +575,11 @@ class Deck(JsonSerializableAnkiDict):
             total = downloaded + skipped
             
             if downloaded > 0:
-                msg = f"Deck imported successfully!\n📁 {downloaded:,} media files downloaded\n✓ {skipped:,} files already present"
+                msg = f"Deck imported successfully.\n{downloaded:,} media files downloaded, {skipped:,} already present."
             elif total > 0:
-                msg = f"Deck imported successfully!\n✓ All {total:,} media files were already present"
+                msg = f"Deck imported successfully.\nAll {total:,} media files were already present."
             else:
-                msg = "Deck imported successfully!\n📝 No media files needed"
+                msg = "Deck imported successfully.\nNo media files needed."
                 
             aqt.utils.tooltip(msg, parent=mw, period=4000) # type: ignore
         else:
@@ -736,6 +733,12 @@ class Deck(JsonSerializableAnkiDict):
         Ensures UUID_FIELD_NAME is preserved for all notetypes.
         """
         success = True
+        
+        # Ensure collection is valid
+        if collection is None:
+            failed_operations.append("Collection is None - cannot create/update notetypes")
+            logger.error("Collection is None in _create_and_update_notetypes")
+            return False
         
         # Ensure metadata exists
         if not self.metadata or not self.metadata.models:
@@ -1221,6 +1224,9 @@ class Deck(JsonSerializableAnkiDict):
         3. Create deck structure
         4. Move notes to correct decks
         5. Start media download in background
+        
+        This method includes periodic collection availability checks to abort gracefully
+        if the collection is closed during the operation.
         """
         # Validate inputs
         if not collection:
@@ -1238,6 +1244,9 @@ class Deck(JsonSerializableAnkiDict):
         notes_in_temp_deck = 0
         
         try:
+            # Initial collection check
+            check_collection_or_abort("initialization")
+            
             # Add Sentry breadcrumb for import start
             try:
                 sentry_sdk.add_breadcrumb(
@@ -1275,6 +1284,8 @@ class Deck(JsonSerializableAnkiDict):
                 logger.error(f"Failed to add Sentry breadcrumb: {sentry_error}")
             
             current_phase = "note_processing"
+            # Check collection is still available before processing notes
+            check_collection_or_abort(current_phase)
             progress_tracker.set_phase_label("Processing notes...")
             logger.info("Starting bulk processing of notes...")
             status_cur, temp_deck_id, temp_deck_name = self._bulk_process_all_notes(
@@ -1298,6 +1309,8 @@ class Deck(JsonSerializableAnkiDict):
                 logger.error(f"Failed to add Sentry breadcrumb: {sentry_error}")
             
             current_phase = "deck_structure_creation"
+            # Check collection is still available before creating deck structure
+            check_collection_or_abort(current_phase)
             progress_tracker.set_phase_label("Creating deck structure...")
             server_root_name = self.anki_dict.get("name", "Unknown Deck")
             logger.info(f"Creating deck structure with root name: {server_root_name}")
@@ -1315,6 +1328,8 @@ class Deck(JsonSerializableAnkiDict):
                 logger.error(f"Failed to add Sentry breadcrumb: {sentry_error}")
             
             current_phase = "note_organization"
+            # Check collection is still available before organizing notes
+            check_collection_or_abort(current_phase)
             progress_tracker.set_phase_label("Organizing notes into decks...")
             logger.info("Organizing notes into decks based on collected mapping...")
             Note._move_notes_to_decks(collection, note_to_deck_map, import_config)
@@ -1364,6 +1379,28 @@ class Deck(JsonSerializableAnkiDict):
             
             logger.info(f"Bulk import completed successfully: {status_cur} notes imported")
             return status_cur, media_result
+        
+        except OperationAbortedError as e:
+            # Graceful abort - collection was closed during operation
+            logger.warning(f"Import aborted gracefully at phase '{e.phase}': {str(e)}")
+            
+            # Add Sentry breadcrumb for graceful abort
+            try:
+                sentry_sdk.add_breadcrumb(
+                    category='deck_import',
+                    message=f'Import aborted gracefully at {e.phase}',
+                    level='warning',
+                    data={
+                        'phase': e.phase,
+                        'temp_deck_name': temp_deck_name,
+                        'notes_in_temp_deck': notes_in_temp_deck
+                    }
+                )
+            except Exception:
+                pass
+            
+            # Re-raise as a specific abort error that won't be treated as a failure
+            raise
             
         except Exception as e:
             error_context = {

@@ -29,8 +29,7 @@ try:
         # Fallback for older Pillow versions
         PIL_Resampling = Image
     OPTIMIZATION_AVAILABLE = True
-except ImportError as e:
-    print(e)
+except ImportError:
     logger.warning("Pillow not available - image optimization disabled")
     OPTIMIZATION_AVAILABLE = False
     PIL_Resampling = None # Define it as None if Pillow isn't available

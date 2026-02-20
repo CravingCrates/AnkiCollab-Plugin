@@ -43,7 +43,6 @@ def subscribe_to_deck(deck_hash):
             'deck_hash': deck_hash,
             'user_hash': user_hash
         }
-    print(payload)
     response = requests.post(f"{API_BASE_URL}/AddSubscription", json=payload, timeout=5)
     if response.status_code == 200:
         return True

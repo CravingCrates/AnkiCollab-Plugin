@@ -43,7 +43,6 @@ class AuthManager:
         if "expires_at" in auth_response:
             try:
                 expires_val = auth_response["expires_at"]
-                print(f"Received expiration date: {expires_val}")
                 if isinstance(expires_val, int) or isinstance(expires_val, float):
                     self.auth_data["expires_timestamp"] = float(expires_val)
                 elif isinstance(expires_val, str):
@@ -53,8 +52,7 @@ class AuthManager:
                     self.auth_data["expires_timestamp"] = expires_dt.timestamp()
                 else:
                     raise TypeError("Invalid type for expires_at")
-            except Exception as e:
-                print(f"Error parsing expiration date: {e}")
+            except Exception:
                 self.auth_data["expires_timestamp"] = time.time() + (30 * 86400)  # 30 days
         
         # Save to config
@@ -94,17 +92,16 @@ class AuthManager:
             response = requests.post(
                 f"{API_BASE_URL}/refreshToken",
                 json={"refresh_token": self.auth_data["refresh_token"]},
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=15
             )
             
             if response.status_code == 200:
                 new_auth = response.json()
                 return self.store_login_result(new_auth)
             else:
-                print(f"Token refresh failed: {response.text}")
                 return False
-        except Exception as e:
-            print(f"Error refreshing token: {e}")
+        except Exception:
             return False
     
     def is_logged_in(self):
@@ -128,9 +125,9 @@ class AuthManager:
             try:
                 # Tell server to invalidate the token
                 token = self.auth_data["token"]
-                requests.get(f"{API_BASE_URL}/removeToken/{token}")
-            except Exception as e:
-                print(f"Error during logout: {e}")
+                requests.get(f"{API_BASE_URL}/removeToken/{token}", timeout=10)
+            except Exception:
+                pass  # Proceed with local logout regardless of server response
         
         # Clear stored credentials regardless of server response
         self.auth_data = {}

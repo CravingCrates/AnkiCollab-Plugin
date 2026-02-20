@@ -104,7 +104,7 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
         showInfo("Could not retrieve unique identifiers for the selected notes.", parent=window if window is not None else mw)
         return
 
-    (rationale, commit_text) = get_commit_info(11)
+    (rationale, commit_text) = get_commit_info(11, parent=window)
     if rationale is None:
         return # User cancelled
 
@@ -118,7 +118,7 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
 
     # TODO: Background threading
     try:
-        response = requests.post(f"{API_BASE_URL}/requestRemoval", json=payload)
+        response = requests.post(f"{API_BASE_URL}/requestRemoval", json=payload, timeout=30)
         response.raise_for_status()
         logger.debug(f"Removal request response: {response.text}")
         if askUser(
@@ -478,12 +478,13 @@ def init_editor_card(buttons: List[str], editor):
          return buttons
 
     b = editor.addButton(
-        None, # icon_path
-        "AnkiCollab",
-        lambda editor=editor: suggest_notes([editor.note.id], 2, editor=editor),
-        tip="Suggest Changes (AnkiCollab)",
-        keys=None, # shortcut
-        disables=False # disables automatically when no note is selected
+        icon=None,
+        cmd="AnkiCollab",
+        func=lambda editor=editor: suggest_notes([editor.note.id], 2, editor=editor),
+        tip="Suggest changes to the cloud deck",
+        label="AnkiCollab",
+        keys=None,
+        disables=False
     )
     
     buttons.append(b)

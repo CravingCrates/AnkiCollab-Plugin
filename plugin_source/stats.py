@@ -115,14 +115,6 @@ class ReviewHistory:
             'user_hash': user_hash,
             'review_history': review_history
         }
-        # Take all the average retention rates from all notes in review_history and calculate the average retention rate for the deck
-        # Print the deck name and the average retention rate
-        for deck_name, notes in review_history.items():
-            retention_rates = []
-            for note in notes.values():
-                retention_rates.append(note['retention'])
-            average_retention_rate = int(sum(retention_rates) / len(retention_rates))
-            print(f'{deck_name}: {average_retention_rate}%')
         return data
 
 def update_stats_timestamp(deck_hash: str) -> None:
