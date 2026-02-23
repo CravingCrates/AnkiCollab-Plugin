@@ -10,9 +10,8 @@ from aqt import mw
 from .utils import get_logger
 logger = get_logger("ankicollab.thread")
 
-def thread_exception_handler(args):
+def thread_exception_handler(exc_type, exc_value, exc_traceback):
     """Handle uncaught exceptions in threads"""
-    exc_type, exc_value, exc_traceback = args
     logger.error(f"Uncaught exception in thread: {exc_type.__name__}: {exc_value}")
     logger.error("".join(traceback.format_tb(exc_traceback)))
     
