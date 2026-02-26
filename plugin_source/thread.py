@@ -10,17 +10,17 @@ from aqt import mw
 from .utils import get_logger
 logger = get_logger("ankicollab.thread")
 
-def thread_exception_handler(exc_type, exc_value, exc_traceback):
-    """Handle uncaught exceptions in threads"""
-    logger.error(f"Uncaught exception in thread: {exc_type.__name__}: {exc_value}")
-    logger.error("".join(traceback.format_tb(exc_traceback)))
+# def thread_exception_handler(exc_type, exc_value, exc_traceback):
+#     """Handle uncaught exceptions in threads"""
+#     logger.error(f"Uncaught exception in thread: {exc_type.__name__}: {exc_value}")
+#     logger.error("".join(traceback.format_tb(exc_traceback)))
     
-    aqt.mw.taskman.run_on_main(
-            lambda: aqt.utils.showWarning(f"Something went wrong. Please try again.\n\nIf this keeps happening, visit the community for help.",
-                title="AnkiCollab Error",
-                parent=mw
-            )
-        )
+#     aqt.mw.taskman.run_on_main(
+#             lambda: aqt.utils.showWarning(f"Something went wrong. Please try again.\n\nIf this keeps happening, visit the community for help.",
+#                 title="AnkiCollab Error",
+#                 parent=mw
+#             )
+#         )
 
 def run_function_in_thread(function, *args, **kwargs):
     """Run a function in a separate thread with proper exception handling"""
@@ -83,4 +83,4 @@ def sync_run_async(async_function, *args, **kwargs):
         loop.close()
 
 # Install exception handler for threads
-sys.excepthook = thread_exception_handler
+#sys.excepthook = thread_exception_handler

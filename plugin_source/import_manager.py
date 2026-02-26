@@ -501,7 +501,7 @@ def _on_deck_installed(install_result, deck, subscription, input_hash=None, upda
         deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
         logger.info(f"Found {len(deleted_nids)} note IDs for deleted notes.")
         if deleted_nids:
-            del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash)
+            del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash, parent=mw)
             del_notes_choice = del_notes_dialog.exec()
 
             if del_notes_choice == QDialog.DialogCode.Accepted:
@@ -567,7 +567,7 @@ def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
             if stats_enabled is None:
                 # Only show dialog if not already decided
                 if deck_name:
-                    dialog = AskShareStatsDialog(deck_name)
+                    dialog = AskShareStatsDialog(deck_name, parent=mw)
                     choice = dialog.exec()
                     if choice == QDialog.DialogCode.Accepted:
                         stats_enabled = True
@@ -594,7 +594,7 @@ def install_update(subscription, input_hash=None, update_timestamp_after=False):
             deck_hash, subscription["optional_tags"]
     ):
         dialog = OptionalTagsDialog(
-            get_optional_tags(deck_hash), subscription["optional_tags"]
+            get_optional_tags(deck_hash), subscription["optional_tags"], parent=mw
         )
         dialog.exec()
         update_optional_tag_config(
@@ -698,7 +698,7 @@ def show_changelog_popup(subscription):
     update_deck_stats_enabled(deck_hash, subscription["stats_enabled"])
     
     if changelog:
-        dialog = ChangelogDialog(changelog, deck_hash)
+        dialog = ChangelogDialog(changelog, deck_hash, parent=mw)
         choice = dialog.exec()
 
         if choice == QDialog.DialogCode.Accepted:
@@ -724,7 +724,7 @@ def ask_for_rating():
                     if not strings_data["settings"]["rated_addon"]:  # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime(
                             '%Y-%m-%d %H:%M:%S')
-                        dialog = RateAddonDialog()
+                        dialog = RateAddonDialog(parent=mw)
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
 

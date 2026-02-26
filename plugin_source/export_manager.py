@@ -203,7 +203,7 @@ def ask_for_rating():
                 if (datetime.now(timezone.utc) - last_ratepls_dt).days > 14:  # only ask every 14 days
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                        dialog = RateAddonDialog() # UI Element - Main thread OK
+                        dialog = RateAddonDialog(parent=mw) # UI Element - Main thread OK
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
 

@@ -35,8 +35,8 @@ def set_rated_true():
             mw.addonManager.writeConfig(__name__, strings_data)
 
 class ChangelogDialog(QDialog):
-    def __init__(self, changelog, deck_hash):
-        super().__init__()
+    def __init__(self, changelog, deck_hash, parent=None):
+        super().__init__(parent)
         local_name = get_local_deck_from_hash(deck_hash)
         self.setWindowTitle(f"AnkiCollab - Changelog for {local_name}")
         self.setModal(True)
@@ -105,10 +105,10 @@ class ChangelogDialog(QDialog):
         
 
 class OptionalTagsDialog(QDialog):
-    checkboxes = {}
     
-    def __init__(self, old_tags, new_tags):
-        super().__init__()
+    def __init__(self, old_tags, new_tags, parent=None):
+        super().__init__(parent)
+        self.checkboxes = {}
         
         colors = get_colors()
         self.setStyleSheet(get_dialog_style())
@@ -149,7 +149,6 @@ class OptionalTagsDialog(QDialog):
         layout.addWidget(button)
 
         self.setLayout(layout)
-        self.show()
 
     def get_selected_tags(self):
         result = {}
@@ -249,7 +248,7 @@ class LoginDialog(QDialog):
                 if auth_manager.store_login_result(auth_data):
                     self.done(0)
                 else:
-                    msg_box = QMessageBox()
+                    msg_box = QMessageBox(self)
                     msg_box.setText("Invalid authentication response from server.")
                     msg_box.exec()
             else:
@@ -261,7 +260,7 @@ class LoginDialog(QDialog):
             
 class AddChangelogDialog(QDialog):
     def __init__(self, deck_hash, parent=None):
-        super().__init__()
+        super().__init__(parent)
         self.setWindowTitle("AnkiCollab - Add Changelog")
         self.setModal(True)
         self.resize(400, 220)
@@ -360,20 +359,13 @@ class DeletedNotesDialog(QDialog):
         label.setStyleSheet(f"color: {colors['text_secondary']}; margin-bottom: 8px;")
         layout.addWidget(label)
 
-        scroll_area = QScrollArea()
-        scroll_area.setStyleSheet(f"""
-            QScrollArea {{
-                border: 1px solid {colors['border']};
-                border-radius: 5px;
-                background-color: {colors['surface']};
-            }}
-        """)
-
         deleted_notes_text = QTextBrowser()
         deleted_notes_text.setMaximumHeight(200)
         deleted_notes_text.setStyleSheet(f"""
             QTextBrowser {{
-                border: none;
+                border: 1px solid {colors['border']};
+                border-radius: 5px;
+                padding: 8px;
                 background-color: {colors['surface']};
                 color: {colors['text_primary']};
             }}
@@ -381,10 +373,7 @@ class DeletedNotesDialog(QDialog):
 
         deleted_notes_str = "\n".join(map(str, deleted_notes))
         deleted_notes_text.setPlainText(deleted_notes_str)
-
-        scroll_area.setWidget(deleted_notes_text)
-        scroll_area.setWidgetResizable(True)
-        layout.addWidget(scroll_area)
+        layout.addWidget(deleted_notes_text)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -418,24 +407,24 @@ class AskShareStatsDialog(QDialog):
         colors = get_colors()
         self.setStyleSheet(get_dialog_style())
 
-        self.layout = QVBoxLayout(self)
-        self.layout.setSpacing(12)
-        self.layout.setContentsMargins(20, 20, 20, 20)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(20, 20, 20, 20)
         
         self.deck_name = deck_name
         
         header = QLabel("Share Review Data")
         header.setStyleSheet(f"font-size: 15px; font-weight: 500; color: {colors['text_primary']};")
-        self.layout.addWidget(header)
+        main_layout.addWidget(header)
         
         self.message = QLabel(f"The maintainers of '{self.deck_name}' would like to use anonymized review data to improve the deck. Would you like to share your stats?")
         self.message.setWordWrap(True)
         self.message.setStyleSheet(f"color: {colors['text_primary']}; margin-bottom: 8px;")
-        self.layout.addWidget(self.message)
+        main_layout.addWidget(self.message)
 
         self.checkbox = QCheckBox("Remember my decision")
         self.checkbox.setStyleSheet(f"color: {colors['text_secondary']};")
-        self.layout.addWidget(self.checkbox)
+        main_layout.addWidget(self.checkbox)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -451,7 +440,7 @@ class AskShareStatsDialog(QDialog):
         
         button_layout.addWidget(no_button)
         button_layout.addWidget(yes_button)
-        self.layout.addLayout(button_layout)
+        main_layout.addLayout(button_layout)
 
     def isChecked(self):
         return self.checkbox.isChecked()
