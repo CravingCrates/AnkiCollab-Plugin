@@ -112,13 +112,13 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
         'remote_deck': deckHash,
         'note_guids': guids,
         'commit_text': commit_text,
-        'token': auth_manager.get_token(),
         'force_overwrite': False # not implemented on the backend yet so we pass false welp
     }
 
     # TODO: Background threading
     try:
-        response = requests.post(f"{API_BASE_URL}/requestRemoval", json=payload, timeout=30)
+        from .api_client import api_client
+        response = api_client.post_json("/requestRemoval", payload, timeout=30)
         response.raise_for_status()
         logger.debug(f"Removal request response: {response.text}")
         if askUser(
@@ -375,14 +375,14 @@ def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscrib
         return
 
     def _op(_: object):
+        from .api_client import api_client
         payload = {
             "subscriber_deck_hash": subscriber_hash,
             "base_deck_hash": base_hash,
             "note_guids": guids,
-            "token": token,
         }
         try:
-            resp = requests.post(f"{API_BASE_URL}/CreateNewNoteLink", json=payload, timeout=30)
+            resp = api_client.post_json("/CreateNewNoteLink", payload, timeout=30)
             return resp.status_code, resp.text
         except Exception as e:
             return -1, str(e)
@@ -544,6 +544,21 @@ def request_update(silent) -> None:
     if not auth_manager.is_logged_in():
         aqt.utils.tooltip("Log in to AnkiCollab to check for updates.")
         return
+
+    # Validate token with server before starting the pull
+    try:
+        from .api_client import api_client
+        check = api_client.post_empty("/CheckUserToken", timeout=5)
+        if check.status_code != 200 or check.text != "true":
+            # api_client already called handle_auth_failure() for 401
+            if check.status_code != 401:
+                auth_manager.handle_auth_failure()
+            return
+    except RuntimeError:
+        # "Not logged in" — already handled by api_client
+        return
+    except Exception:
+        pass  # Network error — proceed and let pull handle it
 
     handle_pull(None, silent)
 

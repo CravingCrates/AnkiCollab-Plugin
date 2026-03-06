@@ -239,7 +239,7 @@ class LoginDialog(QDialog):
         }
         
         try:
-            response = requests.post(f"{API_BASE_URL}/login", data=payload, timeout=10)
+            response = requests.post(f"{API_BASE_URL}/login", json=payload, timeout=10, verify=True)
 
             if response.status_code == 200:
                 # Parse the JSON response
@@ -321,13 +321,13 @@ class AddChangelogDialog(QDialog):
             QMessageBox.warning(self, "Error", "Please enter a changelog message.")
             return
 
+        from .api_client import api_client
         payload = {
             'deck_hash': self.deck_hash,
             'changelog': changelog_text,
-            'token': get_login_token()
         }
 
-        response = requests.post(f"{API_BASE_URL}/submitChangelog", json=payload, timeout=30)
+        response = api_client.post_json("/submitChangelog", payload, timeout=30)
         if response.status_code == 200:
             QMessageBox.information(self, "Information", response.text)
         else:

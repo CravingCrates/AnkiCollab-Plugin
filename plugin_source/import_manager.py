@@ -24,6 +24,7 @@ from aqt import mw
 from anki.decks import DeckId
 
 from .var_defs import API_BASE_URL
+from .api_client import api_client
 
 from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
 
@@ -856,7 +857,7 @@ def remove_nonexistent_decks():
 
         payload = {"deck_hashes": list(strings_data_to_send.keys())}
         try:
-            response = requests.post(f"{API_BASE_URL}/CheckDeckAlive", json=payload, timeout=30)
+            response = api_client.post_json("/CheckDeckAlive", payload, auth=False, timeout=30)
             if response.status_code == 200:
                 if response.content == "Error":
                     infot = "A Server Error occurred. Please notify us!"
@@ -918,9 +919,7 @@ def async_start_pull(input_hash, silent=False):
             )
 
         try:
-            response = requests.post(
-                f"{API_BASE_URL}/pullChanges", json=strings_data_to_send
-            )
+            response = api_client.post_json("/pullChanges", strings_data_to_send, auth=False)
             if response.status_code == 200:
                 compressed_data = base64.b64decode(response.content)
                 decompressed_data = gzip.decompress(compressed_data)
@@ -935,6 +934,8 @@ def async_start_pull(input_hash, silent=False):
                     return (None, None, silent)
 
                 return (webresult, input_hash, silent)
+            elif response.status_code == 401:
+                return (None, None, silent)
             else:
                 infot = "A Server Error occurred. Please notify us!"
                 aqt.mw.taskman.run_on_main(

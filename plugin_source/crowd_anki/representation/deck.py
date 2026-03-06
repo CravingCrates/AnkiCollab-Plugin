@@ -173,7 +173,8 @@ class Deck(JsonSerializableAnkiDict):
         if not deckHash:
             return result
         
-        response = requests.get(f"{API_BASE_URL}/GetProtectedFields/" + deckHash, timeout=15)
+        from ...api_client import api_client
+        response = api_client.get(f"/GetProtectedFields/{deckHash}", timeout=15)
         
         if response and response.status_code == 200:
             result["models"] = response.json()
@@ -320,10 +321,24 @@ class Deck(JsonSerializableAnkiDict):
         def download_media_operation():
             """Background operation to download media files"""
             try:
-                user_token = auth_manager.get_token()
-                if not user_token:
-                    raise ValueError("No authentication token available")
-                
+                # Validate token before starting media operations
+                if auth_manager.is_logged_in():
+                    try:
+                        from ...api_client import api_client
+                        check = api_client.post_empty("/CheckUserToken")
+                        if check.status_code != 200 or check.text != "true":
+                            # api_client already called handle_auth_failure() for 401
+                            if check.status_code != 401:
+                                auth_manager.handle_auth_failure()
+                            media_result.update({"success": False, "message": "Session expired", "auth_expired": True})
+                            return media_result
+                    except RuntimeError:
+                        # "Not logged in" from api_client — already handled
+                        media_result.update({"success": False, "message": "Session expired", "auth_expired": True})
+                        return media_result
+                    except Exception:
+                        pass  # Network error — proceed and let media ops handle it
+
                 aqt.mw.taskman.run_on_main(
                     lambda: show_media_progress("download", len(missing_files))
                 )
@@ -348,7 +363,6 @@ class Deck(JsonSerializableAnkiDict):
                         )
                     
                     batch_result = sync_run_async(main.media_manager.get_media_manifest_and_download,
-                        user_token=user_token,
                         deck_hash=deck_hash,
                         filenames=batch,
                         progress_callback=progress_callback,
@@ -358,6 +372,8 @@ class Deck(JsonSerializableAnkiDict):
                     if batch_result:
                         last_result = batch_result
                         total_downloaded += batch_result.get("downloaded", 0)
+                        if batch_result.get("auth_expired"):
+                            break
                 
                 # Update media result with accumulated download results
                 media_result.update({
@@ -365,6 +381,10 @@ class Deck(JsonSerializableAnkiDict):
                     "success": last_result.get("success", False),
                     "message": last_result.get("message", "Media download completed")
                 })
+                
+                # If auth expired, skip the progress indicator (user was already notified)
+                if last_result.get("auth_expired"):
+                    return media_result
                 
                 # Complete the progress indicator
                 success = last_result.get("success", False)
@@ -566,6 +586,10 @@ class Deck(JsonSerializableAnkiDict):
     def on_media_download_done(self, result=None) -> None:
         if result is None:
             result = {"success": False, "message": "Unknown error"}
+        
+        # Auth failure was already shown to the user via handle_auth_failure()
+        if result.get("auth_expired"):
+            return
         
         #mw.col.media.check()
         
@@ -1356,6 +1380,8 @@ class Deck(JsonSerializableAnkiDict):
             media_files = self.get_media_file_list(data_from_models=True, include_children=True)
             
             if media_files:
+                # Path traversal protection: only allow basenames without directory separators
+                media_files = [f for f in media_files if f == os.path.basename(f) and '..' not in f]
                 # Check which files actually need downloading
                 dir_path = collection.media.dir()
                 missing_files = [f for f in media_files if not os.path.exists(os.path.join(dir_path, f))]

@@ -5,10 +5,10 @@ import json
 from aqt import mw
 from collections import defaultdict
 import aqt
-import requests
 import gzip
 
 from .utils import DeckManager, get_did_from_hash, get_deck_and_subdecks
+from .auth_manager import auth_manager
 from .identifier import get_user_hash
 from .var_defs import API_BASE_URL
 
@@ -21,15 +21,16 @@ class ReviewHistory:
 
     def get_card_data(self, last_upload_date: int) -> defaultdict:
         # Query to get the card data of the given decks
+        placeholders = ', '.join('?' for _ in self.deck_ids)
         query = f"""
             SELECT cards.id, cards.reps, cards.lapses, notes.guid, cards.did
             FROM cards
             JOIN notes ON cards.nid = notes.id
-            WHERE cards.did IN ({', '.join(map(str, self.deck_ids))})
-            AND cards.mod > {last_upload_date}
+            WHERE cards.did IN ({placeholders})
+            AND cards.mod > ?
             AND cards.type > 1
         """
-        card_data = list(mw.col.db.execute(query))
+        card_data = list(mw.col.db.execute(query, *self.deck_ids, last_upload_date))
 
         notes_by_deck_and_note_guid = defaultdict(lambda: defaultdict(lambda: {
             'retention': [],
@@ -81,29 +82,24 @@ class ReviewHistory:
         if total == 0:
             return -1
 
-        return int(passed / total) * 100
+        return int(passed * 100 / total)
 
     def upload_review_history(self, last_upload_date: int) -> None:
         
         review_history = self.get_card_data(last_upload_date)
-
+        
         if len(review_history) == 0:
             return
 
-        user_hash = get_user_hash()
-        if not user_hash:
+        token = auth_manager.get_token()
+        if not token:
             return
+        from .api_client import api_client
         data = {
-            'user_hash': user_hash,
             'deck_hash': self.deck_hash,
             'review_history': review_history
         }
-        compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
-        based_data = base64.b64encode(compressed_data)
-        requests.post(f"{API_BASE_URL}/UploadDeckStats",
-                                 data=based_data,
-                                 headers={'Content-Type': 'application/json'},
-                                 timeout=30)
+        api_client.post_gzip("/UploadDeckStats", data, timeout=30)
 
 
     def dump_review_history(self):

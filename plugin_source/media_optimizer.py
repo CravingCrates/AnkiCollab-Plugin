@@ -7,13 +7,13 @@ import shutil
 import uuid
 import re
 import hashlib
-import requests
 
 import aqt
 import anki
 from aqt import mw
 
 from .var_defs import API_BASE_URL
+from .auth_manager import auth_manager
 
 from .utils import get_logger
 logger = get_logger("ankicollab.media_optimizer")
@@ -509,15 +509,15 @@ def sanitize_svg_files(svg_file_list):
         logger.debug(f"Processing SVG batch {batch_index+1}/{len(batches)} with {len(batch)} files")
         
         payload = {
-            "svg_files": [{"filename": f, "content": c} for f, c in batch]
+            "svg_files": [{"filename": f, "content": c} for f, c in batch],
         }
         
         try:
-            response = requests.post(
-                f"{API_BASE_URL}/media/sanitize/svg",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=30
+            from .api_client import api_client
+            response = api_client.post_json(
+                "/media/sanitize/svg",
+                payload,
+                timeout=30,
             )
             
             if response.status_code != 200:
