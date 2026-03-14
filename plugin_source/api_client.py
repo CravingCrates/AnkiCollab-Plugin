@@ -7,6 +7,8 @@ endpoints (pullChanges, CheckDeckAlive, …) can still use plain
 ``requests`` directly.
 """
 
+from __future__ import annotations
+
 import gzip
 import base64
 import json

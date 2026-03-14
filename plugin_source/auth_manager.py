@@ -69,12 +69,9 @@ class AuthManager:
         # Check if token needs refresh (less than 1 day remaining)
         if self._should_refresh_token():
             if not self.refresh_token():
-                # If refresh fails, return empty token to force re-login
-                aqt.utils.showWarning(
-                    "Your AnkiCollab session has expired. Please log in again.",
-                    parent=mw,
-                    title="AnkiCollab",
-                )
+                # Silently clear credentials to force re-login
+                self.auth_data = {}
+                self._save_auth_data()
                 return ""
         
         return self.auth_data.get("token", "")
@@ -136,17 +133,11 @@ class AuthManager:
         self.auth_data = {}
         self._save_auth_data()
         
-        # Update UI and show warning on the main thread (safe from background threads)
+        # Silently update UI on the main thread (safe from background threads)
         if mw and mw.taskman:
             def _on_main():
                 from .menu import update_ui_for_login_state
                 update_ui_for_login_state()
-                aqt.utils.showWarning(
-                    "Your AnkiCollab session has expired or is invalid. "
-                    "Please log in again.",
-                    parent=mw,
-                    title="AnkiCollab",
-                )
             mw.taskman.run_on_main(_on_main)
 
     def logout(self):
