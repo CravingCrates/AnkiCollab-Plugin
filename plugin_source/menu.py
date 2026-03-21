@@ -38,6 +38,11 @@ from .media_import import on_media_btn
 from .hooks import async_update, update_hooks_for_login_state
 from .dialogs import LoginDialog
 from .auth_manager import auth_manager
+from .notifications_center import (
+    init_notification_center,
+    refresh_notifications,
+    set_notification_visibility,
+)
 from .sentry_integration import init_sentry
 from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style, get_table_style, get_groupbox_style, get_combobox_style, get_info_box_style
 from anki.utils import point_version
@@ -1109,6 +1114,7 @@ def update_ui_for_login_state():
     push_deck_action.setVisible(logged_in)
     pull_changes_action.setVisible(logged_in)
     general_settings_action.setVisible(logged_in)
+    set_notification_visibility(logged_in)
 
     login_manager_action.setText("Logout" if logged_in else "Login")
 
@@ -1118,6 +1124,9 @@ def update_ui_for_login_state():
     # Ensure menu bar is updated if actions were added/removed/hidden
     # This might not be strictly necessary if only visibility changes, but can help
     mw.form.menubar.repaint()
+
+    if logged_in:
+        refresh_notifications()
 
 def menu_init():
     store_default_config()
@@ -1129,6 +1138,7 @@ def menu_init():
     collab_menu.addAction(edit_list_action)
     collab_menu.addAction(push_deck_action)
     collab_menu.addSeparator()
+    init_notification_center(collab_menu)
     collab_menu.addAction(general_settings_action)
     collab_menu.addAction(login_manager_action)
     collab_menu.addMenu(links_menu)

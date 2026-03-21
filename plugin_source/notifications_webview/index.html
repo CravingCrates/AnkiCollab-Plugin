@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Notification Center - AnkiCollab</title>
+  <link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div id="loadingOverlay" class="loading-overlay hidden" role="status">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <div class="loading-text">Loading notifications&#8230;</div>
+    </div>
+    <div class="header">
+      <div class="header-left">
+        <div class="tabs" role="tablist" aria-label="Notification views">
+          <button id="tabNew" class="tab active" type="button" role="tab" aria-selected="true">New</button>
+          <button id="tabHistory" class="tab" type="button" role="tab" aria-selected="false">History</button>
+        </div>
+      </div>
+      <div class="header-right">
+        <button id="refreshBtn" class="refresh-btn" type="button" aria-label="Refresh notifications"></button>
+        <div id="unreadBadge" class="badge" aria-live="polite" aria-atomic="true">0 unread</div>
+      </div>
+    </div>
+    <div id="newPanel" class="panel" role="tabpanel" aria-labelledby="tabNew"></div>
+    <div id="historyPanel" class="panel hidden" role="tabpanel" aria-labelledby="tabHistory"></div>
+    <div id="detailPanel" class="panel hidden" aria-label="Commit details"></div>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>

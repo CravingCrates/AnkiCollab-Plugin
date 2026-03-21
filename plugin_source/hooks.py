@@ -25,6 +25,7 @@ from .dialogs import AddChangelogDialog, ProtectFieldsDialog
 from .var_defs import PREFIX_PROTECTED_FIELDS
 
 from .auth_manager import auth_manager
+from .notifications_center import refresh_notifications, register_sync_refresh_hook
 from .utils import get_logger
 import requests
 
@@ -647,6 +648,7 @@ def onProfileLoaded():
     main.media_manager.set_media_folder(mw.col.media.dir())
     
     autoUpdate()
+    refresh_notifications()
     patch_successful = patch_image_occlusion_enhanced()
     logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
 
@@ -678,6 +680,7 @@ def hooks_init():
     """Registers all hooks. Internal checks within callbacks manage behavior."""
     gui_hooks.profile_did_open.append(onProfileLoaded)
     gui_hooks.profile_will_close.append(onProfileWillClose)
+    register_sync_refresh_hook()
 
     # Add Cards related
     gui_hooks.add_cards_did_init.append(init_add_card)
