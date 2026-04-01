@@ -14,8 +14,7 @@ from ..utils.utils import list_to_cs_string, string_cs_to_list
 class ConfigDialog(QDialog):
     def __init__(self, config: ConfigSettings,
                  parent=None):
-        super().__init__(None)
-        self.parent = parent
+        super().__init__(parent)
         self.config = config
         self.form = ConfigUI()
         self.form.setupUi(self)

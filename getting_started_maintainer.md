@@ -49,6 +49,7 @@ Users are prompted to log in after they download the Addon, and are linked to th
 
 Please note that your newly published Deck is set to `Unlisted` and `New Notetype uploads` are disallowed. You can uncheck the first option to make the deck visible under [Explore Decks](https://www.ankicollab.com/decks)
 
+Also, if your uploaded deck is large, it will be automatically cached after 24 hours. This significantly improves download speed for users (including media) once the 24-hour period has passed. Note that downloading a new deck within the first 24 hours will be as slow as possible.
 ![Public checkbox and NoteType Checkbox](https://i.imgur.com/T0s0N2A.png)
 
 
@@ -60,8 +61,8 @@ AnkiCollab checks the media files attached to the cards you suggest and uploads 
 
 Restrictions for file uploads are as follows:
 
-- The file is too big (optimized size is > 2mb)
-- The fileformat is not supported (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff" are the supported formats)
+- The file is too big (optimized size is > 10 mb)
+- The fileformat is not supported (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff", ".mp3" are the supported formats)
 
 Your files will be converted into .webp format to minimize storage usage, invalid file names will automatically be renamed.
 

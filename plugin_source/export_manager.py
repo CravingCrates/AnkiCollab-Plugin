@@ -203,34 +203,25 @@ def ask_for_rating():
                 if (datetime.now(timezone.utc) - last_ratepls_dt).days > 14:  # only ask every 14 days
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                        dialog = RateAddonDialog() # UI Element - Main thread OK
+                        dialog = RateAddonDialog(parent=mw) # UI Element - Main thread OK
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
 
 def get_maintainer_data(deckHash):
+    from .api_client import api_client
     token = auth_manager.get_token()
     auto_approve = auth_manager.get_auto_approve()
 
     if token:
-        token_info = {'token': token, 'deck_hash': deckHash}
         try:
-            token_check_response = requests.post(
-                f"{API_BASE_URL}/CheckUserToken",
-                json=token_info,
-                headers={"Content-Type": "application/json"}
-            )
+            token_check_response = api_client.post_empty("/CheckUserToken")
             if token_check_response.status_code == 200:
                 token_res = token_check_response.text
                 if token_res != "true":
                     from .menu import force_logout # bypass circular import
                     if auth_manager.refresh_token():
                         token = auth_manager.get_token()
-                        token_info['token'] = token
-                        token_check_response = requests.post(
-                            f"{API_BASE_URL}/CheckUserToken",
-                            json=token_info,
-                            headers={"Content-Type": "application/json"}
-                        )
+                        token_check_response = api_client.post_empty("/CheckUserToken")
                         if token_check_response.status_code != 200 or token_check_response.text != "true":
                             mw.taskman.run_on_main(force_logout) # Schedule UI action on main thread
                             token = ""
@@ -635,7 +626,7 @@ def update_notetype_media_references(filename_mapping: Dict[str, str]) -> int:
     
     return 0
 
-async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id: str, all_files_info: List[Dict], file_paths: Dict[str, str], progress_callback_wrapper=None, silent=False) -> Dict[str, Any]:
+async def handle_media_upload(deck_hash: str, bulk_operation_id: str, all_files_info: List[Dict], file_paths: Dict[str, str], progress_callback_wrapper=None, silent=False) -> Dict[str, Any]:
     """
     Async function to upload media files. Returns a summary dictionary.
     The progress_callback_wrapper is expected to handle threading (e.g., run_on_main).
@@ -675,7 +666,6 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
 
             # Process this batch
             batch_result = await main.media_manager.upload_media_bulk(
-                user_token=user_token,
                 files_info=current_batch,
                 file_paths=file_paths,
                 deck_hash=deck_hash,
@@ -840,7 +830,7 @@ def _sync_optimize_media_and_update_refs(media_files: List[Tuple[str, str]]) -> 
     return filename_mapping, files_info, file_paths
 
 
-def _sync_handle_media_upload(token: str, deck_hash: str, bulk_operation_id: str, files_info: List[Dict], file_paths: Dict[str, str], silent: bool) -> Dict[str, Any]:
+def _sync_handle_media_upload(deck_hash: str, bulk_operation_id: str, files_info: List[Dict], file_paths: Dict[str, str], silent: bool) -> Dict[str, Any]:
     """
     Synchronous wrapper for handle_media_upload async function.
     Designed to be run in a background thread (e.g., via QueryOp).
@@ -865,7 +855,6 @@ def _sync_handle_media_upload(token: str, deck_hash: str, bulk_operation_id: str
         # Run the async upload function using the synchronous runner
         result = _sync_run_async(
             handle_media_upload,
-            user_token=token,
             deck_hash=deck_hash,
             bulk_operation_id=bulk_operation_id,
             all_files_info=files_info,
@@ -973,15 +962,12 @@ def _submit_deck_op(
         "deck": deck_res,
         "rationale": effective_rationale,
         "commit_text": effective_commit_text,
-        "token": token,
         "force_overwrite": force_overwrite,
     }
     try:
-        compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
-        based_data = base64.b64encode(compressed_data)
-        headers = {"Content-Type": "application/json"}
+        from .api_client import api_client
         logger.info(f"Submitting deck data for hash: {deckHash}")
-        response = requests.post(f"{API_BASE_URL}/submitCard", data=based_data, headers=headers, timeout=120)
+        response = api_client.post_gzip("/submitCard", data, timeout=120)
         response.raise_for_status()
 
         logger.info(f"Deck submission response status: {response.status_code}")
@@ -989,7 +975,7 @@ def _submit_deck_op(
         if media_files_info:
             bulk_operation_id = "" # only used for new decks
             # Pass necessary info to the success callback for the next step
-            return token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False # silent = False for suggestions
+            return deckHash, bulk_operation_id, media_files_info, media_file_paths, False # silent = False for suggestions
         else:
             # No media to upload, return None to signal completion
             # Also pass back the success message text
@@ -1323,7 +1309,7 @@ def _handle_media_upload_result(result: Dict[str, Any]):
         ask_for_rating()
 
 
-def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]], success_callback: Callable[[Dict[str, Any]], None]):
+def _start_media_upload(media_upload_data: Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]], success_callback: Callable[[Dict[str, Any]], None]):
     """
     Starts the media upload process using QueryOp.
     Called from the success callback of the deck submission/creation Op.
@@ -1337,7 +1323,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Di
         success_callback({"uploaded": 0, "existing": 0, "failed": 0, "errors": [], "cancelled": False, "silent": True})
         return
 
-    token, deckHash, bulk_operation_id, media_files_info, media_file_paths, silent = media_upload_data
+    deckHash, bulk_operation_id, media_files_info, media_file_paths, silent = media_upload_data
     parent_widget = QApplication.focusWidget() or mw # type: ignore
 
     logger.info(f"Starting media upload QueryOp for deck {deckHash}. Silent: {silent}")
@@ -1345,7 +1331,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Di
     op = QueryOp(
         parent=parent_widget,
         # Run the synchronous wrapper in the background op
-        op=lambda col: _sync_handle_media_upload(token, deckHash, bulk_operation_id, media_files_info, media_file_paths, silent),
+        op=lambda col: _sync_handle_media_upload(deckHash, bulk_operation_id, media_files_info, media_file_paths, silent),
         success=success_callback # Use the provided final success handler
     )
     # Configure QueryOp
@@ -1526,7 +1512,7 @@ def _on_suggest_media_only_optimized(
     
     def _after_refs(_updated_count: int, _opchanges: Any):
         bulk_operation_id = ""  # Not used in this case, but required by the function signature
-        submit_result = (token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False)
+        submit_result = (deckHash, bulk_operation_id, media_files_info, media_file_paths, False)
         _start_media_upload(submit_result, success_callback=_on_suggest_media_uploaded)
 
     handle_media_references(
@@ -1539,7 +1525,7 @@ def _on_suggest_media_only_optimized(
     )
     
 
-def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
+def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
     """Success callback after deck submission for suggestions."""
     # Runs on Main Thread
     logger.info("Deck submission complete. Starting media upload if needed.")
@@ -1561,7 +1547,8 @@ def get_server_missing_media(deck_hash: str) -> Tuple[str, List[str]]:
     Returns a list of filenames that are missing.
     """
     try:
-        response = requests.get(f"{API_BASE_URL}/media/missing/{deck_hash}", timeout=30)
+        from .api_client import api_client
+        response = api_client.get(f"/media/missing/{deck_hash}", timeout=30, auth=True)
         response.raise_for_status()
         return (deck_hash, response.json())
     except requests.exceptions.RequestException as e:
@@ -1684,7 +1671,7 @@ def suggest_subdeck(did: int):
         show_exception(parent=parent_widget, exception=e)
 
 
-def handle_export(did: int, username: str):
+def handle_export(did: int):
     """Handles exporting a new deck to AnkiCollab."""
     parent_widget = QApplication.focusWidget() or mw
     
@@ -1748,7 +1735,7 @@ def handle_export(did: int, username: str):
         op_optimize = QueryOp(
             parent=parent_widget,
             op=lambda col: _sync_optimize_media_and_update_refs(media_files),
-            success=lambda result: _on_export_media_optimized(result, deck_repr, did, media_files, username, user_token)
+            success=lambda result: _on_export_media_optimized(result, deck_repr, did, media_files)
         ).failure(_on_export_failure)
         op_optimize.with_progress("Optimizing media files...")
         op_optimize.run_in_background()
@@ -1765,8 +1752,6 @@ def _on_export_media_optimized(
     deck_repr: Deck,
     did: int,
     media_files: list,
-    username: str,
-    user_token: str,
 ):
     """Success callback after media optimization for export."""
     # Runs on Main Thread
@@ -1790,8 +1775,8 @@ def _on_export_media_optimized(
         logger.info("Media references processed for export. Starting deck creation QueryOp.")
         op_create = QueryOp(
             parent=parent_widget,
-            op=lambda col: _create_deck_op(deck_repr, username, media_files_refresh=media_files),
-            success=lambda result: _on_export_deck_created(result, did, user_token, files_info, file_paths),
+            op=lambda col: _create_deck_op(deck_repr, media_files_refresh=media_files),
+            success=lambda result: _on_export_deck_created(result, did, files_info, file_paths),
         )
         op_create.with_progress("Publishing deck to AnkiCollab...")
         op_create.run_in_background()
@@ -1809,7 +1794,6 @@ def _on_export_media_optimized(
 
 def _create_deck_op(
     deck_repr: Deck,
-    username: str,
     media_files_refresh: Optional[List[Tuple[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Operation function for QueryOp: Creates the deck via API."""
@@ -1824,13 +1808,11 @@ def _create_deck_op(
     deck_initializer.remove_tags_from_notes(deck_repr, DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS])
     
     deck_res = json.dumps(deck_repr, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    data = {"deck": deck_res, "username": username}
+    data = {"deck": deck_res}
     try:
-        compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
-        based_data = base64.b64encode(compressed_data)
-        headers = {"Content-Type": "application/json"}
+        from .api_client import api_client
         logger.info("Sending create deck request...")
-        response = requests.post(f"{API_BASE_URL}/createDeck", data=based_data, headers=headers, timeout=120)
+        response = api_client.post_gzip("/createDeck", data, timeout=120)
         response.raise_for_status() # Check for HTTP errors
 
         logger.info(f"Create deck response status: {response.status_code}")
@@ -1851,7 +1833,7 @@ def _create_deck_op(
         raise RuntimeError(f"An unexpected error occurred during deck creation: {e}") from e
 
 
-def _on_export_deck_created(api_result: Dict[str, Any], did: int, user_token: str, files_info: List[Dict], file_paths: Dict[str, str]):
+def _on_export_deck_created(api_result: Dict[str, Any], did: int, files_info: List[Dict], file_paths: Dict[str, str]):
     """Success callback after deck creation API call."""
     # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
@@ -1885,7 +1867,7 @@ def _on_export_deck_created(api_result: Dict[str, Any], did: int, user_token: st
         ):
             logger.info("User opted to upload media for new deck.")
             
-            media_upload_data = (user_token, deckHash, bulk_op_id, files_info, file_paths, True) # silent = True for initial export
+            media_upload_data = (deckHash, bulk_op_id, files_info, file_paths, True) # silent = True for initial export
             _start_media_upload(media_upload_data, success_callback=_on_export_media_uploaded)
         else:
             # No media upload requested or no media found
@@ -2142,7 +2124,8 @@ def _prepare_subdeck_for_suggestion(did: Any, deck_name: str, deckHash: str) -> 
 
     # Get deck timestamp and remove unchanged notes
     try:
-        response = requests.get(f"{API_BASE_URL}/GetDeckTimestamp/" + deckHash, timeout=15)
+        from .api_client import api_client
+        response = api_client.get(f"/GetDeckTimestamp/{deckHash}", timeout=15)
         response.raise_for_status()
         last_updated = float(response.text)
         last_pulled = get_timestamp(deckHash) or 0.0

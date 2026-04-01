@@ -33,6 +33,9 @@ def get_colors() -> dict:
         'success': '#5A9E68' if dark else '#22C55E',
         'success_hover': '#6DB37A' if dark else '#16A34A',
         
+        'warning': '#D4A04A' if dark else '#F59E0B',
+        'warning_hover': '#E0B060' if dark else '#D97706',
+        
         'danger': '#C4655A' if dark else '#EF4444',
         'danger_hover': '#D47A70' if dark else '#DC2626',
         

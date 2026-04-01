@@ -69,7 +69,9 @@ class AuthManager:
         # Check if token needs refresh (less than 1 day remaining)
         if self._should_refresh_token():
             if not self.refresh_token():
-                # If refresh fails, return empty token to force re-login
+                # Silently clear credentials to force re-login
+                self.auth_data = {}
+                self._save_auth_data()
                 return ""
         
         return self.auth_data.get("token", "")
@@ -119,25 +121,44 @@ class AuthManager:
         self.auth_data["auto_approve"] = bool(value)
         self._save_auth_data()
     
+    def handle_auth_failure(self):
+        """Handle a 401 response by clearing credentials locally and warning the user.
+        
+        Unlike logout(), this does NOT contact the server (the token is already
+        invalid on the server side). Safe to call from any thread.
+        """
+        if not self.auth_data:
+            return  # Already logged out
+        
+        self.auth_data = {}
+        self._save_auth_data()
+        
+        # Silently update UI on the main thread (safe from background threads)
+        if mw and mw.taskman:
+            def _on_main():
+                from .menu import update_ui_for_login_state
+                update_ui_for_login_state()
+            mw.taskman.run_on_main(_on_main)
+
     def logout(self):
         """Perform logout by invalidating the token and clearing local storage"""
         if self.auth_data and "token" in self.auth_data:
             try:
-                # Tell server to invalidate the token
+                # Tell server to invalidate the token via Bearer auth
                 token = self.auth_data["token"]
-                requests.get(f"{API_BASE_URL}/removeToken/{token}", timeout=10)
-            except Exception:
-                pass  # Proceed with local logout regardless of server response
+                requests.post(
+                    f"{API_BASE_URL}/removeToken",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=10,
+                )
+            except Exception as e:
+                # Server-side token may remain valid until expiry
+                import logging
+                logging.getLogger(__name__).warning("Failed to invalidate token on server: %s", e)
         
         # Clear stored credentials regardless of server response
         self.auth_data = {}
         self._save_auth_data()
-        
-        # Update legacy storage for compatibility
-        strings_data = mw.addonManager.getConfig(self.config_key) or {}
-        if "settings" in strings_data:
-            strings_data["settings"]["token"] = ""
-            mw.addonManager.writeConfig(self.config_key, strings_data)
 
 # singleton
 auth_manager = AuthManager()

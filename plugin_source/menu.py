@@ -38,6 +38,11 @@ from .media_import import on_media_btn
 from .hooks import async_update, update_hooks_for_login_state
 from .dialogs import LoginDialog
 from .auth_manager import auth_manager
+from .notifications_center import (
+    init_notification_center,
+    refresh_notifications,
+    set_notification_visibility,
+)
 from .sentry_integration import init_sentry
 from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style, get_table_style, get_groupbox_style, get_combobox_style, get_info_box_style
 from anki.utils import point_version
@@ -558,7 +563,7 @@ def on_push_deck_action():
     
     dialog = QDialog(mw)
     dialog.setWindowTitle("AnkiCollab - Publish Deck")
-    dialog.resize(560, 640)
+    dialog.resize(560, 520)
     dialog.setStyleSheet(get_dialog_style())
 
     # Check if collection is available
@@ -628,32 +633,6 @@ def on_push_deck_action():
     
     deck_layout.addWidget(deck_combo_box)
     main_layout.addWidget(deck_section)
-
-    # Author information section
-    author_section = QGroupBox("Author Information")
-    author_section.setStyleSheet(get_groupbox_style())
-    author_layout = QVBoxLayout(author_section)
-    author_layout.setSpacing(8)
-    
-    username_help_label = QLabel("Your username will be the deck owner:")
-    username_help_label.setStyleSheet(f"color: {colors['text_secondary']}; font-size: 12px; margin-bottom: 8px;")
-    username_help_label.setWordWrap(True)
-    author_layout.addWidget(username_help_label)
-    
-    username_field = QLineEdit()
-    username_field.setPlaceholderText("Enter your AnkiCollab username...")
-    username_field.setStyleSheet(get_input_style())
-    
-    if auth_manager.is_logged_in():
-        # TODO: Add username retrieval logic if available
-        # username = auth_manager.get_username()
-        # if username:
-        #    username_field.setText(username)
-        #    username_field.setReadOnly(True)
-        pass 
-    
-    author_layout.addWidget(username_field)
-    main_layout.addWidget(author_section)
 
     # Legal declarations section
     legal_section = QGroupBox("Legal Declarations")
@@ -782,11 +761,10 @@ intellectual property holder(s) to share it on AnkiCollab.""")
     def validate_and_enable_publish():
         """Enable publish button only when all requirements are met"""
         deck_selected = bool(deck_combo_box.currentText() and deck_combo_box.currentText() != "No suitable decks found")
-        username_filled = bool(username_field.text().strip())
         disclaimer_checked = disclaimer_checkbox.isChecked()
         terms_checked = terms_checkbox.isChecked()
         
-        all_valid = deck_selected and username_filled and disclaimer_checked and terms_checked
+        all_valid = deck_selected and disclaimer_checked and terms_checked
         publish_button.setEnabled(all_valid)
         
         if all_valid:
@@ -794,14 +772,12 @@ intellectual property holder(s) to share it on AnkiCollab.""")
         else:
             missing = []
             if not deck_selected: missing.append("deck selection")
-            if not username_filled: missing.append("username")
             if not disclaimer_checked: missing.append("copyright declaration")
             if not terms_checked: missing.append("terms agreement")
             publish_button.setToolTip(f"Please complete: {', '.join(missing)}")
 
     # Connect validation to all inputs
     deck_combo_box.currentTextChanged.connect(validate_and_enable_publish)
-    username_field.textChanged.connect(validate_and_enable_publish)
     disclaimer_checkbox.toggled.connect(validate_and_enable_publish)
     terms_checkbox.toggled.connect(validate_and_enable_publish)
     
@@ -822,13 +798,9 @@ intellectual property holder(s) to share it on AnkiCollab.""")
             return
 
         selected_deck_name = deck_combo_box.currentText()
-        username = username_field.text().strip()
 
         if not selected_deck_name or selected_deck_name == "No suitable decks found":
             showInfo("Please select a valid deck.", parent=dialog)
-            return
-        if not username:
-            showInfo("Please enter your username.", parent=dialog)
             return
 
         deck_id = mw.col.decks.id(selected_deck_name)
@@ -849,11 +821,10 @@ intellectual property holder(s) to share it on AnkiCollab.""")
             # Show confirmation dialog
             if askUser(
                 f"Are you ready to publish '{selected_deck_name}' to AnkiCollab?\n\n"
-                f"Author: {username}\n"
                 f"This will make your deck available to the community.",
                 title="Confirm Publication"
             ):
-                handle_export(deck_id, username)            
+                handle_export(deck_id)            
                 dialog.accept()
                 
         except Exception as e:
@@ -1050,8 +1021,17 @@ def show_global_settings_dialog(parent_dialog):
     dialog.exec()
     
 def on_push_all_stats_action():
+    token = auth_manager.get_token()
+    if not token:
+        return
+    from .api_client import api_client
+    check = api_client.post_empty("/CheckUserToken")
+    if check.status_code != 200 or check.text != "true":
+        if check.status_code != 401:
+            auth_manager.handle_auth_failure()
+            return
+    
     decks = DeckManager()
-
     for deck_hash, details in decks:
         if details.get("stats_enabled", False):
             # Only upload stats if the user wants to share them
@@ -1064,7 +1044,7 @@ def on_push_all_stats_action():
                     success=on_stats_upload_done
                 )
                 op.with_progress(
-                    "Uploading Review History..."
+                    "X Review History..."
                 ).run_in_background()
                 update_stats_timestamp(deck_hash)
   
@@ -1134,6 +1114,7 @@ def update_ui_for_login_state():
     push_deck_action.setVisible(logged_in)
     pull_changes_action.setVisible(logged_in)
     general_settings_action.setVisible(logged_in)
+    set_notification_visibility(logged_in)
 
     login_manager_action.setText("Logout" if logged_in else "Login")
 
@@ -1143,6 +1124,9 @@ def update_ui_for_login_state():
     # Ensure menu bar is updated if actions were added/removed/hidden
     # This might not be strictly necessary if only visibility changes, but can help
     mw.form.menubar.repaint()
+
+    if logged_in:
+        refresh_notifications()
 
 def menu_init():
     store_default_config()
@@ -1154,6 +1138,7 @@ def menu_init():
     collab_menu.addAction(edit_list_action)
     collab_menu.addAction(push_deck_action)
     collab_menu.addSeparator()
+    init_notification_center(collab_menu)
     collab_menu.addAction(general_settings_action)
     collab_menu.addAction(login_manager_action)
     collab_menu.addMenu(links_menu)

@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,6 +25,7 @@ from aqt import mw
 from anki.decks import DeckId
 
 from .var_defs import API_BASE_URL
+from .api_client import api_client
 
 from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, AskShareStatsDialog, RateAddonDialog
 
@@ -170,9 +172,93 @@ def _subscription_from_manifest(
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
         tmp_path = Path(tmp_file.name)
         try:
+            total_size_str = response.headers.get("Content-Length")
+            total_size = int(total_size_str) if total_size_str and total_size_str.isdigit() else 0
+            downloaded = 0
+            cancelled = False
+            last_ui_update = 0.0
+            started_at = time.monotonic()
+            last_rate_sample_at = started_at
+            last_rate_sample_bytes = 0
+            smoothed_bps = 0.0
+
+            def _format_eta(seconds: int) -> str:
+                eta_seconds = max(0, seconds)
+                if eta_seconds < 10:
+                    return ""
+                if eta_seconds < 60:
+                    return "less than a minute left"
+                if eta_seconds < 3600:
+                    minutes = int((eta_seconds + 59) // 60)
+                    return f"about {minutes} min left"
+
+                hours = eta_seconds // 3600
+                minutes = int(((eta_seconds % 3600) + 59) // 60)
+                if minutes == 60:
+                    hours += 1
+                    minutes = 0
+                if minutes == 0:
+                    return f"about {hours} h left"
+                return f"about {hours} h {minutes} min left"
+
+            def update_progress(dl_bytes: int, tot_bytes: int, speed_bps: float, elapsed: float) -> None:
+                if not getattr(aqt.mw, "progress", None):
+                    return
+
+                if tot_bytes > 0:
+                    bar_value = min(1000, int((dl_bytes / tot_bytes) * 1000))
+                    label = "Downloading deck..."
+                    if speed_bps > 0 and elapsed >= 8 and dl_bytes < tot_bytes:
+                        remaining_seconds = int((tot_bytes - dl_bytes) / speed_bps)
+                        eta = _format_eta(remaining_seconds)
+                        if eta:
+                            label = f"Downloading deck... {eta}"
+
+                    aqt.mw.progress.update(label=label, value=bar_value, max=1000)
+                else:
+                    label = "Downloading deck..."
+
+                    aqt.mw.progress.update(label=label)
+
             for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if getattr(aqt.mw, "progress", None) and aqt.mw.progress.want_cancel():
+                    cancelled = True
+                    break
+
                 if chunk:
                     tmp_file.write(chunk)
+                    downloaded += len(chunk)
+
+                    now = time.monotonic()
+                    rate_window = now - last_rate_sample_at
+                    if rate_window >= 0.5:
+                        window_bytes = downloaded - last_rate_sample_bytes
+                        instant_bps = window_bytes / rate_window if rate_window > 0 else 0.0
+                        if smoothed_bps <= 0:
+                            smoothed_bps = instant_bps
+                        else:
+                            smoothed_bps = (0.12 * instant_bps) + (0.88 * smoothed_bps)
+                        last_rate_sample_at = now
+                        last_rate_sample_bytes = downloaded
+
+                    should_update = now - last_ui_update >= 0.4
+                    if total_size > 0 and downloaded >= total_size:
+                        should_update = True
+
+                    if should_update:
+                        aqt.mw.taskman.run_on_main(
+                            lambda d=downloaded, t=total_size, s=smoothed_bps, e=(now - started_at): update_progress(d, t, s, e)
+                        )
+                        last_ui_update = now
+
+            if cancelled:
+                response.close()
+                raise OperationAbortedError("Cache bootstrap download cancelled by user")
+
+            if downloaded > 0:
+                aqt.mw.taskman.run_on_main(
+                    lambda d=downloaded, t=total_size, s=smoothed_bps, e=(time.monotonic() - started_at): update_progress(d, t, s, e)
+                )
         finally:
             tmp_file.flush()
 
@@ -226,6 +312,12 @@ def _subscription_from_manifest(
         # Surface a user-friendly error when the upstream terminates the transfer early
         logger.error("Cache archive download interrupted for %s: %s", deck_hash, exc)
         raise CacheBootstrapError("Download interrupted; please retry.") from exc
+    except OperationAbortedError:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
     finally:
         try:
             tmp_path.unlink()
@@ -501,7 +593,7 @@ def _on_deck_installed(install_result, deck, subscription, input_hash=None, upda
         deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
         logger.info(f"Found {len(deleted_nids)} note IDs for deleted notes.")
         if deleted_nids:
-            del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash)
+            del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash, parent=mw)
             del_notes_choice = del_notes_dialog.exec()
 
             if del_notes_choice == QDialog.DialogCode.Accepted:
@@ -567,7 +659,7 @@ def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
             if stats_enabled is None:
                 # Only show dialog if not already decided
                 if deck_name:
-                    dialog = AskShareStatsDialog(deck_name)
+                    dialog = AskShareStatsDialog(deck_name, parent=mw)
                     choice = dialog.exec()
                     if choice == QDialog.DialogCode.Accepted:
                         stats_enabled = True
@@ -594,7 +686,7 @@ def install_update(subscription, input_hash=None, update_timestamp_after=False):
             deck_hash, subscription["optional_tags"]
     ):
         dialog = OptionalTagsDialog(
-            get_optional_tags(deck_hash), subscription["optional_tags"]
+            get_optional_tags(deck_hash), subscription["optional_tags"], parent=mw
         )
         dialog.exec()
         update_optional_tag_config(
@@ -698,7 +790,7 @@ def show_changelog_popup(subscription):
     update_deck_stats_enabled(deck_hash, subscription["stats_enabled"])
     
     if changelog:
-        dialog = ChangelogDialog(changelog, deck_hash)
+        dialog = ChangelogDialog(changelog, deck_hash, parent=mw)
         choice = dialog.exec()
 
         if choice == QDialog.DialogCode.Accepted:
@@ -724,13 +816,18 @@ def ask_for_rating():
                     if not strings_data["settings"]["rated_addon"]:  # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime(
                             '%Y-%m-%d %H:%M:%S')
-                        dialog = RateAddonDialog()
+                        dialog = RateAddonDialog(parent=mw)
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
 
 
 def import_webresult(data):
     (webresult, input_hash, silent) = data # gotta unpack the tuple
+
+    # None indicates an error or cancellation path where a dedicated message
+    # was already shown (or intentionally suppressed).
+    if webresult is None:
+        return
     
     # Ensure collection is available before proceeding
     if not is_collection_available():
@@ -856,7 +953,7 @@ def remove_nonexistent_decks():
 
         payload = {"deck_hashes": list(strings_data_to_send.keys())}
         try:
-            response = requests.post(f"{API_BASE_URL}/CheckDeckAlive", json=payload, timeout=30)
+            response = api_client.post_json("/CheckDeckAlive", payload, auth=False, timeout=30)
             if response.status_code == 200:
                 if response.content == "Error":
                     infot = "A Server Error occurred. Please notify us!"
@@ -891,6 +988,18 @@ def remove_nonexistent_decks():
             except Exception:
                 pass
 
+
+def _remove_subscription_from_config(deck_hash: str) -> None:
+    strings_data = mw.addonManager.getConfig(__name__)
+    if not isinstance(strings_data, dict):
+        return
+
+    details = strings_data.get(deck_hash)
+    if isinstance(details, dict) and details.get("deckId", 0) == 0:
+        del strings_data[deck_hash]
+        mw.addonManager.writeConfig(__name__, strings_data)
+        logger.info("Removed pending subscription %s from config after cancellation", deck_hash)
+
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
 def async_start_pull(input_hash, silent=False):
     remove_nonexistent_decks()
@@ -918,9 +1027,7 @@ def async_start_pull(input_hash, silent=False):
             )
 
         try:
-            response = requests.post(
-                f"{API_BASE_URL}/pullChanges", json=strings_data_to_send
-            )
+            response = api_client.post_json("/pullChanges", strings_data_to_send, auth=False)
             if response.status_code == 200:
                 compressed_data = base64.b64decode(response.content)
                 decompressed_data = gzip.decompress(compressed_data)
@@ -935,12 +1042,24 @@ def async_start_pull(input_hash, silent=False):
                     return (None, None, silent)
 
                 return (webresult, input_hash, silent)
+            elif response.status_code == 401:
+                return (None, None, silent)
             else:
                 infot = "A Server Error occurred. Please notify us!"
                 aqt.mw.taskman.run_on_main(
                     lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
                 )
                 return (None, None, silent)
+        except OperationAbortedError as e:
+            logger.info("Pull cancelled: %s", e)
+            if input_hash:
+                _remove_subscription_from_config(input_hash)
+            aqt.mw.taskman.run_on_main(
+                lambda: aqt.utils.tooltip(
+                    "Download cancelled.", parent=QApplication.focusWidget(), period=2000
+                )
+            )
+            return (None, None, True)
         except (requests.exceptions.RequestException, OSError, ValueError, gzip.BadGzipFile, base64.binascii.Error) as e: # type: ignore
             logger.error(f"Error pulling changes: {e}")
             try:

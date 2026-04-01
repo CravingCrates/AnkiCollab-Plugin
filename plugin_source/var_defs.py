@@ -2,7 +2,7 @@
 
 
 API_BASE_URL = "https://plugin.ankicollab.com"
-VERSION = "2026.02.20.1"
+VERSION = "2026.03.14.1"
 DEFAULT_PROTECTED_TAGS = ["leech", "marked", "missing-media"]
 PREFIX_OPTIONAL_TAGS = "AnkiCollab_Optional"
 PREFIX_PROTECTED_FIELDS = "AnkiCollab_Protect"
