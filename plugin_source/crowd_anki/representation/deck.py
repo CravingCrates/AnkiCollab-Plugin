@@ -471,7 +471,6 @@ class Deck(JsonSerializableAnkiDict):
             ) if aqt.mw.progress.busy() else None
         )
         
-        if count > 0:
             silent_clear_unused_tags()
             silent_clear_empty_cards()
         
