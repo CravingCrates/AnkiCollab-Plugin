@@ -491,8 +491,8 @@ class Deck(JsonSerializableAnkiDict):
             ) if aqt.mw.progress.busy() else None
         )
         
-            silent_clear_unused_tags()
-            silent_clear_empty_cards()
+        silent_clear_unused_tags()
+        silent_clear_empty_cards()
         
         if self.root_deck_id and not self.keep_empty_subdecks:
             self.delete_empty_subdecks()
