@@ -30,6 +30,12 @@
 
 * { box-sizing: border-box; }
 
+html,
+body {
+  width: 100%;
+  height: 100%;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
@@ -39,6 +45,7 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
 }
 
 /* ── Layout ─────────────────────────────────────────────── */
@@ -52,20 +59,27 @@ body {
 
 /* ── Loading Overlay ────────────────────────────────────── */
 
-.loading-overlay {
-  position: absolute;
-  inset: 16px;
+#loadingOverlay.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
   background: rgba(242, 244, 248, 0.88);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-direction: column;
   gap: 12px;
-  z-index: 20;
+  z-index: 9999;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+}
+
+#loadingOverlay.loading-overlay.hidden {
+  display: none !important;
 }
 
 /* 11. Refined spinner — thinner border, subtle pulse */

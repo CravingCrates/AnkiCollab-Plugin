@@ -8,11 +8,11 @@
   <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
+  <div id="loadingOverlay" class="loading-overlay hidden" role="status" aria-live="polite" aria-atomic="true">
+    <div class="loading-spinner" aria-hidden="true"></div>
+    <div class="loading-text">Loading notifications&#8230;</div>
+  </div>
   <div class="wrap">
-    <div id="loadingOverlay" class="loading-overlay hidden" role="status">
-      <div class="loading-spinner" aria-hidden="true"></div>
-      <div class="loading-text">Loading notifications&#8230;</div>
-    </div>
     <div class="header">
       <div class="header-left">
         <div class="tabs" role="tablist" aria-label="Notification views">

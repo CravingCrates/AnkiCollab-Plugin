@@ -225,6 +225,17 @@
     }
   }
 
+  function syncOverlayBounds() {
+    var overlay = document.getElementById('loadingOverlay');
+    if (!overlay) {
+      return;
+    }
+    var w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+    var h = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+    overlay.style.width = String(w) + 'px';
+    overlay.style.height = String(h) + 'px';
+  }
+
   function formatTime(value) {
     var raw = String(value || '').trim();
     if (!raw) {
@@ -489,6 +500,9 @@
     var root = document.querySelector('.wrap');
     if (loadingOverlay) {
       loadingOverlay.classList.toggle('hidden', !payload.loading);
+      if (payload.loading) {
+        syncOverlayBounds();
+      }
     }
     if (root) {
       root.classList.toggle('is-loading', !!payload.loading);
@@ -735,4 +749,6 @@
   window.AnkiCollabNotifications = {
     render: render
   };
+
+  window.addEventListener('resize', syncOverlayBounds);
 })();
