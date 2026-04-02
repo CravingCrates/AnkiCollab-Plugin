@@ -1400,7 +1400,10 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
         op_prepare = QueryOp(
             parent=parent_widget,
             op=lambda col: _prepare_deck_for_suggestion(did, nids, deckHash),
-            success=lambda result: _on_suggest_deck_prepared(result, did, deckHash, rationale_id, editor)
+            success=lambda result: QTimer.singleShot(
+                0,
+                lambda result=result: _on_suggest_deck_prepared(result, did, deckHash, rationale_id, editor),
+            )
         ).failure(_on_suggest_failure)
         op_prepare.with_progress("Preparing deck data...")
         op_prepare.run_in_background()
@@ -1660,7 +1663,10 @@ def suggest_subdeck(did: int):
         op_prepare = QueryOp(
             parent=parent_widget,
             op=lambda col: _prepare_subdeck_for_suggestion(did, deck_name, deckHash),
-            success=lambda result: _on_suggest_subdeck_prepared(result, did, deckHash)
+            success=lambda result: QTimer.singleShot(
+                0,
+                lambda result=result: _on_suggest_subdeck_prepared(result, did, deckHash),
+            )
         ).failure(_on_subdeck_suggest_failure)
         op_prepare.with_progress("Preparing subdeck data...")
         op_prepare.run_in_background()

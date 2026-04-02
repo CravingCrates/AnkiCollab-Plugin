@@ -277,7 +277,7 @@
     html += '<div class="decision-banner ' + (isApproved ? 'approved' : 'denied') + '">';
     html += '<div class="decision-status">' + text + '</div>';
     if (snapshot.decision_reason) {
-      html += '<div class="decision-text">' + escapeHtml(snapshot.decision_reason) + '</div>';
+      html += '<div class="decision-text"><span class="decision-label">Reason:</span><span class="decision-message">' + escapeHtml(snapshot.decision_reason) + '</span></div>';
     }
     html += '</div>';
     return html;
@@ -348,7 +348,7 @@
 
   function fieldHtml(value, fallbackText) {
     if (typeof value === 'string' && value.trim().length > 0) {
-      return '<span class="rich-content-sanitized">' + escapeHtml(value) + '</span>';
+      return '<span class="rich-content-sanitized">' + value + '</span>';
     }
     return '<span class="event-empty">' + escapeHtml(fallbackText) + '</span>';
   }
@@ -677,7 +677,16 @@
         if (item.reason) {
           var reason = document.createElement('div');
           reason.className = 'reason';
-          reason.textContent = item.reason;
+          var reasonLabel = document.createElement('span');
+          reasonLabel.className = 'reason-label';
+          reasonLabel.textContent = 'Reason:';
+
+          var reasonMessage = document.createElement('span');
+          reasonMessage.className = 'reason-message';
+          reasonMessage.textContent = item.reason;
+
+          reason.appendChild(reasonLabel);
+          reason.appendChild(reasonMessage);
           row.appendChild(reason);
         }
 

@@ -572,10 +572,9 @@ body {
 
 .reason {
   margin-top: 4px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
 }
 
 /* ── Empty States ───────────────────────────────────────── */
@@ -824,11 +823,41 @@ body {
 }
 
 .decision-text {
-  margin-top: 4px;
+  margin-top: 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.decision-label,
+.reason-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.6;
+  flex-shrink: 0;
+}
+
+.decision-message,
+.reason-message {
   color: var(--text-secondary);
   font-size: 12px;
-  white-space: pre-wrap;
   line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  flex: 1;
+}
+
+.decision-banner.denied .decision-label,
+.timeline-item.status-line-denied .reason-label {
+  color: #991b1b;
+}
+
+.decision-banner.denied .decision-message,
+.timeline-item.status-line-denied .reason-message {
+  color: #7f1d1d;
 }
 
 .snapshot-empty {
@@ -1493,6 +1522,16 @@ body {
   .split-diff .old-side {
     border-color: rgba(248, 113, 113, 0.2);
     background: rgba(248, 113, 113, 0.04);
+  }
+
+  .decision-banner.denied .decision-label,
+  .timeline-item.status-line-denied .reason-label {
+    color: #fca5a5;
+  }
+
+  .decision-banner.denied .decision-message,
+  .timeline-item.status-line-denied .reason-message {
+    color: #fee2e2;
   }
 
   /* Semantic colors dark -- amber / denied tag */

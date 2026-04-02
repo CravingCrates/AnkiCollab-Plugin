@@ -624,7 +624,7 @@ def on_push_deck_action():
     deck_combo_box.setStyleSheet(get_combobox_style())
     
     decks = mw.col.decks.all_names_and_ids(include_filtered=False)
-    deck_names = sorted([d.name for d in decks if "::" not in d.name and d.id != 1])
+    deck_names = sorted([d.name for d in decks if "::" not in d.name])
     if not deck_names:
         deck_combo_box.addItem("No suitable decks found")
         deck_combo_box.setEnabled(False)

@@ -2,6 +2,8 @@ import os
 import json
 import time
 import requests
+import keyring
+import logging
 from datetime import datetime
 from aqt import mw
 import aqt.utils
@@ -10,26 +12,90 @@ from aqt import mw
 
 from .var_defs import API_BASE_URL
 
+KEYRING_SERVICE = "AnkiCollab"
+
 class AuthManager:    
     def __init__(self):
         self.config_key = __name__
+        self._keyring_available = True
+        self._keyring_warned = False
         self._load_auth_data()
+
+    def _warn_keyring_fallback_once(self, reason):
+        if self._keyring_warned:
+            return
+        self._keyring_warned = True
+        logging.getLogger(__name__).warning(
+            "Keyring unavailable, falling back to config storage: %s",
+            reason,
+        )
+
+    def _write_auth_config(self, auth_payload):
+        strings_data = mw.addonManager.getConfig(self.config_key) or {}
+        strings_data["auth"] = auth_payload
+        mw.addonManager.writeConfig(self.config_key, strings_data)
     
     def _load_auth_data(self):
-        """Load authentication data from Anki config"""
+        """Load authentication data from Anki config and keyring"""
         self.auth_data = {}
         strings_data = mw.addonManager.getConfig(self.config_key)
         if strings_data and "auth" in strings_data:
             self.auth_data = strings_data["auth"]
+            
+        if not self._keyring_available:
+            return
+
+        try:
+            token = keyring.get_password(KEYRING_SERVICE, "token")
+            if token is not None:
+                self.auth_data["token"] = token
+                
+            refresh_token = keyring.get_password(KEYRING_SERVICE, "refresh_token")
+            if refresh_token is not None:
+                self.auth_data["refresh_token"] = refresh_token
+        except Exception as e:
+            self._keyring_available = False
+            self._warn_keyring_fallback_once(e)
     
     def _save_auth_data(self):
-        """Save authentication data to Anki config"""
-        strings_data = mw.addonManager.getConfig(self.config_key) or {}
-        if "auth" not in strings_data:
-            strings_data["auth"] = {}
+        """Save authentication data to Anki config and keyring"""
+        config_auth = self.auth_data.copy()
+        token = config_auth.pop("token", None)
+        refresh_token = config_auth.pop("refresh_token", None)
+
+        if not self._keyring_available:
+            if token is not None:
+                config_auth["token"] = token
+            if refresh_token is not None:
+                config_auth["refresh_token"] = refresh_token
+            self._write_auth_config(config_auth)
+            return
         
-        strings_data["auth"] = self.auth_data
-        mw.addonManager.writeConfig(self.config_key, strings_data)
+        self._write_auth_config(config_auth)
+        
+        try:
+            if token is not None:
+                keyring.set_password(KEYRING_SERVICE, "token", token)
+            else:
+                try: 
+                    keyring.delete_password(KEYRING_SERVICE, "token")
+                except Exception: 
+                    pass
+                
+            if refresh_token is not None:
+                keyring.set_password(KEYRING_SERVICE, "refresh_token", refresh_token)
+            else:
+                try: 
+                    keyring.delete_password(KEYRING_SERVICE, "refresh_token")
+                except Exception: 
+                    pass
+        except Exception as e:
+            self._keyring_available = False
+            self._warn_keyring_fallback_once(e)
+            aqt.utils.showInfo(
+                "Secure token storage is unavailable. Please unlock keyring storage and try again."
+            )
+            raise
     
     def store_login_result(self, auth_response):
         if not auth_response:
@@ -153,7 +219,6 @@ class AuthManager:
                 )
             except Exception as e:
                 # Server-side token may remain valid until expiry
-                import logging
                 logging.getLogger(__name__).warning("Failed to invalidate token on server: %s", e)
         
         # Clear stored credentials regardless of server response

@@ -10,7 +10,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "dist"))
 # Pillow specific stuff
 base_path = os.path.dirname(__file__)
 arch = platform.machine()
-pyver = f"py{sys.version_info.major}{sys.version_info.minor}"
+if sys.version_info[:2] == (3, 9):
+    pyver = "py39"
+elif sys.version_info[:2] >= (3, 13):
+    pyver = "py313"
+else:
+    raise RuntimeError(
+        f"Unsupported Python version for bundled Pillow: {sys.version_info.major}.{sys.version_info.minor}"
+    )
 
 if sys.platform.startswith("win"):
     sys.path.insert(0, os.path.join(base_path, "dist", "windows", pyver))
