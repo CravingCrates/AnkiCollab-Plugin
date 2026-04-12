@@ -82,6 +82,19 @@ body {
   display: none !important;
 }
 
+body.ankicollab-dark #loadingOverlay.loading-overlay {
+  background: rgba(22, 26, 33, 0.88);
+}
+
+body.ankicollab-dark .loading-spinner {
+  border-top-color: #5b9cf6;
+  border-right-color: #5b9cf6;
+}
+
+body.ankicollab-dark .loading-text {
+  color: #7a869e;
+}
+
 /* 11. Refined spinner — thinner border, subtle pulse */
 .loading-spinner {
   width: 22px;

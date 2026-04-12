@@ -18,6 +18,7 @@ from aqt.qt import (
     QWidget,
     pyqtSignal,
 )
+from aqt.theme import theme_manager
 
 try:
     from aqt.qt import QWebEnginePage, QWebEngineView
@@ -277,6 +278,7 @@ class NotificationCenterDialog(QDialog):
             "commit_snapshots": commit_snapshots,
             "media_dir": mw.col.media.dir() if getattr(mw, "col", None) else "",
             "loading": loading,
+            "dark_mode": bool(getattr(theme_manager, "night_mode", False)),
         }
 
         layout = QVBoxLayout(self)
@@ -345,6 +347,7 @@ class NotificationCenterDialog(QDialog):
             "commit_snapshots": payload.get("commit_snapshots", {}),
             "media_dir": mw.col.media.dir() if getattr(mw, "col", None) else "",
             "loading": loading,
+            "dark_mode": bool(getattr(theme_manager, "night_mode", False)),
         }
         self._render_payload()
 
@@ -410,4 +413,3 @@ def register_sync_refresh_hook() -> None:
         notification_center.schedule_refresh()
 
     gui_hooks.sync_did_finish.append(_on_sync_finished)
-
