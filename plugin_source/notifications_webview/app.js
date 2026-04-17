@@ -485,6 +485,7 @@
       }
     }
     payload = payload || {};
+    document.body.classList.toggle('ankicollab-dark', !!payload.dark_mode);
 
     try {
     if (lastPayload !== payload) {
