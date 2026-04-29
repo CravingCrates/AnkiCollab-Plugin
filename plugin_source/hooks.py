@@ -497,8 +497,35 @@ def init_add_card(addCardsDialog):
     if hasattr(addCardsDialog, "ankicollab_suggest_checkbox"):
         return
 
+    cfg = mw.addonManager.getConfig(__name__) or {}
+    settings = cfg.get("settings", {}) if isinstance(cfg, dict) else {}
+    remember_between_sessions = bool(settings.get("remember_suggest_state_between_sessions", False))
+
     checkbox = QCheckBox("Suggest on AnkiCollab")
-    checkbox.setChecked(True)
+    if remember_between_sessions:
+        checkbox.setChecked(bool(settings.get("suggest_on_ankicollab_last_state", True)))
+    else:
+        checkbox.setChecked(True)
+
+    def _persist_suggest_checkbox_state(checked: bool) -> None:
+        # Keep the config read/write localized to this opt-in setting.
+        if not remember_between_sessions:
+            return
+        try:
+            current_cfg = mw.addonManager.getConfig(__name__) or {}
+            if not isinstance(current_cfg, dict):
+                return
+            current_settings = current_cfg.get("settings")
+            if not isinstance(current_settings, dict):
+                current_settings = {}
+                current_cfg["settings"] = current_settings
+            current_settings["suggest_on_ankicollab_last_state"] = bool(checked)
+            mw.addonManager.writeConfig(__name__, current_cfg)
+        except Exception:
+            # Never fail UI init due to settings persistence.
+            pass
+
+    checkbox.toggled.connect(_persist_suggest_checkbox_state)
     addCardsDialog.ankicollab_suggest_checkbox = checkbox # Store reference on the dialog instance
 
     button_box = None

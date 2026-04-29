@@ -1091,13 +1091,20 @@ def show_global_settings_dialog(parent_dialog):
     error_reporting_cb = QCheckBox("Send anonymous error reports (recommended)")
     error_reporting_cb.setChecked(bool(settings.get("error_reporting_enabled", False)))
     error_reporting_cb.setToolTip("Send anonymized crash and error reports to help improve the add-on.")
+
+    remember_suggest_state_cb = QCheckBox("Remember 'Suggest on AnkiCollab' state between sessions")
+    remember_suggest_state_cb.setChecked(bool(settings.get("remember_suggest_state_between_sessions", False)))
+    remember_suggest_state_cb.setToolTip(
+        "When enabled, the add-on will remember whether the 'Suggest on AnkiCollab' checkbox in the Add Cards dialog was last checked or not, even after restarting Anki."
+    )
     
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
     global_layout.addWidget(move_cards_cb)
     global_layout.addWidget(keep_empty_subdecks_cb)
     global_layout.addWidget(auto_approve_cb)
-    
+    global_layout.addWidget(remember_suggest_state_cb)
+     
     # Add to group
     global_layout.addWidget(error_reporting_cb)
     layout.addWidget(global_group)
@@ -1121,6 +1128,7 @@ def show_global_settings_dialog(parent_dialog):
         settings["suspend_new_cards"] = suspend_new_cards_cb.isChecked()
         settings["auto_move_cards"] = move_cards_cb.isChecked()
         settings["keep_empty_subdecks"] = keep_empty_subdecks_cb.isChecked()
+        settings["remember_suggest_state_between_sessions"] = remember_suggest_state_cb.isChecked()
         settings["error_reporting_enabled"] = error_reporting_cb.isChecked()
         mw.addonManager.writeConfig(__name__, strings_data)
         auth_manager.set_auto_approve(auto_approve_cb.isChecked())
@@ -1203,6 +1211,9 @@ def store_default_config():
         "last_ratepls": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         "pull_counter": 0,
         "push_counter": 0,
+        # Add Cards: Suggest on AnkiCollab checkbox
+        "remember_suggest_state_between_sessions": False,
+        "suggest_on_ankicollab_last_state": True,
         # Error reporting (Sentry)
         "error_reporting_enabled": False,
     }
