@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import logging
@@ -35,7 +37,7 @@ logger = get_logger("ankicollab.media_manager")
 
 MAX_REQUESTS_PER_MINUTE = 1000
 REQUEST_TRACKING_WINDOW = 60
-MAX_FILE_SIZE = 2 * 1024 * 1024 # 2 MB
+MAX_FILE_SIZE = 10 * 1024 * 1024 # 10 MB
 CHUNK_SIZE = 131072  # 128KB
 REQUEST_TIMEOUT = 30
 VERIFY_SSL = True
@@ -282,7 +284,8 @@ class MediaManager:
         self.hash_cache = {}
         self.optimization_cache = {}  # Cache for optimization results
 
-        self.session = requests.Session()
+        from .api_client import api_client
+        self.session = api_client.session_with_auth()
         self.session.verify = VERIFY_SSL
 
         self.semaphore: Optional[asyncio.Semaphore] = None
@@ -299,6 +302,12 @@ class MediaManager:
         self.thread_executor = ThreadPoolExecutor(max_workers=max_workers)
         logger.debug(f"Initialized thread pool with {max_workers} workers")
         mimetypes.add_type('image/webp', '.webp') # how the fuck is this not a default
+
+    def refresh_session(self):
+        """Re-create the HTTP session with a fresh auth token."""
+        from .api_client import api_client
+        self.session = api_client.session_with_auth()
+        self.session.verify = VERIFY_SSL
 
     async def _get_semaphore(self) -> asyncio.Semaphore:
         """Lazily initializes the semaphore for the current event loop."""
@@ -533,7 +542,6 @@ class MediaManager:
         return self._is_anki_available()
     
     async def close(self):
-        print("MediaManager closing...")
         # Close requests session early to try to interrupt any blocking network IO
         if hasattr(self, 'session'):
             try:
@@ -765,6 +773,19 @@ class MediaManager:
     @retry(max_tries=3, delay=2, backoff=3)
     async def download_file(self, url: str, destination: Union[str, Path]) -> bool:
         destination = Path(destination)
+
+        # Path traversal protection: ensure destination stays within media folder
+        try:
+            resolved = destination.resolve()
+            if self.media_folder:
+                resolved.relative_to(self.media_folder.resolve())
+        except ValueError:
+            logger.error(f"Path traversal blocked: {destination}")
+            return False
+        except (OSError, RuntimeError):
+            logger.error(f"Invalid destination path: {destination}")
+            return False
+
         os.makedirs(destination.parent, exist_ok=True)
         # Use uuid to ensure unique temp file per download attempt, avoiding concurrent access issues
         temp_destination = destination.with_suffix(f"{destination.suffix}.tmp.{uuid.uuid4().hex[:8]}")
@@ -891,13 +912,13 @@ class MediaManager:
 
 
     @retry(max_tries=3, delay=1)
-    async def get_media_manifest(self, user_token: str, deck_hash: str, filenames: List[str]) -> Dict:
+    async def get_media_manifest(self, deck_hash: str, filenames: List[str]) -> Dict:
         semaphore = await self._get_semaphore()
         async with semaphore:
             await self.rate_limiter.wait_if_needed()
 
             url = f"{self.api_base_url}/media/manifest"
-            data = {"user_token": user_token, "deck_hash": deck_hash, "filenames": filenames}
+            data = {"deck_hash": deck_hash, "filenames": filenames}
 
             try:
                 response = await self.async_request("post", url, json=data)
@@ -941,10 +962,13 @@ class MediaManager:
                 self._raise_with_metadata(exc, context, cause=e)
 
     @retry(max_tries=3, delay=2)
-    async def get_media_manifest_and_download(self, user_token:str, deck_hash: str, filenames: List[str], progress_callback=None) -> Dict:
+    async def get_media_manifest_and_download(self, deck_hash: str, filenames: List[str], progress_callback=None) -> Dict:
         if not mw.col:
             return {"success": False, "message": "Anki collection is not available", "downloaded": 0, "skipped": 0, "failed": 0}
         
+        # Refresh session to pick up any token changes since init
+        self.refresh_session()
+
         total_files = len(filenames)
         if total_files == 0:
             return {"success": True, "message": "No files to download", "downloaded": 0, "skipped": 0, "failed": 0}
@@ -977,7 +1001,7 @@ class MediaManager:
         for i in range(0, total_files, manifest_batch_size):
             batch_filenames = unique_filenames[i:i+manifest_batch_size]
             try:
-                manifest_data = await self.get_media_manifest(user_token, deck_hash, batch_filenames)
+                manifest_data = await self.get_media_manifest(deck_hash, batch_filenames)
                 if manifest_data and "files" in manifest_data:
                     files_in_batch = manifest_data.get("files", [])
                     if files_in_batch:
@@ -988,7 +1012,12 @@ class MediaManager:
                     logger.warning(f"Invalid manifest format or no files found in batch {i // manifest_batch_size + 1}.")
             except MediaServerError as e:
                  logger.error(f"Failed to get manifest batch {i // manifest_batch_size + 1}: {e}")
-                 # Decide whether to continue or fail all
+                 # Check if this is a 401 auth failure
+                 metadata = getattr(e, "metadata", {})
+                 if metadata.get("status_code") == 401:
+                     from .auth_manager import auth_manager as _am
+                     _am.handle_auth_failure()
+                     return {"success": False, "message": "Session expired", "downloaded": 0, "skipped": 0, "failed": 0, "auth_expired": True}
                  return {"success": False, "message": f"Failed to get manifest: {e}", "downloaded": 0, "skipped": 0, "failed": total_files}
             except Exception as e:
                  logger.exception(f"Unexpected error getting manifest batch {i // manifest_batch_size + 1}: {e}")
@@ -1050,6 +1079,19 @@ class MediaManager:
                 
                 seen_in_batch.add(filename)
                 destination = self.media_folder / filename
+
+                # Path traversal protection: ensure destination stays within media folder
+                try:
+                    resolved = destination.resolve()
+                    resolved.relative_to(self.media_folder.resolve())
+                except ValueError:
+                    logger.warning(f"Path traversal detected in filename '{filename}', skipping")
+                    total_failed += 1
+                    continue
+                except (OSError, RuntimeError):
+                    logger.warning(f"Invalid filename '{filename}', skipping")
+                    total_failed += 1
+                    continue
 
                 # Skip if file already exists and seems valid (basic check)
                 if self._file_exists_with_size(destination):
@@ -1121,7 +1163,7 @@ class MediaManager:
         }
 
     @retry(max_tries=3, delay=1)
-    async def check_media_bulk(self, user_token:str, deck_hash: str, bulk_operation_id: str, files: List[Dict]) -> Dict:
+    async def check_media_bulk(self, deck_hash: str, bulk_operation_id: str, files: List[Dict]) -> Dict:
         if not files:
             return {"existing_files": [], "missing_files": [], "failed_files": [], "batch_id": None}
 
@@ -1143,7 +1185,7 @@ class MediaManager:
                  return {"existing_files": [], "missing_files": [], "failed_files": [], "batch_id": None}
 
 
-            data = {"token": user_token, "deck_hash": deck_hash, "files": valid_files_info, "bulk_operation_id": bulk_operation_id}
+            data = {"deck_hash": deck_hash, "files": valid_files_info, "bulk_operation_id": bulk_operation_id}
             logger.debug(f"Bulk Operation ID: {bulk_operation_id}")
             try:
                 response = await self.async_request("post", url, json=data)
@@ -1440,11 +1482,14 @@ class MediaManager:
              )
              return None
 
-    async def upload_media_bulk(self, user_token: str, files_info: List[Dict], file_paths: Dict[str, str], deck_hash: str, bulk_operation_id: str, progress_callback=None) -> Dict:
+    async def upload_media_bulk(self, files_info: List[Dict], file_paths: Dict[str, str], deck_hash: str, bulk_operation_id: str, progress_callback=None) -> Dict:
         total_initial_files = len(files_info)
         if not files_info:
             logger.warning("upload_media_bulk called with no files_info.")
             return {"success": True, "status": "no_files", "message": "No files provided for upload.", "uploaded": 0, "existing": 0, "failed": 0, "failed_filenames": []}
+
+        # Refresh session to pick up any token changes since init
+        self.refresh_session()
 
         existing_count = 0
         check_failed_count = 0
@@ -1466,7 +1511,7 @@ class MediaManager:
             if progress_callback:
                 progress_callback(0.1)
 
-            bulk_check_result = await self.check_media_bulk(user_token, deck_hash, bulk_operation_id, files_info)
+            bulk_check_result = await self.check_media_bulk(deck_hash, bulk_operation_id, files_info)
             existing_files = bulk_check_result.get("existing_files", []) or []
             existing_count = len(existing_files)
             check_failed_files = bulk_check_result.get("failed_files", []) or []
@@ -1523,6 +1568,11 @@ class MediaManager:
                 return {"success": False, "status": "no_batch_id", "message": "Server rejected upload batch.", "uploaded": 0, "existing": existing_count, "failed": len(failed_hashes_set), "failed_filenames": sorted(failed_filenames_set)}
         except MediaServerError as e:
             logger.error(f"Server error during media check: {e}")
+            metadata = getattr(e, "metadata", {})
+            if metadata.get("status_code") == 401:
+                from .auth_manager import auth_manager as _am
+                _am.handle_auth_failure()
+                return {"success": False, "status": "auth_failed", "message": "Session expired", "uploaded": 0, "existing": 0, "failed": total_initial_files, "failed_filenames": list(hash_to_filename.values())}
             capture_media_exception(
                 e,
                 context={
@@ -1715,6 +1765,11 @@ class MediaManager:
                 return {"success": total_failed_count == 0, "status": "uploaded_confirmed", "message": f"Uploaded {final_uploaded_count} files ({existing_count} existing, {total_failed_count} failed).", "uploaded": final_uploaded_count, "existing": existing_count, "failed": total_failed_count, "failed_filenames": sorted(failed_filenames_set)}
             except MediaServerError as e:
                 logger.error(f"Server error confirming bulk upload: {e}")
+                metadata = getattr(e, "metadata", {})
+                if metadata.get("status_code") == 401:
+                    from .auth_manager import auth_manager as _am
+                    _am.handle_auth_failure()
+                    return {"success": False, "status": "auth_failed", "message": "Session expired", "uploaded": 0, "existing": existing_count, "failed": total_initial_files, "failed_filenames": sorted(failed_filenames_set)}
                 failed_hashes_set.update(uploaded_hashes_unique)
                 total_failed_count = len(failed_hashes_set)
                 for fh in uploaded_hashes:

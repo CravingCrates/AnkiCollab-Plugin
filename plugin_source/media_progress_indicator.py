@@ -14,6 +14,7 @@ from aqt.qt import (
 )
 
 from aqt import mw
+from .ui.colors import get_colors
 
 class MediaProgressIndicator(QWidget):
     """
@@ -34,6 +35,8 @@ class MediaProgressIndicator(QWidget):
         
     def setup_ui(self):
         """Create the UI elements"""
+        colors = get_colors()
+        
         self.setFixedHeight(28)
         self.setMinimumWidth(300)
         
@@ -42,32 +45,29 @@ class MediaProgressIndicator(QWidget):
         layout.setContentsMargins(12, 4, 12, 4)
         layout.setSpacing(8)
         
-        # Icon label
-        self.icon_label = QLabel("🔄")
-        self.icon_label.setFont(QFont("Segoe UI Emoji", 10))
-        
-        # Status text
-        self.status_label = QLabel("Preparing...")
+        # Status text (no emoji icon)
+        self.status_label = QLabel("Syncing...")
         font = QFont()
         font.setPointSize(9)
         font.setWeight(QFont.Weight.Medium)
         self.status_label.setFont(font)
+        self.status_label.setStyleSheet(f"color: {colors['text_primary']};")
         
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(6)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
                 border: none;
                 border-radius: 3px;
-                background-color: rgba(0, 0, 0, 0.1);
-            }
-            QProgressBar::chunk {
+                background-color: {colors['border']};
+            }}
+            QProgressBar::chunk {{
                 border-radius: 3px;
                 background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #4CAF50, stop: 1 #45a049);
-            }
+                    stop: 0 {colors['success']}, stop: 1 {colors['success_hover']});
+            }}
         """)
         
         # Count label
@@ -76,21 +76,21 @@ class MediaProgressIndicator(QWidget):
         count_font.setPointSize(8)
         count_font.setWeight(QFont.Weight.Normal)
         self.count_label.setFont(count_font)
+        self.count_label.setStyleSheet(f"color: {colors['text_secondary']};")
         
         # Add widgets to layout
-        layout.addWidget(self.icon_label)
         layout.addWidget(self.status_label)
         layout.addWidget(self.progress_bar, 1)  # Stretch factor 1
         layout.addWidget(self.count_label)
         
-        # Frame styling
-        self.setStyleSheet("""
-            MediaProgressIndicator {
-                background-color: rgba(255, 255, 255, 0.95);
-                border: 1px solid rgba(0, 0, 0, 0.1);
+        # Frame styling - theme aware
+        self.setStyleSheet(f"""
+            MediaProgressIndicator {{
+                background-color: {colors['surface_elevated']};
+                border: 1px solid {colors['border']};
                 border-radius: 8px;
-                color: #333;
-            }
+                color: {colors['text_primary']};
+            }}
         """)
         
         # Position in toolbar area
@@ -106,11 +106,6 @@ class MediaProgressIndicator(QWidget):
         self.fade_animation = QPropertyAnimation(self.opacity_effect, b"opacity")
         self.fade_animation.setDuration(300)
         self.fade_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
-        
-        # Icon rotation timer for activity indicator
-        self.rotation_timer = QTimer()
-        self.rotation_timer.timeout.connect(self.rotate_icon)
-        self._rotation_angle = 0
         
     def position_in_toolbar(self):
         """Position the indicator in the toolbar area"""
@@ -129,8 +124,8 @@ class MediaProgressIndicator(QWidget):
         self._current_files = 0
         
         # Update initial state
-        self.icon_label.setText("⏳" if operation_type == "download" else "⬆️")
-        self.status_label.setText(f"Media {operation_type} starting...")
+        action = "Downloading" if operation_type == "download" else "Uploading"
+        self.status_label.setText(f"Media {action.lower()}...")
         self.progress_bar.setMaximum(total_files if total_files > 0 else 100)
         self.progress_bar.setValue(0)
         self.count_label.setText(f"0/{total_files:,}")
@@ -144,9 +139,6 @@ class MediaProgressIndicator(QWidget):
         self.fade_animation.setStartValue(0.0)
         self.fade_animation.setEndValue(1.0)
         self.fade_animation.start()
-        
-        # Start rotation animation
-        self.rotation_timer.start(1000)
         
     def update_progress(self, progress_ratio: float, current_files: Optional[int] = None):
         """Update progress with smooth transitions"""
@@ -179,15 +171,12 @@ class MediaProgressIndicator(QWidget):
             return
             
         self._is_active = False
-        self.rotation_timer.stop()
         
         # Show completion state briefly
         if success:
-            self.icon_label.setText("✅")
-            completion_msg = message or f"Completed! {self._current_files:,} files processed"
+            completion_msg = message or f"Completed. {self._current_files:,} files processed."
         else:
-            self.icon_label.setText("❌")
-            completion_msg = message or f"Failed after {self._current_files:,} files"
+            completion_msg = message or f"Failed after {self._current_files:,} files."
             
         self.status_label.setText(completion_msg)
         self.progress_bar.setValue(self.progress_bar.maximum())
@@ -201,15 +190,6 @@ class MediaProgressIndicator(QWidget):
         self.fade_animation.setEndValue(0.0)
         self.fade_animation.finished.connect(self.hide)
         self.fade_animation.start()
-        
-    def rotate_icon(self):
-        """Rotate the activity icon for visual feedback"""
-        if not self._is_active:
-            return
-            
-        icons = ["⏳", "⌛"] if self._operation_type == "download" else ["⬆️", "⬇️"]
-        self._rotation_angle = (self._rotation_angle + 1) % len(icons)
-        self.icon_label.setText(icons[self._rotation_angle])
 
 
 # Global instance for easy access

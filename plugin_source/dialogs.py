@@ -13,6 +13,7 @@ from aqt.theme import theme_manager
 
 from .auth_manager import *
 from .var_defs import API_BASE_URL
+from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style
 
 def get_local_deck_from_hash(input_hash):
     strings_data = mw.addonManager.getConfig(__name__)
@@ -34,32 +35,62 @@ def set_rated_true():
             mw.addonManager.writeConfig(__name__, strings_data)
 
 class ChangelogDialog(QDialog):
-    def __init__(self, changelog, deck_hash):
-        super().__init__()
+    def __init__(self, changelog, deck_hash, parent=None):
+        super().__init__(parent)
         local_name = get_local_deck_from_hash(deck_hash)
-        self.setWindowTitle(f"AnkiCollab - Changelog for Deck {local_name}")
+        self.setWindowTitle(f"AnkiCollab - Changelog for {local_name}")
         self.setModal(True)
+        
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
 
         layout = QVBoxLayout()
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Header - neutral, not colored
+        header = QLabel("Update Available")
+        header.setStyleSheet(f"font-size: 15px; font-weight: 500; color: {colors['text_primary']};")
+        layout.addWidget(header)
 
         label = QLabel("The following changes are available:")
+        label.setStyleSheet(f"color: {colors['text_secondary']}; margin-bottom: 8px;")
         layout.addWidget(label)
 
         changelog_text = QTextBrowser()
+        changelog_text.setStyleSheet(f"""
+            QTextBrowser {{
+                border: 1px solid {colors['border']};
+                border-radius: 5px;
+                padding: 10px;
+                background-color: {colors['surface']};
+                color: {colors['text_primary']};
+            }}
+        """)
         
         if not changelog:
-            changelog = "The maintainer left no changelog message for this update."
+            changelog = "No changelog provided for this update."
             
         changelog_text.setPlainText(changelog)
         layout.addWidget(changelog_text)
 
-        button_box = QDialogButtonBox()
-        install_button = button_box.addButton("Install Now", QDialogButtonBox.ButtonRole.AcceptRole)
-        later_button = button_box.addButton("Decide Later", QDialogButtonBox.ButtonRole.RejectRole)
-        skip_button = QPushButton("Skip this Update")
-        button_box.addButton(skip_button, QDialogButtonBox.ButtonRole.ActionRole)
-
-        layout.addWidget(button_box)
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        skip_button = QPushButton("Skip This Version")
+        skip_button.setStyleSheet(get_button_style('neutral'))
+        
+        later_button = QPushButton("Remind Me Later")
+        later_button.setStyleSheet(get_button_style('neutral'))
+        
+        install_button = QPushButton("Install Update")
+        install_button.setStyleSheet(get_button_style('success'))
+        
+        button_layout.addWidget(skip_button)
+        button_layout.addWidget(later_button)
+        button_layout.addWidget(install_button)
+        layout.addLayout(button_layout)
 
         self.setLayout(layout)
 
@@ -74,29 +105,50 @@ class ChangelogDialog(QDialog):
         
 
 class OptionalTagsDialog(QDialog):
-    checkboxes = {}
     
-    def __init__(self, old_tags, new_tags):
-        super().__init__()
+    def __init__(self, old_tags, new_tags, parent=None):
+        super().__init__(parent)
+        self.checkboxes = {}
+        
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
+        
         layout = QVBoxLayout()
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         self.setWindowTitle("AnkiCollab - Optional Tags")
-        label = QLabel("You can subscribe to the following optional tags:")
+        
+        header = QLabel("Optional Tags")
+        header.setStyleSheet(f"font-size: 15px; font-weight: 500; color: {colors['text_primary']};")
+        layout.addWidget(header)
+        
+        label = QLabel("Select which optional tags you want to include:")
+        label.setStyleSheet(f"color: {colors['text_secondary']}; margin-bottom: 8px;")
         layout.addWidget(label)
+        
+        # Checkbox container
+        checkbox_container = QWidget()
+        checkbox_layout = QVBoxLayout(checkbox_container)
+        checkbox_layout.setSpacing(6)
+        checkbox_layout.setContentsMargins(0, 0, 0, 0)
         
         for item in new_tags:
             checkbox = QCheckBox(item)
-            #set checked to the old value if it exists in the old tags, otherwise set it to false
+            checkbox.setStyleSheet(f"color: {colors['text_primary']}; padding: 4px;")
             checkbox.setChecked(old_tags.get(item, False))
             self.checkboxes[item] = checkbox
-            layout.addWidget(checkbox)
+            checkbox_layout.addWidget(checkbox)
+        
+        layout.addWidget(checkbox_container)
+        layout.addStretch()
 
         button = QPushButton('Save')
+        button.setStyleSheet(get_button_style('success'))
         button.clicked.connect(lambda: self.close())
         layout.addWidget(button)
 
         self.setLayout(layout)
-        self.show()
 
     def get_selected_tags(self):
         result = {}
@@ -114,68 +166,29 @@ class LoginDialog(QDialog):
         self.setModal(True)
         self.resize(320, 260)
 
-        # Theme-aware colors
-        dark_mode = theme_manager.night_mode
-        
-        if dark_mode:
-            colors = {
-                'background': '#2d2d2d',
-                'surface': '#3d3d3d', 
-                'primary': '#64B5F6',
-                'accent': '#4CAF50',
-                'text': '#ffffff',
-                'border': '#555555'
-            }
-        else:
-            colors = {
-                'background': '#ffffff',
-                'surface': '#f5f5f5',
-                'primary': '#2196F3',
-                'accent': '#4CAF50',
-                'text': '#212121',
-                'border': '#ddd'
-            }
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
 
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
         layout.setContentsMargins(25, 25, 25, 25)
 
         # Title
-        title = QLabel("🔐 Login to AnkiCollab")
-        title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {colors['primary']}; margin-bottom: 10px;")
+        title = QLabel("Login to AnkiCollab")
+        title.setStyleSheet(f"font-size: 16px; font-weight: 500; color: {colors['text_primary']}; margin-bottom: 10px;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # Username field
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
-        self.username_input.setStyleSheet(f"""
-            QLineEdit {{
-                padding: 10px;
-                border: 1px solid {colors['border']};
-                border-radius: 5px;
-                font-size: 14px;
-                background-color: {colors['surface']};
-                color: {colors['text']};
-            }}
-            QLineEdit:focus {{ border-color: {colors['primary']}; }}
-        """)
+        self.username_input.setStyleSheet(get_input_style())
         
         # Password field
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("Password")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setStyleSheet(f"""
-            QLineEdit {{
-                padding: 10px;
-                border: 1px solid {colors['border']};
-                border-radius: 5px;
-                font-size: 14px;
-                background-color: {colors['surface']};
-                color: {colors['text']};
-            }}
-            QLineEdit:focus {{ border-color: {colors['primary']}; }}
-        """)
+        self.password_input.setStyleSheet(get_input_style())
         
         layout.addWidget(self.username_input)
         layout.addWidget(self.password_input)
@@ -184,42 +197,22 @@ class LoginDialog(QDialog):
         button_layout = QHBoxLayout()
         
         login_button = QPushButton("Login")
-        login_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors['accent']};
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #45a049; }}
-        """)
+        login_button.setToolTip("Sign in with your AnkiCollab account")
+        login_button.setStyleSheet(get_button_style('success'))
         
         cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #666;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
-            }}
-            QPushButton:hover {{ background-color: #555; }}
-        """)
+        cancel_button.setStyleSheet(get_button_style('neutral'))
         
-        button_layout.addWidget(login_button)
         button_layout.addWidget(cancel_button)
+        button_layout.addWidget(login_button)
         layout.addLayout(button_layout)
         
         # Signup link
-        signup_link = QLabel('<a href="#" style="color: #64B5F6; text-decoration: underline;">Don\'t have an account? Sign up here</a>')
+        signup_link = QLabel(f'<a href="#" style="color: {colors["primary"]}; text-decoration: underline;">Don\'t have an account? Sign up here</a>')
         signup_link.setAlignment(Qt.AlignmentFlag.AlignCenter)
         signup_link.setStyleSheet(f"color: {colors['primary']}; font-size: 12px; margin-top: 10px;")
         signup_link.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(signup_link)
-        
-        self.setStyleSheet(f"QDialog {{ background-color: {colors['background']}; color: {colors['text']}; }}")
 
         # Connect events
         login_button.clicked.connect(self.login)
@@ -237,7 +230,7 @@ class LoginDialog(QDialog):
         password = self.password_input.text()
         
         if not username or not password:
-            aqt.utils.showInfo("Please enter a username and password.")
+            aqt.utils.showInfo("Please enter both your username and password to continue.")
             return
         
         payload = {
@@ -246,7 +239,7 @@ class LoginDialog(QDialog):
         }
         
         try:
-            response = requests.post(f"{API_BASE_URL}/login", data=payload, timeout=10)
+            response = requests.post(f"{API_BASE_URL}/login", json=payload, timeout=10, verify=True)
 
             if response.status_code == 200:
                 # Parse the JSON response
@@ -255,7 +248,7 @@ class LoginDialog(QDialog):
                 if auth_manager.store_login_result(auth_data):
                     self.done(0)
                 else:
-                    msg_box = QMessageBox()
+                    msg_box = QMessageBox(self)
                     msg_box.setText("Invalid authentication response from server.")
                     msg_box.exec()
             else:
@@ -267,30 +260,60 @@ class LoginDialog(QDialog):
             
 class AddChangelogDialog(QDialog):
     def __init__(self, deck_hash, parent=None):
-        super().__init__()
+        super().__init__(parent)
         self.setWindowTitle("AnkiCollab - Add Changelog")
         self.setModal(True)
-        self.resize(400, 200)
+        self.resize(400, 220)
 
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
+        
         self.deck_hash = deck_hash
 
         layout = QVBoxLayout()
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        label = QLabel("Please enter the changelog message:")
+        header = QLabel("Add Changelog Entry")
+        header.setStyleSheet(f"font-size: 15px; font-weight: 500; color: {colors['text_primary']};")
+        layout.addWidget(header)
+
+        label = QLabel("Describe the changes you're publishing:")
+        label.setStyleSheet(f"color: {colors['text_secondary']}; margin-bottom: 4px;")
         layout.addWidget(label)
 
         self.changelog_input = QTextEdit()
+        self.changelog_input.setStyleSheet(f"""
+            QTextEdit {{
+                border: 1px solid {colors['border']};
+                border-radius: 5px;
+                padding: 8px;
+                background-color: {colors['surface']};
+                color: {colors['text_primary']};
+            }}
+            QTextEdit:focus {{
+                border-color: {colors['border_focus']};
+            }}
+        """)
         layout.addWidget(self.changelog_input)
 
-        button_box = QDialogButtonBox()
-        publish_button = button_box.addButton("Publish", QDialogButtonBox.ButtonRole.AcceptRole)
-        button_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
-
-        layout.addWidget(button_box)
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet(get_button_style('neutral'))
+        cancel_button.clicked.connect(self.reject)
+        
+        publish_button = QPushButton("Publish")
+        publish_button.setStyleSheet(get_button_style('success'))
+        publish_button.clicked.connect(self.publish)
+        
+        button_layout.addWidget(cancel_button)
+        button_layout.addWidget(publish_button)
+        layout.addLayout(button_layout)
 
         self.setLayout(layout)
-
-        publish_button.clicked.connect(self.publish)
 
     def publish(self):
         changelog_text = self.changelog_input.toPlainText()
@@ -298,13 +321,13 @@ class AddChangelogDialog(QDialog):
             QMessageBox.warning(self, "Error", "Please enter a changelog message.")
             return
 
+        from .api_client import api_client
         payload = {
             'deck_hash': self.deck_hash,
             'changelog': changelog_text,
-            'token': get_login_token()
         }
 
-        response = requests.post(f"{API_BASE_URL}/submitChangelog", json=payload)
+        response = api_client.post_json("/submitChangelog", payload, timeout=30)
         if response.status_code == 200:
             QMessageBox.information(self, "Information", response.text)
         else:
@@ -317,58 +340,107 @@ class DeletedNotesDialog(QDialog):
     def __init__(self, deleted_notes, deck_hash, parent=None):
         super().__init__(parent)
         local_name = get_local_deck_from_hash(deck_hash)
-        self.setWindowTitle(f"AnkiCollab - Notes Removed from Deck {local_name}")
+        self.setWindowTitle(f"AnkiCollab - Notes Removed from {local_name}")
         self.setModal(True)
 
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
+
         layout = QVBoxLayout()
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        label = QLabel("The maintainers removed the following notes from the deck. How do you want to proceed?\n")
+        header = QLabel("Notes Removed")
+        header.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {colors['warning']};")
+        layout.addWidget(header)
+
+        label = QLabel("The maintainers removed the following notes from the deck. How would you like to proceed?")
+        label.setWordWrap(True)
+        label.setStyleSheet(f"color: {colors['text_secondary']}; margin-bottom: 8px;")
         layout.addWidget(label)
-
-        scroll_area = QScrollArea()
 
         deleted_notes_text = QTextBrowser()
         deleted_notes_text.setMaximumHeight(200)
+        deleted_notes_text.setStyleSheet(f"""
+            QTextBrowser {{
+                border: 1px solid {colors['border']};
+                border-radius: 5px;
+                padding: 8px;
+                background-color: {colors['surface']};
+                color: {colors['text_primary']};
+            }}
+        """)
 
         deleted_notes_str = "\n".join(map(str, deleted_notes))
         deleted_notes_text.setPlainText(deleted_notes_str)
+        layout.addWidget(deleted_notes_text)
 
-        scroll_area.setWidget(deleted_notes_text)
-        scroll_area.setWidgetResizable(True)  # Allow the QTextBrowser to expand within the scroll area
-
-        layout.addWidget(scroll_area)
-
-        button_box = QDialogButtonBox()
-        delete_button = button_box.addButton("Delete Notes", QDialogButtonBox.ButtonRole.AcceptRole)
-        open_in_browser_button = button_box.addButton("Show in Browser", QDialogButtonBox.ButtonRole.RejectRole)
-        button_box.addButton("Keep Notes", QDialogButtonBox.ButtonRole.ActionRole)
-
-        layout.addWidget(button_box)
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        keep_button = QPushButton("Keep Notes")
+        keep_button.setStyleSheet(get_button_style('neutral'))
+        keep_button.clicked.connect(lambda: self.done(2))
+        
+        review_button = QPushButton("Review in Browser")
+        review_button.setStyleSheet(get_button_style('neutral'))
+        review_button.clicked.connect(self.reject)
+        
+        delete_button = QPushButton("Delete Notes")
+        delete_button.setStyleSheet(get_button_style('danger'))
+        delete_button.clicked.connect(self.accept)
+        
+        button_layout.addWidget(keep_button)
+        button_layout.addWidget(review_button)
+        button_layout.addWidget(delete_button)
+        layout.addLayout(button_layout)
 
         self.setLayout(layout)
-
-        delete_button.clicked.connect(self.accept)
-        open_in_browser_button.clicked.connect(self.reject)
-
         self.adjustSize()
         
 class AskShareStatsDialog(QDialog):
     def __init__(self, deck_name, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Help Improve the Deck!")
+        self.setWindowTitle("Help Improve the Deck")
+        
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
 
-        self.layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        
         self.deck_name = deck_name
+        
+        header = QLabel("Share Review Data")
+        header.setStyleSheet(f"font-size: 15px; font-weight: 500; color: {colors['text_primary']};")
+        main_layout.addWidget(header)
+        
         self.message = QLabel(f"The maintainers of '{self.deck_name}' would like to use anonymized review data to improve the deck. Would you like to share your stats?")
-        self.layout.addWidget(self.message)
+        self.message.setWordWrap(True)
+        self.message.setStyleSheet(f"color: {colors['text_primary']}; margin-bottom: 8px;")
+        main_layout.addWidget(self.message)
 
         self.checkbox = QCheckBox("Remember my decision")
-        self.layout.addWidget(self.checkbox)
+        self.checkbox.setStyleSheet(f"color: {colors['text_secondary']};")
+        main_layout.addWidget(self.checkbox)
 
-        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No)
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        self.layout.addWidget(self.buttons)
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        no_button = QPushButton("No Thanks")
+        no_button.setStyleSheet(get_button_style('neutral'))
+        no_button.clicked.connect(self.reject)
+        
+        yes_button = QPushButton("Yes, Share")
+        yes_button.setStyleSheet(get_button_style('success'))
+        yes_button.clicked.connect(self.accept)
+        
+        button_layout.addWidget(no_button)
+        button_layout.addWidget(yes_button)
+        main_layout.addLayout(button_layout)
 
     def isChecked(self):
         return self.checkbox.isChecked()
@@ -376,118 +448,75 @@ class AskShareStatsDialog(QDialog):
 class RateAddonDialog(QDialog):
     def __init__(self, parent=None):
         super(RateAddonDialog, self).__init__(parent)
-        self.setWindowTitle("Help AnkiCollab!")
+        self.setWindowTitle("A Quick Note")
         self.setModal(True)
+        self.setMinimumWidth(340)
         
-        # Theme-aware colors
-        dark_mode = theme_manager.night_mode
-        
-        if dark_mode:
-            colors = {
-                'background': '#2d2d2d',
-                'primary': '#64B5F6',
-                'accent': '#4CAF50',
-                'text': '#ffffff'
-            }
-        else:
-            colors = {
-                'background': '#ffffff',
-                'primary': '#2196F3',
-                'accent': '#4CAF50',
-                'text': '#212121'
-            }
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
 
-        # Main layout with reduced margins and spacing
+        # Main layout
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)  # Reduced from 20
-        layout.setContentsMargins(20, 20, 20, 20)  # Reduced from 30
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
 
-        # Smaller title
-        title = QLabel("Hello from AnkiCollab!")
-        title.setStyleSheet(f"""
+        # Personal greeting
+        greeting = QLabel("Hey there!")
+        greeting.setStyleSheet(f"""
             QLabel {{
-                font-size: 16px;
-                font-weight: bold;
-                color: {colors['primary']};
-                margin-bottom: 8px;
+                font-size: 18px;
+                font-weight: 600;
+                color: {colors['text_primary']};
             }}
         """)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
+        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(greeting)
         
-        # Message with reduced margins
-        message = QLabel("Your review helps make AnkiCollab more discoverable and motivates us to keep improving.\n\n"
-                        "If you're enjoying our add-on, please rate us. If you have any issues, let us know.")
+        # Warm message
+        message = QLabel(
+            "Thanks for using AnkiCollab. We're a small team working to make "
+            "studying together easier.\n\n"
+            "If you have a moment, a quick rating on AnkiWeb helps others "
+            "discover us. It really means a lot."
+        )
         message.setStyleSheet(f"""
             QLabel {{
-                color: {colors['text']};
+                color: {colors['text_secondary']};
                 font-size: 13px;
-                margin-bottom: 10px;
-                line-height: 1.3;
+                line-height: 1.5;
             }}
         """)
         message.setWordWrap(True)
         message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(message)
         
-        # Smaller buttons
-        love_button = QPushButton("💖 Love it? Rate us!")
-        love_button.setFixedHeight(32)  # Reduced from 40
-        love_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors['accent']};
-                color: white;
-                border: none;
-                padding: 6px 16px;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #45a049; }}
-        """)
+        # Add some breathing room
+        layout.addSpacing(8)
         
-        help_button = QPushButton("🔧 Need help? Join community")
-        help_button.setFixedHeight(32)  # Reduced from 40
-        help_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors['primary']};
-                color: white;
-                border: none;
-                padding: 6px 16px;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #1976D2; }}
-        """)
-        
-        later_button = QPushButton("Maybe later")
-        later_button.setFixedHeight(28)  # Reduced from 35
-        later_button.setStyleSheet("""
-            QPushButton {
-                background-color: #666;
-                color: white;
-                border: none;
-                padding: 6px 14px;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-            QPushButton:hover { background-color: #555; }
-        """)
-        
+        # Primary action - the one thing we're asking for
+        love_button = QPushButton("Leave a Rating")
+        love_button.setFixedHeight(36)
+        love_button.setStyleSheet(get_button_style('success'))
         layout.addWidget(love_button)
-        layout.addWidget(help_button)
-        layout.addWidget(later_button)
         
-        # Set dialog background
-        self.setStyleSheet(f"QDialog {{ background-color: {colors['background']}; color: {colors['text']}; }}")
+        # Secondary options, less prominent
+        secondary_layout = QHBoxLayout()
+        
+        help_button = QPushButton("Join Discord")
+        help_button.setStyleSheet(get_button_style('neutral', 'small'))
+        
+        later_button = QPushButton("Not Now")
+        later_button.setStyleSheet(get_button_style('neutral', 'small'))
+        
+        secondary_layout.addWidget(help_button)
+        secondary_layout.addWidget(later_button)
+        layout.addLayout(secondary_layout)
 
         # Connect events
         love_button.clicked.connect(self.love_it_button_click)
         help_button.clicked.connect(self.needs_work_button_click)
         later_button.clicked.connect(self.close)
         
-        # Auto-adjust size to fit content properly
         self.adjustSize()
 
     def love_it_button_click(self):
@@ -513,35 +542,16 @@ class ProtectFieldsDialog(QDialog):
         self.current_protected = current_protected or []
         self.result_fields = None
         
-        # Theme-aware colors
-        dark_mode = theme_manager.night_mode
-        
-        if dark_mode:
-            colors = {
-                'background': '#2d2d2d',
-                'surface': '#3d3d3d',
-                'primary': '#64B5F6',
-                'accent': '#4CAF50',
-                'text': '#ffffff',
-                'border': '#555555'
-            }
-        else:
-            colors = {
-                'background': '#ffffff',
-                'surface': '#f5f5f5',
-                'primary': '#2196F3',
-                'accent': '#4CAF50',
-                'text': '#212121',
-                'border': '#ddd'
-            }
+        colors = get_colors()
+        self.setStyleSheet(get_dialog_style())
         
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
         
         # Title
-        title = QLabel("🛡️ Protect Fields from Updates")
-        title.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {colors['primary']}; margin-bottom: 5px;")
+        title = QLabel("Protect Fields from Updates")
+        title.setStyleSheet(f"font-size: 14px; font-weight: 500; color: {colors['text_primary']}; margin-bottom: 5px;")
         layout.addWidget(title)
         
         # Description
@@ -549,7 +559,7 @@ class ProtectFieldsDialog(QDialog):
             "Select fields to protect from AnkiCollab updates.<br>"
             "Protected fields will not be overwritten when syncing."
         )
-        desc.setStyleSheet(f"color: {colors['text']}; font-size: 12px; margin-bottom: 10px;")
+        desc.setStyleSheet(f"color: {colors['text_primary']}; font-size: 12px; margin-bottom: 10px;")
         desc.setWordWrap(True)
         layout.addWidget(desc)
         
@@ -560,7 +570,7 @@ class ProtectFieldsDialog(QDialog):
         self.select_all_cb = QCheckBox("Select All Fields")
         self.select_all_cb.setStyleSheet(f"""
             QCheckBox {{
-                color: {colors['text']};
+                color: {colors['text_primary']};
                 font-weight: bold;
                 padding: 5px;
             }}
@@ -592,7 +602,7 @@ class ProtectFieldsDialog(QDialog):
         
         for field in field_names:
             cb = QCheckBox(field)
-            cb.setStyleSheet(f"color: {colors['text']}; padding: 3px;")
+            cb.setStyleSheet(f"color: {colors['text_primary']}; padding: 3px;")
             cb.setChecked(field in self.current_protected)
             cb.stateChanged.connect(self._update_select_all_state)
             self.checkboxes[field] = cb
@@ -612,7 +622,7 @@ class ProtectFieldsDialog(QDialog):
         self.protect_tags_cb = QCheckBox("Protect Tags")
         self.protect_tags_cb.setStyleSheet(f"""
             QCheckBox {{
-                color: {colors['text']};
+                color: {colors['text_primary']};
                 font-weight: bold;
                 padding: 5px;
             }}
@@ -621,45 +631,24 @@ class ProtectFieldsDialog(QDialog):
         layout.addWidget(self.protect_tags_cb)
         
         tags_desc = QLabel("Prevents tag changes from being overwritten during sync.")
-        tags_desc.setStyleSheet(f"color: {colors['text']}; font-size: 11px; margin-left: 20px; opacity: 0.8;")
+        tags_desc.setStyleSheet(f"color: {colors['text_secondary']}; font-size: 11px; margin-left: 20px;")
         layout.addWidget(tags_desc)
         
         # Buttons
         button_layout = QHBoxLayout()
         
-        save_btn = QPushButton("Save")
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors['accent']};
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 5px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #45a049; }}
-        """)
-        save_btn.clicked.connect(self._on_save)
-        
         cancel_btn = QPushButton("Cancel")
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #666;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 5px;
-            }}
-            QPushButton:hover {{ background-color: #555; }}
-        """)
+        cancel_btn.setStyleSheet(get_button_style('neutral'))
         cancel_btn.clicked.connect(self.reject)
         
-        button_layout.addStretch()
-        button_layout.addWidget(save_btn)
-        button_layout.addWidget(cancel_btn)
-        layout.addLayout(button_layout)
+        save_btn = QPushButton("Save")
+        save_btn.setStyleSheet(get_button_style('success'))
+        save_btn.clicked.connect(self._on_save)
         
-        self.setStyleSheet(f"QDialog {{ background-color: {colors['background']}; color: {colors['text']}; }}")
+        button_layout.addStretch()
+        button_layout.addWidget(cancel_btn)
+        button_layout.addWidget(save_btn)
+        layout.addLayout(button_layout)
         
         # Update select all state based on current selection
         self._update_select_all_state()

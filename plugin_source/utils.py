@@ -12,6 +12,82 @@ from contextlib import AbstractContextManager
 import logging
 
 
+class CollectionUnavailableError(Exception):
+    """Raised when the Anki collection is not available."""
+    pass
+
+
+class OperationAbortedError(Exception):
+    """Raised when an operation is aborted due to collection becoming unavailable.
+    
+    This exception is used to gracefully abort long-running import/export operations
+    when the collection is closed mid-operation. It signals that the operation should
+    stop immediately but data integrity is preserved.
+    """
+    def __init__(self, message: str = "Operation aborted", phase: str = "unknown"):
+        self.phase = phase
+        super().__init__(f"{message} (during {phase})")
+
+
+class BackupFailedError(Exception):
+    """Raised when a backup operation fails.
+    
+    This exception indicates that the collection backup could not be created,
+    which may indicate a problem with the collection. Operations should abort
+    rather than proceed without a backup.
+    """
+    pass
+
+
+def ensure_collection() -> Collection:
+    """Ensure the Anki collection is available and return it.
+    
+    Raises:
+        CollectionUnavailableError: If mw or mw.col is None.
+    
+    Returns:
+        The Anki collection object.
+    """
+    if mw is None or mw.col is None:
+        raise CollectionUnavailableError(
+            "Anki collection is not available. Please ensure Anki is fully loaded "
+            "and a profile is open before performing this operation."
+        )
+    return mw.col
+
+
+def is_collection_available() -> bool:
+    """Check if the Anki collection is currently available.
+    
+    Returns:
+        True if mw and mw.col are both available, False otherwise.
+    """
+    return mw is not None and mw.col is not None
+
+
+def check_collection_or_abort(phase: str = "unknown") -> Collection:
+    """Check collection availability and abort gracefully if unavailable.
+    
+    Use this function at key checkpoints during long-running operations to detect
+    when the collection has been closed and abort gracefully without data loss.
+    
+    Args:
+        phase: Description of the current operation phase for error reporting.
+    
+    Raises:
+        OperationAbortedError: If the collection is not available.
+    
+    Returns:
+        The Anki collection object if available.
+    """
+    if mw is None or mw.col is None:
+        raise OperationAbortedError(
+            "Collection closed during operation - aborting to prevent data loss",
+            phase=phase
+        )
+    return mw.col
+
+
 class _SentryBreadcrumbHandler(logging.Handler):
     """Emit log records as Sentry breadcrumbs without writing to stdio.
 
@@ -142,28 +218,93 @@ def get_local_deck_from_id(deck_id):
     return mw.col.decks.name(deck_id)
 
 
-def create_backup(background: bool = False):
+def create_backup(background: bool = False, critical: bool = False) -> bool:
+    """Create a backup of the Anki collection.
+    
+    Args:
+        background: If True, run the backup operation in the background (non-blocking).
+                   Cannot be used with critical=True.
+        critical: If True, the backup is required for the operation to proceed.
+                 Raises BackupFailedError if backup fails. Implies background=False.
+    
+    Returns:
+        True if backup succeeded, False if it was skipped or failed (when not critical).
+    
+    Raises:
+        BackupFailedError: If critical=True and the backup fails.
+        ValueError: If both background=True and critical=True.
+    """
     logger = get_logger("ankicollab.utils")
+    
+    if background and critical:
+        raise ValueError("Cannot use background=True with critical=True")
+    
+    # Check collection availability before attempting backup
+    if not is_collection_available():
+        msg = "Cannot create backup: collection not available"
+        logger.warning(msg)
+        if critical:
+            raise BackupFailedError(msg)
+        return False
+    
     logger.info("Creating backup...")
 
-    def do_backup(col: Collection):
+    def do_backup_sync(col: Collection) -> bool:
+        """Synchronous backup that returns success/failure."""
+        # Double-check collection is still available
+        if col is None:
+            logger.warning("Backup aborted: collection became unavailable")
+            return False
         try:
+            backup_folder = aqt.mw.pm.backupFolder() if aqt.mw and aqt.mw.pm else None
+            if backup_folder is None:
+                logger.warning("Backup aborted: could not determine backup folder")
+                return False
             _ = col.create_backup(
-                backup_folder=aqt.mw.pm.backupFolder(),
+                backup_folder=backup_folder,
                 force=True,
                 wait_for_completion=True,
             )
+            logger.info("Backup created successfully")
+            return True
         except Exception as e:
             logger.exception("Error creating backup")
+            return False
 
     if background:
+        # Non-blocking background backup (fire and forget)
+        if mw is None:
+            logger.warning("Skipping background backup: main window not available")
+            return False
+        
+        def do_backup_bg(col: Collection):
+            do_backup_sync(col)
+        
         QueryOp(
             parent=mw,
-            op=do_backup,
+            op=do_backup_bg,
             success=lambda _: 1,
         ).run_in_background()
+        return True  # Assume success for background (we can't wait)
     else:
-        do_backup(aqt.mw.col)
+        # Synchronous/critical backup
+        col = aqt.mw.col if aqt.mw else None
+        if col is None:
+            msg = "Cannot create backup: collection not available"
+            logger.warning(msg)
+            if critical:
+                raise BackupFailedError(msg)
+            return False
+        
+        success = do_backup_sync(col)
+        
+        if not success and critical:
+            raise BackupFailedError(
+                "Failed to create backup. The operation has been aborted to protect your data. "
+                "Please check that your collection is not corrupted and try again."
+            )
+        
+        return success
 
 
 class DeckManager(AbstractContextManager):

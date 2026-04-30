@@ -25,6 +25,7 @@ from .dialogs import AddChangelogDialog, ProtectFieldsDialog
 from .var_defs import PREFIX_PROTECTED_FIELDS
 
 from .auth_manager import auth_manager
+from .notifications_center import refresh_notifications, register_sync_refresh_hook
 from .utils import get_logger
 import requests
 
@@ -104,7 +105,7 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
         showInfo("Could not retrieve unique identifiers for the selected notes.", parent=window if window is not None else mw)
         return
 
-    (rationale, commit_text) = get_commit_info(11)
+    (rationale, commit_text) = get_commit_info(11, parent=window)
     if rationale is None:
         return # User cancelled
 
@@ -112,13 +113,13 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
         'remote_deck': deckHash,
         'note_guids': guids,
         'commit_text': commit_text,
-        'token': auth_manager.get_token(),
         'force_overwrite': False # not implemented on the backend yet so we pass false welp
     }
 
     # TODO: Background threading
     try:
-        response = requests.post(f"{API_BASE_URL}/requestRemoval", json=payload)
+        from .api_client import api_client
+        response = api_client.post_json("/requestRemoval", payload, timeout=30)
         response.raise_for_status()
         logger.debug(f"Removal request response: {response.text}")
         if askUser(
@@ -375,14 +376,14 @@ def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscrib
         return
 
     def _op(_: object):
+        from .api_client import api_client
         payload = {
             "subscriber_deck_hash": subscriber_hash,
             "base_deck_hash": base_hash,
             "note_guids": guids,
-            "token": token,
         }
         try:
-            resp = requests.post(f"{API_BASE_URL}/CreateNewNoteLink", json=payload, timeout=30)
+            resp = api_client.post_json("/CreateNewNoteLink", payload, timeout=30)
             return resp.status_code, resp.text
         except Exception as e:
             return -1, str(e)
@@ -478,12 +479,13 @@ def init_editor_card(buttons: List[str], editor):
          return buttons
 
     b = editor.addButton(
-        None, # icon_path
-        "AnkiCollab",
-        lambda editor=editor: suggest_notes([editor.note.id], 2, editor=editor),
-        tip="Suggest Changes (AnkiCollab)",
-        keys=None, # shortcut
-        disables=False # disables automatically when no note is selected
+        icon=None,
+        cmd="AnkiCollab",
+        func=lambda editor=editor: suggest_notes([editor.note.id], 2, editor=editor),
+        tip="Suggest changes to the cloud deck",
+        label="AnkiCollab",
+        keys=None,
+        disables=False
     )
     
     buttons.append(b)
@@ -572,6 +574,21 @@ def request_update(silent) -> None:
         aqt.utils.tooltip("Log in to AnkiCollab to check for updates.")
         return
 
+    # Validate token with server before starting the pull
+    try:
+        from .api_client import api_client
+        check = api_client.post_empty("/CheckUserToken", timeout=5)
+        if check.status_code != 200 or check.text != "true":
+            # api_client already called handle_auth_failure() for 401
+            if check.status_code != 401:
+                auth_manager.handle_auth_failure()
+            return
+    except RuntimeError:
+        # "Not logged in" — already handled by api_client
+        return
+    except Exception:
+        pass  # Network error — proceed and let pull handle it
+
     handle_pull(None, silent)
 
 def async_update(silent: bool = False) -> None:
@@ -659,6 +676,7 @@ def onProfileLoaded():
     main.media_manager.set_media_folder(mw.col.media.dir())
     
     autoUpdate()
+    refresh_notifications()
     patch_successful = patch_image_occlusion_enhanced()
     logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
 
@@ -690,6 +708,7 @@ def hooks_init():
     """Registers all hooks. Internal checks within callbacks manage behavior."""
     gui_hooks.profile_did_open.append(onProfileLoaded)
     gui_hooks.profile_will_close.append(onProfileWillClose)
+    register_sync_refresh_hook()
 
     # Add Cards related
     gui_hooks.add_cards_did_init.append(init_add_card)

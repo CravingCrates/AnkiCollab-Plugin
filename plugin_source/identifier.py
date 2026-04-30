@@ -1,67 +1,52 @@
 # Create a unique identifier for each user to group stats
-import uuid
-import hashlib
-import aqt
 import json
-import requests
 
-from .var_defs import API_BASE_URL
+from .auth_manager import auth_manager
+from .api_client import api_client
 
-# We identify the user by the their ankiweb email. Since I don't want to store their email for privacy reasons, we hash it and use that as the identifier.
-# If the user doesn't have an ankiweb account, we use their MAC address to identify them.
-# We prefer to use the ankiweb email because it is more stable than the MAC address and it allows us to identify the user across multiple devices.
+# We identify the user by a hashed version of their username returned by the backend.
+# This is derived from the token without storing any email or MAC address.
 def get_user_hash():
-    """Create a unique identifier for the user"""
-    identifier = None
+    """Get the backend-provided hashed username for the current token."""
+    token = auth_manager.get_token()
+    if not token:
+        return None
+
     try:
-        sync_user = aqt.mw.pm.profile["syncUser"]
-        # Check if syncUser is not just an empty string
-        if sync_user and sync_user.strip():
-            identifier = sync_user.strip()
-    except (KeyError, AttributeError, TypeError):
-        pass  # Fall through to MAC address
-    
-    if not identifier:
-        # Get the MAC address
-        mac = uuid.getnode()
-        # Convert the MAC address to a string
-        if mac and mac != 0:
-            identifier = ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
-    
-    # Fallback if both syncUser and MAC address fail
-    if not identifier:
-        # Generate a random UUID as last resort
-        identifier = str(uuid.uuid4())
-    
-    user_hash = hashlib.sha256()
-    user_hash.update(identifier.encode('utf-8'))
-    return user_hash.hexdigest()
+        response = api_client.post_empty("/GetUserHashFromToken")
+    except Exception:
+        return None
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        payload = response.json()
+        if isinstance(payload, str) and payload.strip():
+            return payload.strip()
+    except json.JSONDecodeError:
+        return None
+
+    return None
 
 # purely aesthetic function to increase the counter on the website
 def subscribe_to_deck(deck_hash):
-    user_hash = get_user_hash()
-    if not user_hash:
+    token = auth_manager.get_token()
+    if not token:
         return False
-    payload = {
-            'deck_hash': deck_hash,
-            'user_hash': user_hash
-        }
-    print(payload)
-    response = requests.post(f"{API_BASE_URL}/AddSubscription", json=payload, timeout=5)
+    payload = {'deck_hash': deck_hash}
+    response = api_client.post_json("/AddSubscription", payload, timeout=5)
     if response.status_code == 200:
         return True
     else:
         return False
     
 def unsubscribe_from_deck(deck_hash):
-    user_hash = get_user_hash()
-    if not user_hash:
+    token = auth_manager.get_token()
+    if not token:
         return False
-    payload = {
-            'deck_hash': deck_hash,
-            'user_hash': user_hash
-        }
-    response = requests.post(f"{API_BASE_URL}/RemoveSubscription", json=payload, timeout=5)
+    payload = {'deck_hash': deck_hash}
+    response = api_client.post_json("/RemoveSubscription", payload, timeout=5)
     if response.status_code == 200:
         return True
     else:

@@ -49,6 +49,8 @@ from typing import Callable, cast, Tuple, Dict, List, Any, Optional, Set
 from pathlib import Path
 import os
 
+from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style
+
 from .crowd_anki.representation.note_model import NoteModel
 
 from .crowd_anki.utils.uuid import UuidFetcher
@@ -72,7 +74,7 @@ from .crowd_anki.representation.deck import Deck
 from .auth_manager import auth_manager
 from .var_defs import API_BASE_URL
 
-from .utils import get_deck_hash_from_did, get_deck_hash_from_card, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger
+from .utils import get_deck_hash_from_did, get_deck_hash_from_card, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger, is_collection_available, ensure_collection, CollectionUnavailableError, OperationAbortedError, check_collection_or_abort, BackupFailedError
 from .media_progress_indicator import show_media_progress, update_media_progress, complete_media_progress
 from . import main
 from .sentry_integration import capture_media_exception, capture_media_message
@@ -99,6 +101,92 @@ COMPILED_SOUND_REGEXES = [re.compile(r_str) for r_str in SOUND_REGEX_STRINGS]
 COMPILED_HTML_MEDIA_REGEXES = [re.compile(r_str) for r_str in HTML_MEDIA_REGEX_STRINGS]
 ALL_COMPILED_MEDIA_REGEXES = COMPILED_SOUND_REGEXES + COMPILED_HTML_MEDIA_REGEXES
 
+def _is_valid_media_file(filepath: str) -> bool:
+    """
+    Check if a media file exists and is valid.
+    
+    Args:
+        filepath: Full path to the media file
+        
+    Returns:
+        True if the file exists and meets minimum size, False otherwise
+    """
+    try:
+        stat = os.stat(filepath)
+        return stat.st_size >= 100 # 100 bytes
+    except (OSError, TypeError):
+        return False
+
+def _filter_valid_filename_mapping(filename_mapping: Dict[str, str], media_dir: Optional[str] = None) -> Dict[str, str]:
+    """
+    Filter filename_mapping to only include entries where the new file exists and is valid.
+    
+    Args:
+        filename_mapping: Dict mapping old filenames to new filenames
+        media_dir: Path to the media directory. If None, attempts to get from mw.col.media.dir()
+        
+    Returns:
+        Filtered dict with only valid mappings
+    """
+    if not filename_mapping:
+        return {}
+    
+    if media_dir is None:
+        if mw and mw.col and mw.col.media:
+            media_dir = mw.col.media.dir()
+        else:
+            logger.warning("Cannot get media directory for validation")
+            return {}
+    
+    valid_mapping = {}
+    skipped_count = 0
+    
+    for old_filename, new_filename in filename_mapping.items():
+        new_filepath = os.path.join(media_dir, new_filename)
+        if _is_valid_media_file(new_filepath):
+            valid_mapping[old_filename] = new_filename
+        else:
+            skipped_count += 1
+            logger.warning(f"Skipping media reference update: new file invalid or missing: {new_filename}")
+    
+    if skipped_count > 0:
+        logger.info(f"Filtered out {skipped_count} invalid media file mappings from {len(filename_mapping)} total")
+    
+    return valid_mapping
+
+
+def _handle_operation_aborted(e: Exception, operation_name: str = "Operation"):
+    """Handle OperationAbortedError gracefully, showing user-friendly message.
+    
+    Args:
+        e: The exception that was raised
+        operation_name: Name of the operation for the message (e.g., "Export", "Suggestion")
+    
+    Returns:
+        True if the error was handled (was an OperationAbortedError), False otherwise
+    """
+    if isinstance(e, OperationAbortedError):
+        logger.warning(f"{operation_name} aborted gracefully at phase '{e.phase}': {e}")
+        # Safely get parent widget - mw might be None if profile was closed
+        parent_widget = None
+        try:
+            parent_widget = QApplication.focusWidget() or mw
+        except Exception:
+            pass
+        
+        try:
+            aqt.utils.showInfo(
+                f"{operation_name} was cancelled because the collection was closed.\n\n"
+                "Please reopen your profile and try again.",
+                parent=parent_widget,
+                title=f"{operation_name} Cancelled"
+            )
+        except Exception as dialog_error:
+            # If we can't show a dialog (Anki shutting down), just log it
+            logger.warning(f"Could not show abort dialog: {dialog_error}")
+        return True
+    return False
+
 
 def do_nothing(count: int):
     pass
@@ -115,34 +203,25 @@ def ask_for_rating():
                 if (datetime.now(timezone.utc) - last_ratepls_dt).days > 14:  # only ask every 14 days
                     if not strings_data["settings"]["rated_addon"]: # only ask if they haven't rated the addon yet
                         strings_data["settings"]["last_ratepls"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                        dialog = RateAddonDialog() # UI Element - Main thread OK
+                        dialog = RateAddonDialog(parent=mw) # UI Element - Main thread OK
                         dialog.exec()
             mw.addonManager.writeConfig(__name__, strings_data)
 
 def get_maintainer_data(deckHash):
+    from .api_client import api_client
     token = auth_manager.get_token()
     auto_approve = auth_manager.get_auto_approve()
 
     if token:
-        token_info = {'token': token, 'deck_hash': deckHash}
         try:
-            token_check_response = requests.post(
-                f"{API_BASE_URL}/CheckUserToken",
-                json=token_info,
-                headers={"Content-Type": "application/json"}
-            )
+            token_check_response = api_client.post_empty("/CheckUserToken")
             if token_check_response.status_code == 200:
                 token_res = token_check_response.text
                 if token_res != "true":
                     from .menu import force_logout # bypass circular import
                     if auth_manager.refresh_token():
                         token = auth_manager.get_token()
-                        token_info['token'] = token
-                        token_check_response = requests.post(
-                            f"{API_BASE_URL}/CheckUserToken",
-                            json=token_info,
-                            headers={"Content-Type": "application/json"}
-                        )
+                        token_check_response = api_client.post_empty("/CheckUserToken")
                         if token_check_response.status_code != 200 or token_check_response.text != "true":
                             mw.taskman.run_on_main(force_logout) # Schedule UI action on main thread
                             token = ""
@@ -199,9 +278,16 @@ def get_note_guid_from_id(note_id):
 def update_media_references(filename_mapping: Dict[str, str], file_note_pairs: List[Tuple[str, str]]):
     """
     Update note references. MUST run on the main thread as it modifies the collection.
+    Only updates references where the new media file exists and is valid.
     """
     assert mw.col is not None, "Collection must be available for media reference update"
     if not filename_mapping:
+        return 0, None
+    
+    # Filter to only include valid new files
+    filename_mapping = _filter_valid_filename_mapping(filename_mapping)
+    if not filename_mapping:
+        logger.info("No valid media file mappings remain after validation")
         return 0, None
     
     # Group by note GUID only
@@ -264,8 +350,16 @@ def _compute_media_reference_updates(col, filename_mapping: Dict[str, str], file
        'updates': [ { 'note_id': int, 'note_guid': str, 'fields': List[str], 'old_fields': List[str], 'mod': int, 'old_filenames': List[str] }, ... ],
        'count': int
     }
+    Only includes updates where the new media file exists and is valid.
     """
     if not filename_mapping:
+        return {'updates': [], 'count': 0}
+
+    # Filter to only include valid new files
+    media_dir = col.media.dir() if col and col.media else None
+    filename_mapping = _filter_valid_filename_mapping(filename_mapping, media_dir)
+    if not filename_mapping:
+        logger.info("No valid media file mappings remain after validation in background task")
         return {'updates': [], 'count': 0}
 
     # Build mapping: note_guid -> [old_filenames]
@@ -338,13 +432,24 @@ def _apply_media_reference_updates(results: Dict[str, Any], editor: Optional[Any
     Re-validates each note; if it changed since computation (mod mismatch), we re-run
     substitutions on the latest fields to avoid overwriting user edits.
     Returns (updated_count, opchanges or None)
+    Only applies updates where the new media file exists and is valid.
     """
-    assert mw.col is not None
+    # Check collection availability
+    if not is_collection_available():
+        logger.warning("Cannot apply media reference updates: collection not available")
+        return 0, None
+    
     updates: List[Dict[str, Any]] = results.get('updates', [])
     if not updates:
         return 0, None
 
     filename_mapping: Dict[str, str] = results.get('filename_mapping', {})
+    # Re-validate filename_mapping on main thread in case files changed since background computation
+    filename_mapping = _filter_valid_filename_mapping(filename_mapping)
+    if not filename_mapping:
+        logger.info("No valid media file mappings remain after re-validation on main thread")
+        return 0, None
+    
     notes_to_save = []
 
     def make_replacer(old_name, new_name):
@@ -521,7 +626,7 @@ def update_notetype_media_references(filename_mapping: Dict[str, str]) -> int:
     
     return 0
 
-async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id: str, all_files_info: List[Dict], file_paths: Dict[str, str], progress_callback_wrapper=None, silent=False) -> Dict[str, Any]:
+async def handle_media_upload(deck_hash: str, bulk_operation_id: str, all_files_info: List[Dict], file_paths: Dict[str, str], progress_callback_wrapper=None, silent=False) -> Dict[str, Any]:
     """
     Async function to upload media files. Returns a summary dictionary.
     The progress_callback_wrapper is expected to handle threading (e.g., run_on_main).
@@ -561,7 +666,6 @@ async def handle_media_upload(user_token: str, deck_hash: str, bulk_operation_id
 
             # Process this batch
             batch_result = await main.media_manager.upload_media_bulk(
-                user_token=user_token,
                 files_info=current_batch,
                 file_paths=file_paths,
                 deck_hash=deck_hash,
@@ -687,7 +791,9 @@ def _sync_optimize_media_and_update_refs(media_files: List[Tuple[str, str]]) -> 
     Returns (filename_mapping, files_info, file_paths).
     Database updates are handled later on the main thread.
     """
-    assert mw.col is not None, "Collection must be available for media optimization"
+    # Check collection availability with graceful abort
+    check_collection_or_abort("media_optimization_start")
+    
     if not media_files:
         logger.info("No media files provided for optimization.")
         return {}, [], {}
@@ -708,6 +814,12 @@ def _sync_optimize_media_and_update_refs(media_files: List[Tuple[str, str]]) -> 
             main.media_manager.optimize_media_for_upload, media_files, progress_callback
         )
         logger.info(f"Background media optimization finished. {len(filename_mapping)} files mapped.")
+        
+        # Check collection still available after optimization
+        check_collection_or_abort("media_optimization_complete")
+    except OperationAbortedError:
+        # Re-raise abort errors without wrapping
+        raise
     except Exception as e:
         logger.error(f"Error during async media optimization: {str(e)}")
         logger.error(traceback.format_exc())
@@ -718,7 +830,7 @@ def _sync_optimize_media_and_update_refs(media_files: List[Tuple[str, str]]) -> 
     return filename_mapping, files_info, file_paths
 
 
-def _sync_handle_media_upload(token: str, deck_hash: str, bulk_operation_id: str, files_info: List[Dict], file_paths: Dict[str, str], silent: bool) -> Dict[str, Any]:
+def _sync_handle_media_upload(deck_hash: str, bulk_operation_id: str, files_info: List[Dict], file_paths: Dict[str, str], silent: bool) -> Dict[str, Any]:
     """
     Synchronous wrapper for handle_media_upload async function.
     Designed to be run in a background thread (e.g., via QueryOp).
@@ -743,7 +855,6 @@ def _sync_handle_media_upload(token: str, deck_hash: str, bulk_operation_id: str
         # Run the async upload function using the synchronous runner
         result = _sync_run_async(
             handle_media_upload,
-            user_token=token,
             deck_hash=deck_hash,
             bulk_operation_id=bulk_operation_id,
             all_files_info=files_info,
@@ -813,6 +924,11 @@ def _submit_deck_op(
         except Exception as e:
             logger.warning(f"Deck refresh inside submission op failed; proceeding: {e}")
 
+    # Always remove personal tags before serialization (must be after refresh if refresh occurred)
+    personal_tags = get_personal_tags(deckHash)
+    if personal_tags:
+        deck_initializer.remove_tags_from_notes(deck, personal_tags)
+
     newName = get_local_deck_from_hash(deckHash)
     deckPath = mw.col.decks.name(did) # type: ignore
 
@@ -838,7 +954,7 @@ def _submit_deck_op(
 
     # Prepare and send data
     deck_res = json.dumps(deck, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    
+
     data = {
         "remote_deck": deckHash,
         "deck_path": deckPath,
@@ -846,15 +962,12 @@ def _submit_deck_op(
         "deck": deck_res,
         "rationale": effective_rationale,
         "commit_text": effective_commit_text,
-        "token": token,
         "force_overwrite": force_overwrite,
     }
     try:
-        compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
-        based_data = base64.b64encode(compressed_data)
-        headers = {"Content-Type": "application/json"}
+        from .api_client import api_client
         logger.info(f"Submitting deck data for hash: {deckHash}")
-        response = requests.post(f"{API_BASE_URL}/submitCard", data=based_data, headers=headers)
+        response = api_client.post_gzip("/submitCard", data, timeout=120)
         response.raise_for_status()
 
         logger.info(f"Deck submission response status: {response.status_code}")
@@ -862,7 +975,7 @@ def _submit_deck_op(
         if media_files_info:
             bulk_operation_id = "" # only used for new decks
             # Pass necessary info to the success callback for the next step
-            return token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False # silent = False for suggestions
+            return deckHash, bulk_operation_id, media_files_info, media_file_paths, False # silent = False for suggestions
         else:
             # No media to upload, return None to signal completion
             # Also pass back the success message text
@@ -1196,7 +1309,7 @@ def _handle_media_upload_result(result: Dict[str, Any]):
         ask_for_rating()
 
 
-def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]], success_callback: Callable[[Dict[str, Any]], None]):
+def _start_media_upload(media_upload_data: Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]], success_callback: Callable[[Dict[str, Any]], None]):
     """
     Starts the media upload process using QueryOp.
     Called from the success callback of the deck submission/creation Op.
@@ -1210,7 +1323,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Di
         success_callback({"uploaded": 0, "existing": 0, "failed": 0, "errors": [], "cancelled": False, "silent": True})
         return
 
-    token, deckHash, bulk_operation_id, media_files_info, media_file_paths, silent = media_upload_data
+    deckHash, bulk_operation_id, media_files_info, media_file_paths, silent = media_upload_data
     parent_widget = QApplication.focusWidget() or mw # type: ignore
 
     logger.info(f"Starting media upload QueryOp for deck {deckHash}. Silent: {silent}")
@@ -1218,7 +1331,7 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Di
     op = QueryOp(
         parent=parent_widget,
         # Run the synchronous wrapper in the background op
-        op=lambda col: _sync_handle_media_upload(token, deckHash, bulk_operation_id, media_files_info, media_file_paths, silent),
+        op=lambda col: _sync_handle_media_upload(deckHash, bulk_operation_id, media_files_info, media_file_paths, silent),
         success=success_callback # Use the provided final success handler
     )
     # Configure QueryOp
@@ -1231,8 +1344,16 @@ def _start_media_upload(media_upload_data: Optional[Tuple[str, str, str, List[Di
 
 def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = None):
     """Suggest changes for specific notes."""
-    assert mw is not None and mw.col is not None, "Anki environment not ready"
     parent_widget = QApplication.focusWidget() or mw
+    
+    # Check collection availability with user-friendly message
+    if not is_collection_available():
+        aqt.utils.showWarning(
+            "Cannot suggest notes: Anki collection is not available. "
+            "Please ensure a profile is loaded and try again.",
+            parent=parent_widget
+        )
+        return
 
     if not nids:
         aqt.utils.showWarning("No notes selected for suggestion.", parent=parent_widget)
@@ -1269,13 +1390,21 @@ def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = No
 
         # --- Start Background Operations ---
         logger.info("Starting suggestion process...")
+        
+        def _on_suggest_failure(e: Exception):
+            if not _handle_operation_aborted(e, "Suggestion"):
+                logger.error(f"Suggestion failed: {e}")
+                raise e
 
         # Step 1: Deck Preparation (Background Op)
         op_prepare = QueryOp(
             parent=parent_widget,
             op=lambda col: _prepare_deck_for_suggestion(did, nids, deckHash),
-            success=lambda result: _on_suggest_deck_prepared(result, did, deckHash, rationale_id, editor)
-        )
+            success=lambda result: QTimer.singleShot(
+                0,
+                lambda result=result: _on_suggest_deck_prepared(result, did, deckHash, rationale_id, editor),
+            )
+        ).failure(_on_suggest_failure)
         op_prepare.with_progress("Preparing deck data...")
         op_prepare.run_in_background()
 
@@ -1386,7 +1515,7 @@ def _on_suggest_media_only_optimized(
     
     def _after_refs(_updated_count: int, _opchanges: Any):
         bulk_operation_id = ""  # Not used in this case, but required by the function signature
-        submit_result = (token, deckHash, bulk_operation_id, media_files_info, media_file_paths, False)
+        submit_result = (deckHash, bulk_operation_id, media_files_info, media_file_paths, False)
         _start_media_upload(submit_result, success_callback=_on_suggest_media_uploaded)
 
     handle_media_references(
@@ -1399,7 +1528,7 @@ def _on_suggest_media_only_optimized(
     )
     
 
-def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
+def _on_suggest_deck_submitted(submit_result: Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]], editor: Optional[Any]):
     """Success callback after deck submission for suggestions."""
     # Runs on Main Thread
     logger.info("Deck submission complete. Starting media upload if needed.")
@@ -1421,7 +1550,8 @@ def get_server_missing_media(deck_hash: str) -> Tuple[str, List[str]]:
     Returns a list of filenames that are missing.
     """
     try:
-        response = requests.get(f"{API_BASE_URL}/media/missing/{deck_hash}")
+        from .api_client import api_client
+        response = api_client.get(f"/media/missing/{deck_hash}", timeout=30, auth=True)
         response.raise_for_status()
         return (deck_hash, response.json())
     except requests.exceptions.RequestException as e:
@@ -1498,8 +1628,16 @@ def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
 
 def suggest_subdeck(did: int):
     """Suggest an entire subdeck."""
-    assert mw is not None and mw.col is not None, "Anki environment not ready"
     parent_widget = QApplication.focusWidget() or mw
+    
+    # Check collection availability with user-friendly message
+    if not is_collection_available():
+        aqt.utils.showWarning(
+            "Cannot suggest subdeck: Anki collection is not available. "
+            "Please ensure a profile is loaded and try again.",
+            parent=parent_widget
+        )
+        return
 
     try:
         deck_obj = mw.col.decks.get(did, default=False) # type: ignore
@@ -1515,13 +1653,21 @@ def suggest_subdeck(did: int):
 
         # --- Start Background Operations ---
         logger.info("Starting subdeck suggestion process...")
+        
+        def _on_subdeck_suggest_failure(e: Exception):
+            if not _handle_operation_aborted(e, "Subdeck Suggestion"):
+                logger.error(f"Subdeck suggestion failed: {e}")
+                raise e
 
         # Step 1: Deck Preparation (Background Op)
         op_prepare = QueryOp(
             parent=parent_widget,
             op=lambda col: _prepare_subdeck_for_suggestion(did, deck_name, deckHash),
-            success=lambda result: _on_suggest_subdeck_prepared(result, did, deckHash)
-        )
+            success=lambda result: QTimer.singleShot(
+                0,
+                lambda result=result: _on_suggest_subdeck_prepared(result, did, deckHash),
+            )
+        ).failure(_on_subdeck_suggest_failure)
         op_prepare.with_progress("Preparing subdeck data...")
         op_prepare.run_in_background()
 
@@ -1531,10 +1677,18 @@ def suggest_subdeck(did: int):
         show_exception(parent=parent_widget, exception=e)
 
 
-def handle_export(did: int, username: str):
+def handle_export(did: int):
     """Handles exporting a new deck to AnkiCollab."""
-    assert mw is not None and mw.col is not None, "Anki environment not ready"
     parent_widget = QApplication.focusWidget() or mw
+    
+    # Check collection availability with user-friendly message
+    if not is_collection_available():
+        aqt.utils.showWarning(
+            "Cannot export: Anki collection is not available. "
+            "Please ensure a profile is loaded and try again.",
+            parent=parent_widget
+        )
+        return
 
     try:
         deck_obj = mw.col.decks.get(did, default=False) # type: ignore
@@ -1548,8 +1702,21 @@ def handle_export(did: int, username: str):
             aqt.utils.showWarning("You must be logged in to publish a new deck. Please login under AnkiCollab > Login.", parent=parent_widget)
             return
 
-        # Create bakcup before export
-        create_backup(background=True)
+        # Create backup before export - this is CRITICAL
+        # If backup fails, abort the export to protect user data
+        try:
+            create_backup(critical=True)
+        except BackupFailedError as e:
+            logger.error(f"Export aborted due to backup failure: {e}")
+            aqt.utils.showWarning(
+                "Export aborted: Could not create a backup of your collection.\n\n"
+                "This may indicate a problem with your collection. Please check that Anki "
+                "is working correctly and try again.\n\n"
+                "No changes have been made.",
+                parent=parent_widget,
+                title="Backup Failed"
+            )
+            return
         
         deck_name = mw.col.decks.name(did) # type: ignore
         disambiguate_note_model_uuids(mw.col)
@@ -1558,22 +1725,24 @@ def handle_export(did: int, username: str):
         note_sorter = NoteSorter(ConfigSettings.get_instance())
         note_sorter.sort_deck(deck_repr)
 
-        # Remove standard protected tags for initial export
-        deck_initializer.remove_tags_from_notes(deck_repr, DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS])
-
         # --- Media Preparation (Main Thread) ---
         protected_fields = deck_repr.get_protected_fields(None) # No hash yet
         media_files = deck_repr.get_media_file_note_map(protected_fields)
 
         # --- Start Background Operations ---
         logger.info("Starting new deck export process...")
+        
+        def _on_export_failure(e: Exception):
+            if not _handle_operation_aborted(e, "Export"):
+                logger.error(f"Export failed: {e}")
+                raise e
 
         # Step 1: Optimize Media (Background Op)
         op_optimize = QueryOp(
             parent=parent_widget,
             op=lambda col: _sync_optimize_media_and_update_refs(media_files),
-            success=lambda result: _on_export_media_optimized(result, deck_repr, did, media_files, username, user_token)
-        )
+            success=lambda result: _on_export_media_optimized(result, deck_repr, did, media_files)
+        ).failure(_on_export_failure)
         op_optimize.with_progress("Optimizing media files...")
         op_optimize.run_in_background()
 
@@ -1589,12 +1758,20 @@ def _on_export_media_optimized(
     deck_repr: Deck,
     did: int,
     media_files: list,
-    username: str,
-    user_token: str,
 ):
     """Success callback after media optimization for export."""
     # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
+    
+    # Re-check collection availability after background operation
+    if not is_collection_available():
+        logger.warning("Collection became unavailable during export media optimization")
+        aqt.utils.showWarning(
+            "Export aborted: Anki collection became unavailable during the operation.",
+            parent=parent_widget
+        )
+        return
+    
     filename_mapping, files_info, file_paths = opt_result
 
     # Create a backup before updating the fields in the collection?
@@ -1604,8 +1781,8 @@ def _on_export_media_optimized(
         logger.info("Media references processed for export. Starting deck creation QueryOp.")
         op_create = QueryOp(
             parent=parent_widget,
-            op=lambda col: _create_deck_op(deck_repr, username, media_files_refresh=media_files),
-            success=lambda result: _on_export_deck_created(result, did, user_token, files_info, file_paths),
+            op=lambda col: _create_deck_op(deck_repr, media_files_refresh=media_files),
+            success=lambda result: _on_export_deck_created(result, did, files_info, file_paths),
         )
         op_create.with_progress("Publishing deck to AnkiCollab...")
         op_create.run_in_background()
@@ -1623,7 +1800,6 @@ def _on_export_media_optimized(
 
 def _create_deck_op(
     deck_repr: Deck,
-    username: str,
     media_files_refresh: Optional[List[Tuple[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Operation function for QueryOp: Creates the deck via API."""
@@ -1633,14 +1809,16 @@ def _create_deck_op(
             deck_repr.refresh_notes(media_files_refresh)
         except Exception as e:
             logger.warning(f"Deck refresh inside create op failed; proceeding: {e}")
+    
+    # Always remove protected tags before serialization (must be after refresh if refresh occurred)
+    deck_initializer.remove_tags_from_notes(deck_repr, DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS])
+    
     deck_res = json.dumps(deck_repr, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
-    data = {"deck": deck_res, "username": username}
+    data = {"deck": deck_res}
     try:
-        compressed_data = gzip.compress(json.dumps(data).encode('utf-8'))
-        based_data = base64.b64encode(compressed_data)
-        headers = {"Content-Type": "application/json"}
+        from .api_client import api_client
         logger.info("Sending create deck request...")
-        response = requests.post(f"{API_BASE_URL}/createDeck", data=based_data, headers=headers)
+        response = api_client.post_gzip("/createDeck", data, timeout=120)
         response.raise_for_status() # Check for HTTP errors
 
         logger.info(f"Create deck response status: {response.status_code}")
@@ -1661,7 +1839,7 @@ def _create_deck_op(
         raise RuntimeError(f"An unexpected error occurred during deck creation: {e}") from e
 
 
-def _on_export_deck_created(api_result: Dict[str, Any], did: int, user_token: str, files_info: List[Dict], file_paths: Dict[str, str]):
+def _on_export_deck_created(api_result: Dict[str, Any], did: int, files_info: List[Dict], file_paths: Dict[str, str]):
     """Success callback after deck creation API call."""
     # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
@@ -1695,7 +1873,7 @@ def _on_export_deck_created(api_result: Dict[str, Any], did: int, user_token: st
         ):
             logger.info("User opted to upload media for new deck.")
             
-            media_upload_data = (user_token, deckHash, bulk_op_id, files_info, file_paths, True) # silent = True for initial export
+            media_upload_data = (deckHash, bulk_op_id, files_info, file_paths, True) # silent = True for initial export
             _start_media_upload(media_upload_data, success_callback=_on_export_media_uploaded)
         else:
             # No media upload requested or no media found
@@ -1717,27 +1895,79 @@ def _on_export_media_uploaded(upload_result: Dict[str, Any]):
     _handle_media_upload_result(upload_result)
     # No rating request after initial export
 
-def get_commit_info(default_opt = 0):
+def get_commit_info(default_opt = 0, parent=None):
     options = [
         "None", "Deck Creation", "Updated content", "New content", "Content error",
         "Spelling/Grammar", "New card", "Updated Tags",
         "New Tags", "Bulk Suggestion", "Other", "Note Removal", "Changed Deck"
     ]
 
-    dialog = QDialog(QApplication.focusWidget() or mw)
-    dialog.setWindowTitle("Commit Information")
+    colors = get_colors()
+    
+    # Use provided parent, or find the active window
+    if parent is None:
+        parent = QApplication.activeWindow() or mw
+    
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Suggest Changes")
+    dialog.setFixedWidth(320)
+    dialog.setStyleSheet(get_dialog_style())
+    
     layout = QVBoxLayout()
+    layout.setSpacing(12)
+    layout.setContentsMargins(16, 16, 16, 16)
 
+    # Header
+    header = QLabel("What type of change is this?")
+    header.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {colors['text_primary']};")
+    layout.addWidget(header)
+
+    # Rationale list
     listWidget = QListWidget()
-    listWidget.addItems(options)
-    listWidget.setCurrentRow(default_opt)
+    listWidget.addItems(options[1:])  # Skip "None"
+    if default_opt > 0:
+        listWidget.setCurrentRow(default_opt - 1)
+    else:
+        listWidget.setCurrentRow(0)
     listWidget.doubleClicked.connect(dialog.accept)
-    layout.addWidget(QLabel("Select a rationale (mandatory):"))
+    listWidget.setStyleSheet(f"""
+        QListWidget {{
+            background-color: {colors['surface']};
+            border: 1px solid {colors['border']};
+            border-radius: 4px;
+            padding: 0px;
+            outline: none;
+        }}
+        QListWidget::item {{
+            padding: 3px 6px;
+            border-radius: 2px;
+            color: {colors['text_primary']};
+        }}
+        QListWidget::item:selected {{
+            background-color: {colors['primary']};
+            color: white;
+        }}
+        QListWidget::item:hover:!selected {{
+            background-color: {colors['surface_hover']};
+        }}
+    """)
+    listWidget.setFixedHeight(145)
     layout.addWidget(listWidget)
 
+    # Additional info section
+    infoLabel = QLabel("Details (optional)")
+    infoLabel.setStyleSheet(f"font-size: 12px; color: {colors['text_secondary']};")
+    layout.addWidget(infoLabel)
+    
     textEdit = QTextEdit()
-    textEdit.setFixedHeight(5 * textEdit.fontMetrics().lineSpacing())
-    textEdit.setPlaceholderText("Enter additional information (optional, max 255 characters)")
+    textEdit.setFixedHeight(60)
+    textEdit.setPlaceholderText("Brief description...")
+    textEdit.setStyleSheet(get_input_style() + f"""
+        QTextEdit {{
+            border-radius: 4px;
+            padding: 6px;
+        }}
+    """)
 
     def checkLength():
         text = textEdit.toPlainText()
@@ -1745,67 +1975,78 @@ def get_commit_info(default_opt = 0):
             cursor = textEdit.textCursor()
             pos = cursor.position()
             textEdit.setPlainText(text[:255])
-            cursor.setPosition(pos)
+            cursor.setPosition(min(pos, 255))
             textEdit.setTextCursor(cursor)
 
     textEdit.textChanged.connect(checkLength)
-    layout.addWidget(QLabel("Additional Information: (optional)"))
     layout.addWidget(textEdit)
+
+    # Keyboard shortcut hint
+    hintLabel = QLabel("Ctrl+Enter to submit")
+    hintLabel.setStyleSheet(f"font-size: 10px; color: {colors['text_muted']};")
+    layout.addWidget(hintLabel)
 
     shortcut = QShortcut(QKeySequence("Ctrl+Return"), textEdit)
     shortcut.activated.connect(dialog.accept)
 
+    # Buttons
     buttonLayout = QHBoxLayout()
+    buttonLayout.setSpacing(8)
+    
     cancelButton = QPushButton("Cancel")
-    okButton = QPushButton("Submit")
-    okButton.setDefault(True)
-    buttonLayout.addWidget(okButton)
+    cancelButton.setStyleSheet(get_button_style("neutral"))
+    cancelButton.setCursor(Qt.CursorShape.PointingHandCursor)
+    
+    submitButton = QPushButton("Submit")
+    submitButton.setStyleSheet(get_button_style("primary"))
+    submitButton.setCursor(Qt.CursorShape.PointingHandCursor)
+    submitButton.setDefault(True)
+    
+    buttonLayout.addStretch()
     buttonLayout.addWidget(cancelButton)
+    buttonLayout.addWidget(submitButton)
     layout.addLayout(buttonLayout)
 
     dialog.setLayout(layout)
-    okButton.clicked.connect(dialog.accept)
+    submitButton.clicked.connect(dialog.accept)
     cancelButton.clicked.connect(dialog.reject)
-    # textEdit.setReadOnly(True) # Let user type immediately
-    # textEdit.mousePressEvent = lambda _: textEdit.setReadOnly(False) # Not needed if not read-only initially
-    listWidget.setFocus() # Focus the list first
+    listWidget.setFocus()
 
     if dialog.exec() == QDialog.DialogCode.Accepted:
         selected_item = listWidget.currentItem()
         if selected_item:
-             rationale = listWidget.row(selected_item) # Get index
+             rationale = listWidget.row(selected_item) + 1  # +1 because we skipped "None"
              additional_info = textEdit.toPlainText().strip()
-             # Ensure 'None' isn't selected if it's mandatory
-             if rationale == 0:
-                  aqt.utils.showWarning("Please select a valid rationale.", parent=dialog)
-                  return get_commit_info(default_opt) # Re-show dialog
              return rationale, additional_info
         else:
-             # Should not happen if an item is selected by default
-             aqt.utils.tooltip("No rationale selected. Aborting.", parent=dialog)
+             aqt.utils.tooltip("No rationale selected.", parent=dialog)
              return None, None
 
-    aqt.utils.tooltip("Aborting suggestion.", parent=QApplication.focusWidget() or mw)
     return None, None
 
 def _prepare_deck_for_suggestion(did: Any, nids: List[int], deckHash: str) -> Tuple[Deck, List[Tuple[str, str]]]:
     """
     Background operation to prepare deck representation for suggestion.
     Returns (deck_repr, media_files).
+    Raises OperationAbortedError if collection becomes unavailable.
     """
-    assert mw.col is not None, "Collection must be available for deck preparation"
+    # Initial check
+    col = check_collection_or_abort("suggestion_preparation_start")
     
     # --- Preparation (Background Thread) ---
-    disambiguate_note_model_uuids(mw.col)
-    deck_repr = deck_initializer.from_collection(mw.col, mw.col.decks.name(did), note_ids=nids)
+    disambiguate_note_model_uuids(col)
+    
+    # Check after potentially heavy operation
+    check_collection_or_abort("after_uuid_disambiguation")
+    
+    deck_repr = deck_initializer.from_collection(col, col.decks.name(did), note_ids=nids)
     deck_initializer.trim_empty_children(deck_repr)
     note_sorter = NoteSorter(ConfigSettings.get_instance())
     note_sorter.sort_deck(deck_repr)
 
-    personal_tags = get_personal_tags(deckHash)
-    if personal_tags:
-        deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
-
+    # Check again before media preparation
+    check_collection_or_abort("before_media_preparation")
+    
     # --- Media Preparation (Background Thread) ---
     protected_fields = deck_repr.get_protected_fields(deckHash)
     media_files = deck_repr.get_media_file_note_map(protected_fields)
@@ -1821,8 +2062,17 @@ def _on_suggest_deck_prepared(
     editor: Optional[Any]
 ):
     """Success callback after deck preparation for suggestions."""
-    # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
+    
+    # Re-check collection availability after background operation
+    if not is_collection_available():
+        logger.warning("Collection became unavailable during suggestion preparation")
+        aqt.utils.showWarning(
+            "Suggestion aborted: Anki collection became unavailable during the operation.",
+            parent=parent_widget
+        )
+        return
+    
     deck_repr, media_files = prepare_result  # Unpack result
 
     try:
@@ -1836,7 +2086,7 @@ def _on_suggest_deck_prepared(
             return
 
         if rationale_id != 6 and not force_overwrite:  # Skip dialog for 'New Card' unless maintainer
-            result = get_commit_info(rationale_id)
+            result = get_commit_info(rationale_id, parent=parent_widget)
             if result is None or result[0] is None:
                 aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
                 return
@@ -1865,16 +2115,23 @@ def _prepare_subdeck_for_suggestion(did: Any, deck_name: str, deckHash: str) -> 
     """
     Background operation to prepare subdeck representation for suggestion.
     Returns (deck_repr, media_files).
+    Raises OperationAbortedError if collection becomes unavailable.
     """
-    assert mw.col is not None, "Collection must be available for subdeck preparation"
+    # Initial check
+    col = check_collection_or_abort("subdeck_suggestion_preparation_start")
     
     # --- Preparation (Background Thread) ---
-    disambiguate_note_model_uuids(mw.col)
-    deck_repr = deck_initializer.from_collection(mw.col, deck_name) # Export whole deck
+    disambiguate_note_model_uuids(col)
+    
+    # Check after potentially heavy operation
+    check_collection_or_abort("after_subdeck_uuid_disambiguation")
+    
+    deck_repr = deck_initializer.from_collection(col, deck_name) # Export whole deck
 
     # Get deck timestamp and remove unchanged notes
     try:
-        response = requests.get(f"{API_BASE_URL}/GetDeckTimestamp/" + deckHash)
+        from .api_client import api_client
+        response = api_client.get(f"/GetDeckTimestamp/{deckHash}", timeout=15)
         response.raise_for_status()
         last_updated = float(response.text)
         last_pulled = get_timestamp(deckHash) or 0.0
@@ -1886,10 +2143,10 @@ def _prepare_subdeck_for_suggestion(did: Any, deck_name: str, deckHash: str) -> 
         # Re-raise to be caught by QueryOp error handler
         raise RuntimeError(f"Failed to process deck timestamps: {e}") from e
 
+    # Check again after network call
+    check_collection_or_abort("after_subdeck_timestamp_fetch")
+    
     deck_initializer.trim_empty_children(deck_repr)
-    personal_tags = get_personal_tags(deckHash)
-    if personal_tags:
-        deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
 
     # Fix name to be relative
     deck_repr.anki_dict["name"] = deck_name.split("::")[-1]
@@ -1909,6 +2166,16 @@ def _on_suggest_subdeck_prepared(
     """Success callback after subdeck preparation for suggestions."""
     # Runs on Main Thread
     parent_widget = QApplication.focusWidget() or mw
+    
+    # Re-check collection availability after background operation
+    if not is_collection_available():
+        logger.warning("Collection became unavailable during subdeck preparation")
+        aqt.utils.showWarning(
+            "Suggestion aborted: Anki collection became unavailable during the operation.",
+            parent=parent_widget
+        )
+        return
+    
     deck_repr, media_files = prepare_result  # Unpack result
 
     try:
@@ -1919,7 +2186,7 @@ def _on_suggest_subdeck_prepared(
             return
 
         if not force_overwrite:
-            result = get_commit_info(9)  # Default to Bulk Suggestion
+            result = get_commit_info(9, parent=parent_widget)  # Default to Bulk Suggestion
             if result is None or result[0] is None:
                 aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
                 return

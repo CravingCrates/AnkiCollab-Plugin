@@ -9,7 +9,6 @@ from anki.decks import DeckId
 from aqt import gui_hooks, mw
 from aqt.operations import QueryOp
 import aqt.utils
-import requests
 
 from .export_manager import get_server_missing_media, start_suggest_missing_media
 
@@ -129,13 +128,13 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
             return
 
         def _post_create_link(_: object):
+            from .api_client import api_client
             payload = {
                 "subscriber_deck_hash": subscriber_hash,
                 "base_deck_hash": base_hash,
-                "token": token,
             }
             try:
-                resp = requests.post(f"{API_BASE_URL}/CreateDeckLink", json=payload, timeout=10)
+                resp = api_client.post_json("/CreateDeckLink", payload, timeout=10)
                 return resp.status_code, resp.text
             except Exception as e:
                 return -1, str(e)
@@ -184,7 +183,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
     action = links_menu.addAction("Export Media to Disk")
     action2 = links_menu.addAction("Download Missing Media")
     action4 = links_menu.addAction("Upload Missing Media")
-    action3 = links_menu.addAction("Reset Deck Timestamp")
+    action3 = links_menu.addAction("Reset Sync Timestamp")
     action5 = links_menu.addAction("Create Deck Link")
     qconnect(action.triggered, export_media)
     qconnect(action2.triggered, download_missing_media)

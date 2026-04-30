@@ -38,24 +38,32 @@ from .media_import import on_media_btn
 from .hooks import async_update, update_hooks_for_login_state
 from .dialogs import LoginDialog
 from .auth_manager import auth_manager
+from .notifications_center import (
+    init_notification_center,
+    refresh_notifications,
+    set_notification_visibility,
+)
 from .sentry_integration import init_sentry
+from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style, get_table_style, get_groupbox_style, get_combobox_style, get_info_box_style
 from anki.utils import point_version
 
 collab_menu = QMenu('AnkiCollab', mw)
 links_menu = QMenu('Links', mw)
 
 # Main Actions
-edit_list_action = QAction('Edit Subscriptions', mw)
+edit_list_action = QAction('Manage Subscriptions', mw)
 push_deck_action = QAction('Publish New Deck', mw)
-push_all_stats_action = QAction('Submit All Review History', mw)
 pull_changes_action = QAction('Update Decks', mw)
+pull_changes_action.setToolTip("Download updates from AnkiCollab (does NOT upload your changes)")
+general_settings_action = QAction('Settings', mw)
+general_settings_action.setMenuRole(QAction.MenuRole.NoRole) # I hate apple
+general_settings_action.setToolTip("Configure AnkiCollab settings and sync settings")
 login_manager_action = QAction('Login', mw) # Default text is Login
-media_import_action = QAction('Import Media from Folder', mw)
 
 # Links Actions
-community_action = QAction('Join the Community', mw)
-website_action = QAction('Open Website', mw)
-donation_action = QAction('Leave a review', mw)
+community_action = QAction('Join Community (Discord)', mw)
+website_action = QAction('Visit Website', mw)
+donation_action = QAction('Rate this Add-on', mw)
 
 def force_logout(with_dialog = True):
     auth_manager.logout()
@@ -66,7 +74,7 @@ def force_logout(with_dialog = True):
 
 def delete_selected_rows(table, dialog):
     if table.selectedIndexes() == []:
-        showInfo("Please select at least one subscription to delete.")
+        showInfo("No subscription selected.\n\nClick on a row in the table to select it first.")
         return
     dialog.accept()
     strings_data = mw.addonManager.getConfig(__name__)
@@ -122,7 +130,7 @@ def add_to_table(line_edit, table, dialog):
             (
                 "Proceeding will download and install a file from the internet that is potentially malicious!<br>"
                 "We are not able to check every upload, so only download and install Decks that you know and trust!<br><br>"
-                "Do you want to proceed?"
+                "Continue with download?"
             ),
             title="AnkiCollab",
         ):
@@ -131,7 +139,7 @@ def add_to_table(line_edit, table, dialog):
     if string:
         # Check if already subscribed
         if string in strings_data:
-            showInfo(f"You are already subscribed to '{string}'.")
+            showInfo(f"You're already subscribed to this deck.\n\nUse 'Update Decks' to get the latest changes.")
             line_edit.setText('')
             return
 
@@ -166,19 +174,24 @@ def update_local_deck(input_hash, new_deck, popup_dialog, subs_dialog):
 
 
 def on_edit_list():
+    colors = get_colors()
+    
     dialog = QDialog(mw)
     dialog.setWindowTitle('AnkiCollab - Manage Subscriptions')
     dialog.setMinimumSize(800, 500)
+    dialog.setStyleSheet(get_dialog_style())
+    
     layout = QVBoxLayout()
     dialog.setLayout(layout)
 
     # Header
-    header_label = QLabel("Manage Your AnkiCollab Subscriptions")
-    header_label.setStyleSheet("font-size: 16px; font-weight: bold; margin: 10px 0; color: #2196F3;")
+    header_label = QLabel("Manage Your Subscriptions")
+    header_label.setStyleSheet(f"font-size: 16px; font-weight: 500; margin: 10px 0; color: {colors['text_primary']};")
     header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(header_label)
 
     table = QTableWidget()
+    table.setStyleSheet(get_table_style())
     strings_data = mw.addonManager.getConfig(__name__)
 
     # Filter out settings/auth keys before counting rows
@@ -191,6 +204,8 @@ def on_edit_list():
     table.setAlternatingRowColors(True)
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     table.verticalHeader().setVisible(False)
+    table.verticalHeader().setDefaultSectionSize(36)  # Default row height that works across DPI
+    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
     
     header = table.horizontalHeader()
     header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -232,14 +247,31 @@ def on_edit_list():
         item4.setFlags(item4.flags() & ~Qt.ItemFlag.ItemIsEditable)
         table.setItem(row, 3, item4)
 
-        # Actions
+        # Actions - compact button that scales with content
         actions_widget = QWidget()
         actions_layout = QHBoxLayout(actions_widget)
-        actions_layout.setContentsMargins(5, 2, 5, 2)
+        actions_layout.setContentsMargins(2, 0, 2, 0)
+        actions_layout.setSpacing(0)
         
-        edit_button = QPushButton("⚙️")
-        edit_button.setToolTip("Edit subscription settings")
-        edit_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; border: none; padding: 6px 8px; border-radius: 3px; font-size: 12px; } QPushButton:hover { background-color: #45a049; }")
+        edit_button = QPushButton("···")
+        edit_button.setToolTip("Configure deck location and sync settings")
+        edit_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {colors['text_secondary']};
+                border: 1px solid {colors['border']};
+                padding: 2px 8px;
+                border-radius: 3px;
+                font-size: 14px;
+                font-weight: bold;
+                letter-spacing: 1px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors['surface_hover']};
+                color: {colors['text_primary']};
+            }}
+        """)
+        edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
         edit_button.clicked.connect(lambda checked, h=deck_hash, d=dialog: edit_subscription_details(h, d))
         actions_layout.addWidget(edit_button)
         
@@ -251,36 +283,24 @@ def on_edit_list():
 
     # Add new subscription section    
     add_section = QGroupBox("Add New Subscription")
-    add_section.setStyleSheet("""
-        QGroupBox { 
-            font-weight: bold; 
-            margin-top: 15px;
-            padding-top: 15px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            subcontrol-position: top left;
-            padding: 0 5px;
-            margin-top: 0px;
-        }
-    """)
+    add_section.setStyleSheet(get_groupbox_style())
     add_layout = QVBoxLayout(add_section)
-    add_layout.setContentsMargins(10, 10, 10, 10)  # Add some internal padding
+    add_layout.setContentsMargins(10, 10, 10, 10)
     
     add_input_layout = QHBoxLayout()
     line_edit = QLineEdit()
-    line_edit.setPlaceholderText("Enter Subscription Key...")
-    line_edit.setStyleSheet("QLineEdit { padding: 8px; border: 2px solid #ddd; border-radius: 4px; } QLineEdit:focus { border-color: #2196F3; }")
+    line_edit.setPlaceholderText("Enter subscription key (e.g. word-word-word-word-word)")
+    line_edit.setStyleSheet(get_input_style())
     add_button = QPushButton('Add Subscription')
-    add_button.setStyleSheet("QPushButton { background-color: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #1976D2; }")
+    add_button.setStyleSheet(get_button_style('primary'))
     add_button.clicked.connect(lambda: add_to_table(line_edit, table, dialog))
     add_input_layout.addWidget(line_edit)
     add_input_layout.addWidget(add_button)
     add_layout.addLayout(add_input_layout)
 
-    disclaimer = QLabel("⚠️ Adding a subscription may take time to download. Anki might seem unresponsive during this process.")
+    disclaimer = QLabel("Note: Adding a subscription may take a moment. Anki might freeze briefly during the initial download.")
     disclaimer.setWordWrap(True)
-    disclaimer.setStyleSheet("color: #ff9800; font-style: italic; margin: 5px 0;")
+    disclaimer.setStyleSheet(f"color: {colors['text_secondary']}; font-style: italic; margin: 5px 0;")
     add_layout.addWidget(disclaimer)
     
     layout.addWidget(add_section)
@@ -288,20 +308,20 @@ def on_edit_list():
     # Bottom buttons
     button_layout = QHBoxLayout()
     
-    delete_button = QPushButton('🗑️ Delete Selected')
-    delete_button.setStyleSheet("QPushButton { background-color: #f44336; color: white; border: none; padding: 8px 16px; border-radius: 4px; } QPushButton:hover { background-color: #d32f2f; }")
+    delete_button = QPushButton('Delete Selected')
+    delete_button.setStyleSheet(get_button_style('danger'))
     delete_button.clicked.connect(lambda: delete_selected_rows(table, dialog))
     button_layout.addWidget(delete_button)
     
-    settings_button = QPushButton('🛠️ Global Settings')
-    settings_button.setStyleSheet("QPushButton { background-color: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; } QPushButton:hover { background-color: #1976D2; }")
+    settings_button = QPushButton('Global Settings')
+    settings_button.setStyleSheet(get_button_style('neutral'))
     settings_button.clicked.connect(lambda: show_global_settings_dialog(dialog))
     button_layout.addWidget(settings_button)
     
     button_layout.addStretch()
     
     close_button = QPushButton('Close')
-    close_button.setStyleSheet("QPushButton { background-color: #607D8B; color: white; border: none; padding: 8px 16px; border-radius: 4px; } QPushButton:hover { background-color: #455A64; }")
+    close_button.setStyleSheet(get_button_style('neutral'))
     close_button.clicked.connect(dialog.accept)
     button_layout.addWidget(close_button)
 
@@ -312,6 +332,8 @@ def on_edit_list():
 
 def edit_subscription_details(deck_hash, parent_dialog):
     """Edit detailed settings for a specific subscription"""
+    colors = get_colors()
+    
     strings_data = mw.addonManager.getConfig(__name__)
     if not strings_data or deck_hash not in strings_data:
         showInfo("Subscription not found!")
@@ -320,8 +342,10 @@ def edit_subscription_details(deck_hash, parent_dialog):
     details = strings_data[deck_hash]
     
     dialog = QDialog(parent_dialog)
-    dialog.setWindowTitle(f'Edit Subscription Settings')
-    dialog.setMinimumSize(500, 400)
+    dialog.setWindowTitle('Subscription Settings')
+    dialog.setMinimumWidth(400)
+    dialog.setStyleSheet(get_dialog_style())
+    
     layout = QVBoxLayout()
     dialog.setLayout(layout)
 
@@ -332,16 +356,35 @@ def edit_subscription_details(deck_hash, parent_dialog):
         return
 
     # Header
-    header_label = QLabel(f"Subscription Settings")
-    header_label.setStyleSheet("font-size: 14px; font-weight: bold; margin: 10px 0; color: #2196F3;")
+    header_label = QLabel("Subscription Settings")
+    header_label.setStyleSheet(f"font-size: 14px; font-weight: 500; margin: 10px 0; color: {colors['text_primary']};")
     header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(header_label)
 
-    # Hash info
-    hash_info = QLabel(f"Subscription Key: {deck_hash}")
-    hash_info.setStyleSheet("font-size: 10px; color: #666; margin-bottom: 15px;")
-    hash_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    layout.addWidget(hash_info)
+    # Subscription Key - larger, monospace, and selectable/copyable
+    key_label = QLabel("Subscription Key")
+    key_label.setStyleSheet(f"font-size: 11px; color: {colors['text_secondary']}; margin-top: 5px;")
+    layout.addWidget(key_label)
+    
+    key_field = QLineEdit(deck_hash)
+    key_field.setReadOnly(True)
+    key_field.setStyleSheet(f"""
+        QLineEdit {{
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 13px;
+            padding: 8px;
+            background-color: {colors['surface']};
+            color: {colors['text_primary']};
+            border: 1px solid {colors['border']};
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }}
+        QLineEdit:focus {{
+            border-color: {colors['border_focus']};
+        }}
+    """)
+    key_field.setToolTip("Click to select, Ctrl+C to copy")
+    layout.addWidget(key_field)
 
     # Local Deck Selection
     local_deck_group = QGroupBox("Local Deck (for existing notes)")
@@ -408,12 +451,15 @@ def edit_subscription_details(deck_hash, parent_dialog):
     new_notes_layout.addWidget(new_notes_combo)
     layout.addWidget(new_notes_group)
 
-    # Buttons
+    # Buttons - Cancel on left, Save on right
     button_layout = QHBoxLayout()
-    save_button = QPushButton('Save Changes')
-    save_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #45a049; }")
+    button_layout.addStretch()
+    
     cancel_button = QPushButton('Cancel')
-    cancel_button.setStyleSheet("QPushButton { background-color: #f44336; color: white; border: none; padding: 10px 20px; border-radius: 4px; } QPushButton:hover { background-color: #d32f2f; }")
+    cancel_button.setStyleSheet(get_button_style('neutral'))
+    
+    save_button = QPushButton('Save Changes')
+    save_button.setStyleSheet(get_button_style('success'))
     
     def save_changes():
         try:
@@ -461,8 +507,8 @@ def edit_subscription_details(deck_hash, parent_dialog):
     save_button.clicked.connect(save_changes)
     cancel_button.clicked.connect(dialog.reject)
     
-    button_layout.addWidget(save_button)
     button_layout.addWidget(cancel_button)
+    button_layout.addWidget(save_button)
     layout.addLayout(button_layout)
 
     dialog.exec()
@@ -513,73 +559,36 @@ def edit_local_deck(table, parent_dialog):
     dialog.exec()
 
 def on_push_deck_action():
+    colors = get_colors()
+    
     dialog = QDialog(mw)
-    dialog.setWindowTitle("📤 Publish Deck to AnkiCollab")
-    #dialog.setMinimumSize(520, 600)  # Allow expansion to prevent cropping
-    dialog.resize(520, 650)  # Set initial size but allow resizing
+    dialog.setWindowTitle("AnkiCollab - Publish Deck")
+    dialog.resize(560, 520)
+    dialog.setStyleSheet(get_dialog_style())
 
     # Check if collection is available
     if not mw.col:
         showInfo("Anki collection is not available. Please try again.")
         return
 
-    # Theme-aware colors
-    dark_mode = theme_manager.night_mode
-    
-    # Beautiful color scheme that adapts to theme
-    if dark_mode:
-        colors = {
-            'background': '#1e1e1e',
-            'surface': '#2d2d2d', 
-            'primary': '#64B5F6',  # Lighter blue for dark mode
-            'primary_dark': '#2196F3',
-            'primary_light': '#E3F2FD',
-            'secondary': '#FF9800',
-            'secondary_dark': '#F57C00', 
-            'accent': '#4CAF50',
-            'accent_dark': '#388E3C',
-            'text': '#ffffff',
-            'text_secondary': '#b0b0b0',
-            'border': '#404040',
-            'hover': '#3d3d3d',
-            'error': '#F44336'
-        }
-    else:
-        colors = {
-            'background': '#fafafa',
-            'surface': '#ffffff',
-            'primary': '#2196F3', 
-            'primary_dark': '#1976D2',
-            'primary_light': '#E3F2FD',
-            'secondary': '#FF9800',
-            'secondary_dark': '#F57C00',
-            'accent': '#4CAF50', 
-            'accent_dark': '#388E3C',
-            'text': '#212121',
-            'text_secondary': '#757575',
-            'border': '#e0e0e0',
-            'hover': '#f5f5f5',
-            'error': '#F44336'
-        }
-
     # Main layout with proper spacing
     main_layout = QVBoxLayout()
     dialog.setLayout(main_layout)
-    main_layout.setSpacing(12)  # Reduced spacing to fit better
-    main_layout.setContentsMargins(20, 20, 20, 20)  # Reduced margins
+    main_layout.setSpacing(12)
+    main_layout.setContentsMargins(20, 20, 20, 20)
 
-    # Header section with beautiful styling
+    # Header section
     header_widget = QWidget()
     header_layout = QVBoxLayout(header_widget)
     header_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
     header_layout.setContentsMargins(0, 0, 0, 10)
     
-    title_label = QLabel("📤 Share Your Knowledge with the World")
+    title_label = QLabel("Share Your Knowledge")
     title_label.setStyleSheet(f"""
         QLabel {{
             font-size: 18px;
-            font-weight: bold;
-            color: {colors['primary']};
+            font-weight: 500;
+            color: {colors['text_primary']};
             margin-bottom: 5px;
         }}
     """)
@@ -601,26 +610,8 @@ def on_push_deck_action():
     main_layout.addWidget(header_widget)
 
     # Deck selection section
-    deck_section = QGroupBox("📚 Select Deck to Publish")
-    deck_section.setStyleSheet(f"""
-        QGroupBox {{
-            font-weight: bold;
-            font-size: 14px;
-            color: {colors['text']};
-            border: 2px solid {colors['border']};
-            border-radius: 8px;
-            margin-top: 15px;
-            padding-top: 15px;
-            background-color: {colors['surface']};
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 15px;
-            padding: 5px 10px;
-            color: {colors['primary']};
-            background: {colors['surface']};
-        }}
-    """)
+    deck_section = QGroupBox("Select Deck to Publish")
+    deck_section.setStyleSheet(get_groupbox_style())
     deck_layout = QVBoxLayout(deck_section)
     deck_layout.setSpacing(8)
     
@@ -630,51 +621,10 @@ def on_push_deck_action():
     deck_layout.addWidget(deck_help_label)
     
     deck_combo_box = QComboBox()
-    deck_combo_box.setStyleSheet(f"""
-        QComboBox {{
-            padding: 10px 12px;
-            border: 2px solid {colors['border']};
-            border-radius: 6px;
-            font-size: 14px;
-            background-color: {colors['surface']};
-            color: {colors['text']};
-            min-height: 18px;
-        }}
-        QComboBox:focus {{
-            border-color: {colors['primary']};
-            outline: none;
-        }}
-        QComboBox:hover {{
-            background-color: {colors['hover']};
-        }}
-        QComboBox::drop-down {{
-            subcontrol-origin: padding;
-            subcontrol-position: top right;
-            width: 25px;
-            border-left: 1px solid {colors['border']};
-            border-top-right-radius: 6px;
-            border-bottom-right-radius: 6px;
-            background: {colors['hover']};
-        }}
-        QComboBox::down-arrow {{
-            width: 0;
-            height: 0;
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-top: 6px solid {colors['text']};
-            margin: 0px 6px;
-        }}
-        QComboBox QAbstractItemView {{
-            border: 1px solid {colors['border']};
-            border-radius: 4px;
-            background-color: {colors['surface']};
-            color: {colors['text']};
-            selection-background-color: {colors['primary']};
-        }}
-    """)
+    deck_combo_box.setStyleSheet(get_combobox_style())
     
     decks = mw.col.decks.all_names_and_ids(include_filtered=False)
-    deck_names = sorted([d.name for d in decks if "::" not in d.name and d.id != 1])
+    deck_names = sorted([d.name for d in decks if "::" not in d.name])
     if not deck_names:
         deck_combo_box.addItem("No suitable decks found")
         deck_combo_box.setEnabled(False)
@@ -684,89 +634,12 @@ def on_push_deck_action():
     deck_layout.addWidget(deck_combo_box)
     main_layout.addWidget(deck_section)
 
-    # Author information section
-    author_section = QGroupBox("👤 Author Information")
-    author_section.setStyleSheet(f"""
-        QGroupBox {{
-            font-weight: bold;
-            font-size: 14px;
-            color: {colors['text']};
-            border: 2px solid {colors['border']};
-            border-radius: 8px;
-            margin-top: 15px;
-            padding-top: 15px;
-            background-color: {colors['surface']};
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 15px;
-            padding: 5px 10px;
-            color: {colors['secondary']};
-            background: {colors['surface']};
-        }}
-    """)
-    author_layout = QVBoxLayout(author_section)
-    author_layout.setSpacing(8)
-    
-    username_help_label = QLabel("Your username will be the deck owner:")
-    username_help_label.setStyleSheet(f"color: {colors['text_secondary']}; font-size: 12px; margin-bottom: 8px;")
-    username_help_label.setWordWrap(True)
-    author_layout.addWidget(username_help_label)
-    
-    username_field = QLineEdit()
-    username_field.setPlaceholderText("Enter your AnkiCollab username...")
-    username_field.setStyleSheet(f"""
-        QLineEdit {{
-            padding: 10px 12px;
-            border: 2px solid {colors['border']};
-            border-radius: 6px;
-            font-size: 14px;
-            background-color: {colors['surface']};
-            color: {colors['text']};
-        }}
-        QLineEdit:focus {{
-            border-color: {colors['secondary']};
-            outline: none;
-        }}
-        QLineEdit:hover {{
-            background-color: {colors['hover']};
-        }}
-    """)
-    
-    if auth_manager.is_logged_in():
-        # TODO: Add username retrieval logic if available
-        # username = auth_manager.get_username()
-        # if username:
-        #    username_field.setText(username)
-        #    username_field.setReadOnly(True)
-        pass 
-    
-    author_layout.addWidget(username_field)
-    main_layout.addWidget(author_section)
-
     # Legal declarations section
-    legal_section = QGroupBox("⚖️ Legal Declarations")
-    legal_section.setStyleSheet(f"""
-        QGroupBox {{
-            font-weight: bold;
-            font-size: 14px;
-            color: {colors['text']};
-            border: 2px solid {colors['border']};
-            border-radius: 8px;
-            margin-top: 15px;
-            padding-top: 15px;
-            background-color: {colors['surface']};
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 15px;
-            padding: 5px 10px;
-            color: {colors['error']};
-            background: {colors['surface']};
-        }}
-    """)
+    legal_section = QGroupBox("Legal Declarations")
+    legal_section.setStyleSheet(get_groupbox_style())
     legal_layout = QVBoxLayout(legal_section)
-    legal_layout.setSpacing(15)  # Increased spacing between items
+    legal_layout.setSpacing(15)
+    legal_layout.setContentsMargins(12, 15, 15, 12)  # Extra right margin to prevent cutoff
 
     # Copyright disclaimer
     disclaimer_container = QWidget()
@@ -800,7 +673,7 @@ intellectual property holder(s) to share it on AnkiCollab.""")
     disclaimer_text.setWordWrap(True)
     disclaimer_text.setStyleSheet(f"""
         QLabel {{
-            color: {colors['text']};
+            color: {colors['text_primary']};
             font-size: 13px;
             line-height: 1.4;
         }}
@@ -843,7 +716,7 @@ intellectual property holder(s) to share it on AnkiCollab.""")
     terms_text_layout.setSpacing(5)
     
     terms_text = QLabel("I agree to the")
-    terms_text.setStyleSheet(f"color: {colors['text']}; font-size: 13px;")
+    terms_text.setStyleSheet(f"color: {colors['text_primary']}; font-size: 13px;")
     
     # Use theme-aware link colors
     link_color = colors['primary']
@@ -852,7 +725,7 @@ intellectual property holder(s) to share it on AnkiCollab.""")
     terms_link.setStyleSheet("font-size: 13px;")
     
     and_text = QLabel("and")
-    and_text.setStyleSheet(f"color: {colors['text']}; font-size: 13px;")
+    and_text.setStyleSheet(f"color: {colors['text_primary']}; font-size: 13px;")
     
     privacy_link = QLabel(f'<a href="https://ankicollab.com/privacy" style="color: {link_color}; text-decoration: none;">Privacy Policy</a>')
     privacy_link.setOpenExternalLinks(True)
@@ -874,93 +747,24 @@ intellectual property holder(s) to share it on AnkiCollab.""")
     button_section = QWidget()
     button_layout = QHBoxLayout(button_section)
     button_layout.setContentsMargins(0, 20, 0, 0)  # Top margin for spacing
+    button_layout.addStretch()
     
-    # Cancel button with theme-aware styling
+    # Cancel button
     cancel_button = QPushButton("Cancel")
-    cancel_button.setStyleSheet(f"""
-        QPushButton {{
-            background-color: {colors['text_secondary']};
-            color: {colors['surface']};
-            border: 2px solid {colors['text_secondary']};
-            padding: 12px 24px;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: bold;
-            min-width: 100px;
-        }}
-        QPushButton:hover {{
-            background-color: {colors['border']};
-            border-color: {colors['border']};
-        }}
-        QPushButton:pressed {{
-            background-color: {colors['text']};
-        }}
-    """)
+    cancel_button.setStyleSheet(get_button_style('neutral', 'large'))
     cancel_button.clicked.connect(dialog.reject)
     
-    # Publish button with beautiful gradient styling
+    # Publish button
     publish_button = QPushButton("Publish Deck")
-    if dark_mode:
-        publish_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors['accent']};
-                color: white;
-                border: 2px solid {colors['accent']};
-                padding: 12px 24px;
-                border-radius: 6px;
-                font-size: 14px;
-                font-weight: bold;
-                min-width: 140px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors['accent_dark']};
-                border-color: {colors['accent_dark']};
-            }}
-            QPushButton:pressed {{
-                background-color: #2E7D32;
-                border-color: #2E7D32;
-            }}
-            QPushButton:disabled {{
-                background-color: {colors['border']};
-                color: {colors['text_secondary']};
-                border-color: {colors['border']};
-            }}
-        """)
-    else:
-        publish_button.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                    stop: 0 {colors['accent']}, stop: 1 {colors['accent_dark']});
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                border-radius: 6px;
-                font-size: 14px;
-                font-weight: bold;
-                min-width: 140px;
-            }}
-            QPushButton:hover {{
-                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                    stop: 0 {colors['accent_dark']}, stop: 1 #2E7D32);
-            }}
-            QPushButton:pressed {{
-                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                    stop: 0 #2E7D32, stop: 1 #1B5E20);
-            }}
-            QPushButton:disabled {{
-                background: {colors['border']};
-                color: {colors['text_secondary']};
-            }}
-        """)
+    publish_button.setStyleSheet(get_button_style('success', 'large'))
 
     def validate_and_enable_publish():
         """Enable publish button only when all requirements are met"""
         deck_selected = bool(deck_combo_box.currentText() and deck_combo_box.currentText() != "No suitable decks found")
-        username_filled = bool(username_field.text().strip())
         disclaimer_checked = disclaimer_checkbox.isChecked()
         terms_checked = terms_checkbox.isChecked()
         
-        all_valid = deck_selected and username_filled and disclaimer_checked and terms_checked
+        all_valid = deck_selected and disclaimer_checked and terms_checked
         publish_button.setEnabled(all_valid)
         
         if all_valid:
@@ -968,14 +772,12 @@ intellectual property holder(s) to share it on AnkiCollab.""")
         else:
             missing = []
             if not deck_selected: missing.append("deck selection")
-            if not username_filled: missing.append("username")
             if not disclaimer_checked: missing.append("copyright declaration")
             if not terms_checked: missing.append("terms agreement")
             publish_button.setToolTip(f"Please complete: {', '.join(missing)}")
 
     # Connect validation to all inputs
     deck_combo_box.currentTextChanged.connect(validate_and_enable_publish)
-    username_field.textChanged.connect(validate_and_enable_publish)
     disclaimer_checkbox.toggled.connect(validate_and_enable_publish)
     terms_checkbox.toggled.connect(validate_and_enable_publish)
     
@@ -996,13 +798,9 @@ intellectual property holder(s) to share it on AnkiCollab.""")
             return
 
         selected_deck_name = deck_combo_box.currentText()
-        username = username_field.text().strip()
 
         if not selected_deck_name or selected_deck_name == "No suitable decks found":
             showInfo("Please select a valid deck.", parent=dialog)
-            return
-        if not username:
-            showInfo("Please enter your username.", parent=dialog)
             return
 
         deck_id = mw.col.decks.id(selected_deck_name)
@@ -1010,15 +808,23 @@ intellectual property holder(s) to share it on AnkiCollab.""")
             showInfo(f"Could not find deck ID for '{selected_deck_name}'.", parent=dialog)
             return
 
+        if not mw.col.decks.card_count(deck_id, include_subdecks=True):
+            showInfo(
+                "This deck contains no notes.\n\n"
+                "Please add at least one note before publishing.",
+                parent=dialog,
+                title="Empty Deck"
+            )
+            return
+
         try:
             # Show confirmation dialog
             if askUser(
                 f"Are you ready to publish '{selected_deck_name}' to AnkiCollab?\n\n"
-                f"Author: {username}\n"
                 f"This will make your deck available to the community.",
                 title="Confirm Publication"
             ):
-                handle_export(deck_id, username)            
+                handle_export(deck_id)            
                 dialog.accept()
                 
         except Exception as e:
@@ -1037,23 +843,27 @@ intellectual property holder(s) to share it on AnkiCollab.""")
     dialog.setStyleSheet(f"""
         QDialog {{
             background-color: {colors['background']};
-            color: {colors['text']};
+            color: {colors['text_primary']};
         }}
     """)
 
     dialog.exec()
 
 def show_global_settings_dialog(parent_dialog):
-    """Show global settings dialog (formerly deck structure settings)"""
+    """Show settings dialog (formerly deck structure settings)"""
+    colors = get_colors()
+    
     dialog = QDialog(parent_dialog)
     dialog.setWindowTitle('Global Settings')
     dialog.setMinimumSize(420, 420)
+    dialog.setStyleSheet(get_dialog_style())
+    
     layout = QVBoxLayout()
     dialog.setLayout(layout)
 
     # Header
-    header_label = QLabel("\ud83d\udcdd Global Settings")
-    header_label.setStyleSheet("font-size: 16px; font-weight: bold; margin: 10px 0; color: #2196F3;")
+    header_label = QLabel("Manage Your Global Settings")
+    header_label.setStyleSheet(f"font-size: 16px; font-weight: 500; margin: 10px 0; color: {colors['text_primary']};")
     header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(header_label)
 
@@ -1070,27 +880,42 @@ def show_global_settings_dialog(parent_dialog):
         settings["preserve_deck_structure"] = True
         mw.addonManager.writeConfig(__name__, strings_data)
 
-    # Global config checkboxes
-    global_group = QGroupBox("General Settings")
+    # Subscription setting checkboxes
+    global_group = QGroupBox("Subscription Settings")
+    global_group.setStyleSheet(get_groupbox_style())
     global_layout = QVBoxLayout(global_group)
+    
+    checkbox_style = f"color: {colors['text_primary']};"
+    
     pull_on_startup_cb = QCheckBox("Update Decks on startup")
+    pull_on_startup_cb.setStyleSheet(checkbox_style)
     pull_on_startup_cb.setChecked(bool(settings.get("pull_on_startup", False)))
-    pull_on_startup_cb.setToolTip("Automatically check for updates from AnkiCollab when Anki starts.")
+    pull_on_startup_cb.setToolTip("Automatically fetch updates when Anki opens (may slow startup)")
+    
     suspend_new_cards_cb = QCheckBox("Automatically suspend new Cards")
+    suspend_new_cards_cb.setStyleSheet(checkbox_style)
     suspend_new_cards_cb.setChecked(bool(settings.get("suspend_new_cards", False)))
-    suspend_new_cards_cb.setToolTip("Automatically suspend new cards imported from subscriptions so they won't enter your review queue until you enable them.")
+    suspend_new_cards_cb.setToolTip("New cards from updates start suspended - unsuspend them when ready to study")
+    
     move_cards_cb = QCheckBox("Do not move Cards automatically")
+    move_cards_cb.setStyleSheet(checkbox_style)
     move_cards_cb.setChecked(bool(settings.get("auto_move_cards", False)))
-    move_cards_cb.setToolTip("Prevent the add-on from automatically moving cards between decks or positions when syncing cloud changes.")
+    move_cards_cb.setToolTip("Keep cards in their current deck even if the maintainer reorganizes them")
+    
     keep_empty_subdecks_cb = QCheckBox("Keep empty subdecks")
+    keep_empty_subdecks_cb.setStyleSheet(checkbox_style)
     keep_empty_subdecks_cb.setChecked(bool(settings.get("keep_empty_subdecks", False)))
-    keep_empty_subdecks_cb.setToolTip("Skip cleanup of empty subdecks after imports. Enable if you rely on placeholder decks.")
+    keep_empty_subdecks_cb.setToolTip("Don't delete empty subdecks after sync - useful for custom organization")
+    
     auto_approve_cb = QCheckBox("Auto-approve changes (maintainer only)")
+    auto_approve_cb.setStyleSheet(checkbox_style)
     auto_approve_cb.setChecked(bool(auth_manager.get_auto_approve()))
     auto_approve_cb.setToolTip("Automatically approve outgoing changes for your decks. Only works if you are a maintainer.")
+    
     error_reporting_cb = QCheckBox("Send anonymous error reports (recommended)")
+    error_reporting_cb.setStyleSheet(checkbox_style)
     error_reporting_cb.setChecked(bool(settings.get("error_reporting_enabled", False)))
-    error_reporting_cb.setToolTip("Send anonymized crash and error reports to help improve the add-on.")
+    error_reporting_cb.setToolTip("Help us fix bugs faster - no personal data is collected")
 
     remember_suggest_state_cb = QCheckBox("Remember 'Suggest on AnkiCollab' state between sessions")
     remember_suggest_state_cb.setChecked(bool(settings.get("remember_suggest_state_between_sessions", False)))
@@ -1109,18 +934,75 @@ def show_global_settings_dialog(parent_dialog):
     global_layout.addWidget(error_reporting_cb)
     layout.addWidget(global_group)
 
-    # Info section
-    info_label = QLabel("\u2139\ufe0f These settings apply globally to all your subscriptions. Changes take effect on the next import.")
-    info_label.setWordWrap(True)
-    info_label.setStyleSheet("background-color: #E3F2FD; border: 1px solid #BBDEFB; border-radius: 4px; padding: 10px; margin: 10px 0; color: #1976D2;")
-    layout.addWidget(info_label)
+    # Subscription Info section 
+    setting_info_label = QLabel("These settings apply globally to all your subscriptions. Changes take effect on the next import.")
+    setting_info_label.setWordWrap(True)
+    setting_info_label.setStyleSheet(get_info_box_style())
+    layout.addWidget(setting_info_label)
+
+    # Media and Statistics container
+    media_stats_container = QWidget()
+    media_stats_layout = QHBoxLayout(media_stats_container)
+    media_stats_layout.setContentsMargins(0, 0, 0, 0)
+    media_stats_layout.setSpacing(6)
+
+    # Media groupbox
+    media_group = QGroupBox("Media Settings")
+    media_group.setStyleSheet(get_groupbox_style())
+    media_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    media_layout = QVBoxLayout(media_group)
+    media_layout.setContentsMargins(6, 6, 6, 6)
+    media_layout.setSpacing(6)
+
+    media_import_button = QPushButton("Import Media from Folder")
+    media_import_button.setStyleSheet(get_button_style('neutral', 'small'))
+    media_import_button.setMaximumWidth(180)
+    media_import_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+    media_import_button.clicked.connect(on_media_btn)
+    media_layout.addWidget(media_import_button)
+
+    media_info_label = QLabel("Import media files from a folder into your Anki collection.")
+    media_info_label.setWordWrap(True)
+    media_info_label.setStyleSheet(f"color: {colors['text_secondary']}; font-size: 12px;")
+    media_info_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    media_layout.addWidget(media_info_label)
+
+    # Statistics groupbox
+    stats_group = QGroupBox("Statistics")
+    stats_group.setStyleSheet(get_groupbox_style())
+    stats_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    stats_layout = QVBoxLayout(stats_group)
+    stats_layout.setContentsMargins(6, 6, 6, 6)
+    stats_layout.setSpacing(5)
+
+    stats_push_button = QPushButton("Share Review History")
+    stats_push_button.setStyleSheet(get_button_style('neutral', 'small'))
+    stats_push_button.setMaximumWidth(180)
+    stats_push_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+    stats_push_button.clicked.connect(on_push_all_stats_action)
+    stats_layout.addWidget(stats_push_button)
+
+    stats_info_label = QLabel("Share your review history to help the maintainers improve the deck.")
+    stats_info_label.setWordWrap(True)
+    stats_info_label.setStyleSheet(f"color: {colors['text_secondary']}; font-size: 12px;")
+    stats_info_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    stats_layout.addWidget(stats_info_label)
+
+    media_stats_layout.addWidget(media_group, 1)
+    media_stats_layout.addWidget(stats_group, 1)
+    layout.addWidget(media_stats_container)
 
     # Buttons
     button_layout = QHBoxLayout()
-    save_button = QPushButton('Save Settings')
-    save_button.setStyleSheet("QPushButton { background-color: #2196F3; color: white; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #1976D2; }")
+    button_layout.setContentsMargins(0, 0, 0, 0)
+    button_layout.setSpacing(8)
+    
     cancel_button = QPushButton('Cancel')
-    cancel_button.setStyleSheet("QPushButton { background-color: #607D8B; color: white; border: none; padding: 10px 20px; border-radius: 4px; } QPushButton:hover { background-color: #455A64; }")
+    cancel_button.setStyleSheet(get_button_style('neutral'))
+    cancel_button.clicked.connect(dialog.reject)
+    
+    save_button = QPushButton('Save Settings')
+    save_button.setStyleSheet(get_button_style('success'))
 
     def save_global_settings():
         settings["preserve_deck_structure"] = True
@@ -1137,21 +1019,29 @@ def show_global_settings_dialog(parent_dialog):
             init_sentry()
         except Exception:
             pass
-        showInfo("Global settings saved!")
+        showInfo("Settings saved! Changes will apply on the next sync.")
         dialog.accept()
 
     save_button.clicked.connect(save_global_settings)
-    cancel_button.clicked.connect(dialog.reject)
 
-    button_layout.addWidget(save_button)
     button_layout.addWidget(cancel_button)
+    button_layout.addWidget(save_button)
     layout.addLayout(button_layout)
 
     dialog.exec()
     
 def on_push_all_stats_action():
+    token = auth_manager.get_token()
+    if not token:
+        return
+    from .api_client import api_client
+    check = api_client.post_empty("/CheckUserToken")
+    if check.status_code != 200 or check.text != "true":
+        if check.status_code != 401:
+            auth_manager.handle_auth_failure()
+            return
+    
     decks = DeckManager()
-
     for deck_hash, details in decks:
         if details.get("stats_enabled", False):
             # Only upload stats if the user wants to share them
@@ -1164,7 +1054,7 @@ def on_push_all_stats_action():
                     success=on_stats_upload_done
                 )
                 op.with_progress(
-                    "Uploading Review History..."
+                    "X Review History..."
                 ).run_in_background()
                 update_stats_timestamp(deck_hash)
   
@@ -1172,7 +1062,6 @@ def open_community_site():
     webbrowser.open('https://discord.gg/9x4DRxzqwM')
 
 def open_support_site():
-    #webbrowser.open('https://www.ankicollab.com/leavereview')
     rated_dialog = RateAddonDialog(mw)
     result = rated_dialog.exec()
 
@@ -1182,13 +1071,13 @@ def open_website():
 def on_login_manager_btn():
     if auth_manager.is_logged_in():
         force_logout(False)
-        showInfo("You have been logged out.")
+        showInfo("You've been logged out successfully.\n\nYour subscriptions are still saved locally.")
     else:
         # Show Login Dialog
         dialog = LoginDialog(mw)
         result = dialog.exec()
         if auth_manager.is_logged_in(): # Verify login status *after* dialog closes
-            showInfo("Login successful!")
+            showInfo("Welcome back! You're now logged in.")
             update_ui_for_login_state() # Update UI after successful login
 
 
@@ -1206,7 +1095,7 @@ def store_default_config():
         "pull_on_startup": False,
         "suspend_new_cards": False,
         "auto_move_cards": False, # Note: Action text is "Do not move", so False means "Do move"
-    "keep_empty_subdecks": False,
+        "keep_empty_subdecks": False,
         "rated_addon": False,
         "last_ratepls": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         "pull_counter": 0,
@@ -1237,8 +1126,8 @@ def update_ui_for_login_state():
     edit_list_action.setVisible(logged_in)
     push_deck_action.setVisible(logged_in)
     pull_changes_action.setVisible(logged_in)
-    push_all_stats_action.setVisible(logged_in)    
-    media_import_action.setVisible(logged_in)
+    general_settings_action.setVisible(logged_in)
+    set_notification_visibility(logged_in)
 
     login_manager_action.setText("Logout" if logged_in else "Login")
 
@@ -1249,6 +1138,9 @@ def update_ui_for_login_state():
     # This might not be strictly necessary if only visibility changes, but can help
     mw.form.menubar.repaint()
 
+    if logged_in:
+        refresh_notifications()
+
 def menu_init():
     store_default_config()
 
@@ -1258,22 +1150,21 @@ def menu_init():
     collab_menu.addSeparator()
     collab_menu.addAction(edit_list_action)
     collab_menu.addAction(push_deck_action)
-    collab_menu.addAction(push_all_stats_action)
-    collab_menu.addAction(media_import_action)
     collab_menu.addSeparator()
+    init_notification_center(collab_menu)
+    collab_menu.addAction(general_settings_action)
+    collab_menu.addAction(login_manager_action)
     collab_menu.addMenu(links_menu)
     collab_menu.addSeparator()
-    collab_menu.addAction(login_manager_action)
 
     links_menu.addAction(community_action)
     links_menu.addAction(website_action)
     links_menu.addAction(donation_action) # Review link
 
     edit_list_action.triggered.connect(on_edit_list)
+    general_settings_action.triggered.connect(lambda: show_global_settings_dialog(parent_dialog=mw))
     push_deck_action.triggered.connect(on_push_deck_action)
-    push_all_stats_action.triggered.connect(on_push_all_stats_action)
     pull_changes_action.triggered.connect(async_update)
-    media_import_action.triggered.connect(on_media_btn)
     website_action.triggered.connect(open_website)
     donation_action.triggered.connect(open_support_site)
     community_action.triggered.connect(open_community_site)

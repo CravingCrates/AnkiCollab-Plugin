@@ -48,6 +48,10 @@ SENSITIVE_KEYS = {
     "apikey",
     "key",
     "session",
+    "remote_addr",
+    "ip",
+    "ip_address",
+    "client_ip",
 }
 
 
@@ -230,6 +234,12 @@ def _before_send_factory(addon_root: str):
                     for key in ("device", "runtime", "gpu", "user"):
                         ctx.pop(key, None)
                     event["contexts"] = ctx
+                # Remove any env context with REMOTE_ADDR
+                for ctx_key in list(ctx.keys()):
+                    ctx_val = ctx.get(ctx_key)
+                    if isinstance(ctx_val, dict):
+                        for ip_key in ("REMOTE_ADDR", "remote_addr", "remote_ip", "client_ip", "ip", "ip_address"):
+                            ctx_val.pop(ip_key, None)
             except Exception:
                 pass
             return _scrub(event)
