@@ -507,7 +507,7 @@ def init_add_card(addCardsDialog):
     if remember_between_sessions:
         checkbox.setChecked(bool(settings.get("suggest_on_ankicollab_last_state", True)))
     else:
-        checkbox.setChecked(True)
+        checkbox.setChecked(False)
 
     def _persist_suggest_checkbox_state(checked: bool) -> None:
         # Keep the config read/write localized to this opt-in setting.
