@@ -548,13 +548,15 @@ class Note(JsonSerializableAnkiObject):
             return
             
         for personal_tag in tags:
-            # Remove exact matches
-            if personal_tag in self.anki_object.tags:
-                self.anki_object.tags.remove(personal_tag)
-            # Remove tags that start with the personal_tag prefix (hierarchical tags)
+            # Remove exact matches (case-insensitive)
             self.anki_object.tags = [
                 tag for tag in self.anki_object.tags
-                if not tag.startswith(f"{personal_tag}::")
+                if tag.lower() != personal_tag.lower()
+            ]
+            # Remove tags that start with the personal_tag prefix (case-insensitive)
+            self.anki_object.tags = [
+                tag for tag in self.anki_object.tags
+                if not tag.lower().startswith(f"{personal_tag.lower()}::")
             ]
 
         # Remove any tags that are just whitespace
