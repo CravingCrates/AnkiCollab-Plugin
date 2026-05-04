@@ -35,7 +35,7 @@ from .utils import get_local_deck_from_hash, DeckManager
 from .import_manager import *
 from .export_manager import handle_export
 from .media_import import on_media_btn
-from .hooks import async_update, update_hooks_for_login_state
+from .hooks import async_update, update_hooks_for_login_state, protect_all_learned
 from .dialogs import LoginDialog
 from .auth_manager import auth_manager
 from .notifications_center import (
@@ -916,7 +916,36 @@ def show_global_settings_dialog(parent_dialog):
     error_reporting_cb.setStyleSheet(checkbox_style)
     error_reporting_cb.setChecked(bool(settings.get("error_reporting_enabled", False)))
     error_reporting_cb.setToolTip("Help us fix bugs faster - no personal data is collected")
-    
+
+    auto_protect_separator = QLabel("─" * 30)
+    auto_protect_separator.setStyleSheet(f"color: {colors['border']};")
+    global_layout.addWidget(auto_protect_separator)
+
+    auto_protect_review_cb = QCheckBox("Protects new card from change automatically")
+    auto_protect_review_cb.setStyleSheet(checkbox_style)
+    auto_protect_review_cb.setChecked(bool(settings.get("auto_protect_on_review", False)))
+    auto_protect_review_cb.setToolTip(
+        "Add Protect All Fields tag to your card immediately after you reviewed it "
+        "so the note won't be erased on updates"
+    )
+    global_layout.addWidget(auto_protect_review_cb)
+
+    auto_protect_learned_cb = QCheckBox("Protect all Learned cards from change")
+    auto_protect_learned_cb.setStyleSheet(checkbox_style)
+    auto_protect_learned_cb.setChecked(bool(settings.get("auto_protect_learned", False)))
+    auto_protect_learned_cb.setToolTip(
+        "Add a button to protect all reviewed cards"
+    )
+    global_layout.addWidget(auto_protect_learned_cb)
+
+    protect_now_btn = QPushButton("Protect now all learned cards")
+    protect_now_btn.setStyleSheet(get_button_style('neutral', 'small'))
+    protect_now_btn.setToolTip("Launch the protection tag on all learned cards")
+    protect_now_btn.setEnabled(bool(settings.get("auto_protect_learned", False)))
+    auto_protect_learned_cb.toggled.connect(protect_now_btn.setEnabled)
+    protect_now_btn.clicked.connect(protect_all_learned)
+    global_layout.addWidget(protect_now_btn)
+        
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
     global_layout.addWidget(move_cards_cb)
@@ -1002,6 +1031,8 @@ def show_global_settings_dialog(parent_dialog):
         settings["auto_move_cards"] = move_cards_cb.isChecked()
         settings["keep_empty_subdecks"] = keep_empty_subdecks_cb.isChecked()
         settings["error_reporting_enabled"] = error_reporting_cb.isChecked()
+        settings["auto_protect_on_review"] = auto_protect_review_cb.isChecked()
+        settings["auto_protect_learned"] = auto_protect_learned_cb.isChecked()
         mw.addonManager.writeConfig(__name__, strings_data)
         auth_manager.set_auto_approve(auto_approve_cb.isChecked())
         # Apply telemetry setting immediately
