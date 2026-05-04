@@ -47,7 +47,7 @@ def on_card_reviewed(reviewer, card: Card, ease: Literal[1, 2, 3, 4]) -> None:
 
 def protect_all_learned() -> None:
     if not mw.col:
-        aqt.utils.showInfo("Collection non disponible.")
+        aqt.utils.showInfo("Collection not available.")
         return
 
     def _task():
@@ -75,15 +75,15 @@ def protect_all_learned() -> None:
         try:
             count = future.result()
             aqt.utils.showInfo(
-                f"{count} note(s) protégée(s) avec {AUTO_PROTECT_TAG}.\n"
-                f"Ces notes ne seront plus écrasées lors des mises à jour AnkiCollab."
+                f"{count} notes protected with {AUTO_PROTECT_TAG}.\n"
+                f"the notes won't be erased with new card update."
             )
         except Exception as e:
-            aqt.utils.showInfo(f"Erreur : {e}")
+            aqt.utils.showInfo(f"Error : {e}")
             logger.exception("Error in protect_all_learned")
 
     mw.taskman.with_progress(
         task=_task,
         on_done=_on_done,
-        label="Protection des cartes learned...",
+        label="Protecting learned card",
     )
