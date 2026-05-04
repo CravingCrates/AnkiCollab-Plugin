@@ -426,9 +426,8 @@ class Note(JsonSerializableAnkiObject):
         if self.anki_object and hasattr(self.anki_object, 'tags'):
             protected_tags = [
                 tag for tag in self.anki_object.tags 
-                if tag.startswith(PREFIX_PROTECTED_FIELDS)
+                if tag.lower().startswith(PREFIX_PROTECTED_FIELDS.lower())
             ]
-        
         # Preserve DEFAULT_PROTECTED_TAGS (leech, marked, missing-media) from local note
         # These tags are stripped during export but should be kept during import updates
         preserved_default_tags = []
