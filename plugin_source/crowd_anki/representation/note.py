@@ -361,6 +361,19 @@ class Note(JsonSerializableAnkiObject):
             for idx, field in enumerate(note_model.anki_dict['flds'])
         }
         
+        has_explicit_mapping = field_mapping is not None
+        
+        old_field_name_to_index = {}
+        if self.anki_object:
+            try:
+                old_model = self.anki_object.note_type() if hasattr(self.anki_object, 'note_type') else self.anki_object.model()
+                if old_model and 'flds' in old_model:
+                    old_field_name_to_index = {
+                        f['name']: idx for idx, f in enumerate(old_model['flds'])
+                    }
+            except Exception as e:
+                logger.warning(f"Could not get old model fields: {e}")
+        
         # Get protected fields set by maintainer (indices in NEW structure)
         max_fields = min(len(self.anki_object_dict["fields"]), len(note_model.anki_dict['flds']))
         
@@ -374,17 +387,20 @@ class Note(JsonSerializableAnkiObject):
         
         logger.debug("Handling import config changes for note")
         # Add local-only fields to anki_object_dict (user's custom fields at the bottom)
-        if (field_mapping and self.anki_object and hasattr(self.anki_object, 'fields') and 
+        if (self.anki_object and hasattr(self.anki_object, 'fields') and 
             len(self.anki_object.fields) > len(self.anki_object_dict["fields"])):
             start_index = len(self.anki_object_dict["fields"])
             # Only add the additional local fields that aren't in the remote data
             for new_field_idx in range(start_index, len(self.anki_object.fields)):
-                if (new_field_idx < len(field_mapping) and 
-                        field_mapping[new_field_idx] is not None and 
-                        field_mapping[new_field_idx] < len(self.anki_object.fields)):
-                        old_field_idx = field_mapping[new_field_idx]
-                        # Keep the old content for this protected field
-                        self.anki_object_dict["fields"].append(self.anki_object.fields[old_field_idx])
+                if has_explicit_mapping:
+                    if (new_field_idx < len(field_mapping) and 
+                            field_mapping[new_field_idx] is not None and 
+                            field_mapping[new_field_idx] < len(self.anki_object.fields)):
+                            old_field_idx = field_mapping[new_field_idx]
+                            # Keep the old content for this protected field
+                            self.anki_object_dict["fields"].append(self.anki_object.fields[old_field_idx])
+                else:
+                    self.anki_object_dict["fields"].append(self.anki_object.fields[new_field_idx])
         
         # CRITICAL: Ensure field count matches notetype definition exactly
         # Anki's update_notes requires this strict matching
@@ -404,18 +420,28 @@ class Note(JsonSerializableAnkiObject):
         logger.debug(f"Local fields processed - final count: {len(self.anki_object_dict['fields'])}")
         # Override protected fields with OLD content (maintainer wants to preserve old values)
         # This overrides the NEW remote content for specific fields the maintainer marked as protected
-        if field_mapping and protected_fields and self.anki_object and hasattr(self.anki_object, 'fields'):
+        if protected_fields and self.anki_object and hasattr(self.anki_object, 'fields'):
             for new_field_idx in protected_fields:
                 try:
-                    # For protected fields, we want to keep the OLD value, not the new remote value
-                    if (new_field_idx < len(field_mapping) and 
-                        field_mapping[new_field_idx] is not None and 
-                        field_mapping[new_field_idx] < len(self.anki_object.fields)):
-                        old_field_idx = field_mapping[new_field_idx]
-                        # Keep the old content for this protected field
-                        self.anki_object_dict["fields"][new_field_idx] = self.anki_object.fields[old_field_idx]
+                    if has_explicit_mapping:
+                        # For protected fields, we want to keep the OLD value, not the new remote value
+                        if (new_field_idx < len(field_mapping) and 
+                            field_mapping[new_field_idx] is not None and 
+                            field_mapping[new_field_idx] < len(self.anki_object.fields)):
+                            old_field_idx = field_mapping[new_field_idx]
+                            # Keep the old content for this protected field
+                            self.anki_object_dict["fields"][new_field_idx] = self.anki_object.fields[old_field_idx]
+                            logger.debug(f"Maintainer protected field index {new_field_idx} (old_idx={old_field_idx}): preserved content")
+                        else:
+                            logger.warning(f"Invalid field mapping for protected field {new_field_idx}: mapping={field_mapping}")
                     else:
-                        logger.warning(f"Invalid field mapping for protected field {new_field_idx}: mapping={field_mapping}")
+                        # Strategy 2: name-based lookup
+                        field_name = note_model.anki_dict['flds'][new_field_idx]['name']
+                        if field_name in old_field_name_to_index:
+                            old_field_idx = old_field_name_to_index[field_name]
+                            if old_field_idx < len(self.anki_object.fields):
+                                self.anki_object_dict["fields"][new_field_idx] = self.anki_object.fields[old_field_idx]
+                                logger.debug(f"Maintainer protected field '{field_name}' (new_idx={new_field_idx}, old_name_idx={old_field_idx}): preserved content via name match")
                 except (IndexError, TypeError) as e:
                     logger.warning(f"Error accessing field mapping for protected field {new_field_idx}: {e}")
                     continue
@@ -454,7 +480,7 @@ class Note(JsonSerializableAnkiObject):
             if protected_field == "All":
                 # If "All" is protected, copy all fields AND tags from anki_object to anki_object_dict
                 if self.anki_object and hasattr(self.anki_object, 'fields'):
-                    if field_mapping:
+                    if has_explicit_mapping:
                         # Use field mapping when available
                         for new_idx, old_idx in enumerate(field_mapping):
                             if (old_idx is not None and 
@@ -462,9 +488,15 @@ class Note(JsonSerializableAnkiObject):
                                 old_idx < len(self.anki_object.fields)):
                                 self.anki_object_dict["fields"][new_idx] = self.anki_object.fields[old_idx]
                     else:
-                        # Fallback: no field mapping, copy fields by position (same structure)
-                        for idx in range(min(len(self.anki_object_dict["fields"]), len(self.anki_object.fields))):
-                            self.anki_object_dict["fields"][idx] = self.anki_object.fields[idx]
+                        # Strategy 2: name-based mapping for All
+                        for new_idx, field in enumerate(note_model.anki_dict['flds']):
+                            if new_idx >= len(self.anki_object_dict["fields"]):
+                                break
+                            field_name = field['name']
+                            if field_name in old_field_name_to_index:
+                                old_field_idx = old_field_name_to_index[field_name]
+                                if old_field_idx < len(self.anki_object.fields):
+                                    self.anki_object_dict["fields"][new_idx] = self.anki_object.fields[old_field_idx]
                 break
                 
             # Handle individual field protection using field mapping
@@ -474,25 +506,27 @@ class Note(JsonSerializableAnkiObject):
                 hasattr(self.anki_object, 'fields')):
                 
                 # For user-protected fields, use the same field mapping logic as maintainer-protected fields
-                if field_mapping and field_idx < len(field_mapping):
-                    old_field_idx = field_mapping[field_idx]
-                    if (old_field_idx is not None and 
-                        old_field_idx < len(self.anki_object.fields) and
-                        field_idx < len(self.anki_object_dict['fields'])):
-                        # Preserve the old content for this protected field
-                        old_content = self.anki_object.fields[old_field_idx]
-                        self.anki_object_dict["fields"][field_idx] = old_content
-                        logger.debug(f"User protected field '{protected_field}' (new_idx={field_idx}, old_idx={old_field_idx}): preserved content")
-                    else:
-                        logger.warning(f"Invalid field mapping for user protected field '{protected_field}': field_idx={field_idx}, old_field_idx={old_field_idx}")
+                if has_explicit_mapping:
+                    if field_idx < len(field_mapping):
+                        old_field_idx = field_mapping[field_idx]
+                        if (old_field_idx is not None and 
+                            old_field_idx < len(self.anki_object.fields) and
+                            field_idx < len(self.anki_object_dict['fields'])):
+                            # Preserve the old content for this protected field
+                            old_content = self.anki_object.fields[old_field_idx]
+                            self.anki_object_dict["fields"][field_idx] = old_content
+                            logger.debug(f"User protected field '{protected_field}' (new_idx={field_idx}, old_idx={old_field_idx}): preserved content")
+                        else:
+                            logger.warning(f"Invalid field mapping for user protected field '{protected_field}'")
                 else:
-                    # Fallback: no field mapping available, use same position
-                    if field_idx < len(self.anki_object.fields) and field_idx < len(self.anki_object_dict['fields']):
-                        old_content = self.anki_object.fields[field_idx]
-                        self.anki_object_dict["fields"][field_idx] = old_content
-                        logger.debug(f"User protected field '{protected_field}' (idx={field_idx}): preserved content using same position fallback")
-                    else:
-                        logger.warning(f"User protected field '{protected_field}' index {field_idx} is out of range")
+                    # Strategy 2: name-based lookup
+                    for p_field_name in (protected_field, protected_field.replace('_', ' ')):
+                        if p_field_name in old_field_name_to_index:
+                            old_field_idx = old_field_name_to_index[p_field_name]
+                            if old_field_idx < len(self.anki_object.fields) and field_idx < len(self.anki_object_dict['fields']):
+                                self.anki_object_dict["fields"][field_idx] = self.anki_object.fields[old_field_idx]
+                                logger.debug(f"User protected field '{protected_field}' (new_idx={field_idx}, old_name_idx={old_field_idx}): preserved content via name match")
+                                break
 
         logger.debug(f"Protected tags handled")
         
