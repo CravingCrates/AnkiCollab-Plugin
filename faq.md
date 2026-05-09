@@ -55,11 +55,11 @@ Yes, you can safeguard specific fields within individual cards to prevent them f
 <br><br>
   
 - Select any amount of notes of the same notetype in the browser
-- right click → choose `AnkiCollab: Protect fields of notes`
+- Right-click → choose `AnkiCollab: Protect fields of note(s)`
   
 ![Context Menu - Protect Fields](https://i.imgur.com/rZHm1XR.png)
 <br>
-- a dialog with a checkbox for every field of the notetype will open. you can choose every field you want to protect or select the top checkbox to protect every field.
+- A dialog with a checkbox for every field of the notetype will open. you can choose every field you want to protect or select the top checkbox to protect every field.
 
 ![Protect Fields Dialog with arrow to tag checkbox](https://i.imgur.com/SUYumAe.png)
 <br>
