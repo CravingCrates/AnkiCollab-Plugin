@@ -50,8 +50,8 @@ Yes!<br />
   Confirm by clicking OK, and you're done
 </details>
 <details close>
-<summary><b>Can I protect certain cards, fields or tags from being updated?</b></summary>
-Yes, you can safeguard specific fields within individual cards to prevent them from being updated. This is particularly useful if you want certain information to remain constant, despite updates. Safeguarding content is achieved through tags with a specific syntax.<br>AnkiCollab offers an option to manage those tags:
+<summary><b>Can I protect certain notes, fields or tags from being updated?</b></summary>
+Yes, you can safeguard specific fields within individual notes to prevent them from being updated. This is particularly useful if you want certain information to remain constant, despite updates. Safeguarding content is achieved through tags with a specific syntax.<br>AnkiCollab offers an option to manage those tags:
 <br><br>
   
 - Select any amount of notes of the same notetype in the browser
@@ -64,8 +64,8 @@ Yes, you can safeguard specific fields within individual cards to prevent them f
 ![Protect Fields Dialog with arrow to tag checkbox](https://i.imgur.com/SUYumAe.png)
 <br>
 - Pressing `Save` will add the needed tags and your content is going to be protected from AnkiCollab updates. Note that this only applies to the notes you selected.
-- To protect tags of the selected cards, choose the `Protect Tags` checkbox.
-- If you want to protect specific tags only, you need to add them to the AnkiCollab addon configuration (case sensitive). Tags that are routinely added to cards by Anki automatically (`marked`, `missing-media` and `leech`) are present there by default.
+- To protect all tags of the selected notes, choose the `Protect Tags` checkbox.
+- If you want to protect specific tags only, you need to add them to the AnkiCollab addon configuration (case sensitive). Tags that are routinely added to notes by Anki automatically (`marked`, `missing-media` and `leech`) are present there by default.
 
 Additionally, it's worth noting that certain fields may already be protected by the maintainers on the website. This is often the case for "personal" fields designed for individual customization. If you're unsure whether a field is protected, or if you're a maintainer looking to protect fields for all users, you can check and adjust these settings in the Deck Settings on the website.
 </details>
@@ -129,7 +129,7 @@ Keep in mind that when you change the deck name on AnkiCollab, you will also hav
 
 <details close>
 <summary><b>How can I use Optional Tags on AnkiCollab?</b></summary>
-Optional Tags are a cool way to make your Deck Tag Structure less crowded. Imagine your deck is used by 3 different schools and each school has the cards tagged according to their school curriculum. Not all subscribers want to have all these curriculums in their local collection because it makes it a lot less readable. 
+Optional Tags are a cool way to make your Deck Tag Structure less crowded. Imagine your deck is used by 3 different schools and each school has the notes tagged according to their school curriculum. Not all subscribers want to have all these curriculums in their local collection because it makes it a lot less readable. 
 To solve that issue, you can use Optional Tags! These tags are only synchronized to the users that subscribed to them.
 <br /><br />
 To create a new Optional Tag group, navigate to the AnkiCollab Website → Manage Decks → Select your Deck → Optional Tags: Show All.
@@ -153,13 +153,13 @@ Now you can go ahead and tag your notes to your liking and the subscribers will 
 <br />
 <img src="https://i.imgur.com/gC8hMWS.png" width="50%">
 
-and if they choose to subscribe to the NYU Tag, they will find all the tagged cards in their collection, but none of the tags they haven't subscribed to!
+and if they choose to subscribe to the NYU Tag, they will find all the tagged notes in their collection, but none of the tags they haven't subscribed to!
 <br />
 <img src="https://i.imgur.com/BWwwiUc.png" width="50%"> 
 
-Note that this only affects tags. Notes and Cards are unaffected by this. All subscribers will always get all cards no matter what tag they have.
+Note that this only affects tags. Notes and cards are unaffected by this. All subscribers will always get all cards no matter what tag they have.
 
-Update 08/2025: A new feature to enable decks being linked to other decks and therefore creating the possibility of "optional cards" is currently WIP.
+Update 05/20256 A new feature to enable decks being linked to other decks and therefore creating the possibility of "optional cards" has been developed, but remains untested up until now.
 Follow the [Discord](https://discord.com/invite/9x4DRxzqwM) for current information.
 </details>
 
