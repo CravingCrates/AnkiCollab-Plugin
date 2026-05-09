@@ -14,7 +14,7 @@ AnkiCollab does not currently respect separate Anki profiles. If you subscribe t
 
 <details close>
 <summary><b>Is AnkiCollab going to affect my card scheduling or review data?</b></summary>
-No. AnkiCollab does not handle or change scheduling data in any way, your reviewed cards are safe.
+No. AnkiCollab does not change card scheduling in any way. If you opt in, AnkiCollab will read your review data and provide the maintainers with statistics to help them improve the deck.
 </details>
 
 <details close>
