@@ -13,6 +13,12 @@ AnkiCollab does not currently respect separate Anki profiles. If you subscribe t
 </details>
 
 <details close>
+<summary><b>Is AnkiCollab going to affect my card scheduling or review data?</b></summary>
+No. AnkiCollab should not affect card scheduling. If you opt in, AnkiCollab will read your review data and provide the maintainers with statistics to help them improve the deck.
+  If you feel like AnkiCollab changed the review history, please revert to a backup and reach out for assistance.
+</details>
+
+<details close>
 <summary><b>Does media get stored on AnkiCollab? How do subscribers get deck media?</b></summary>
 AnkiCollab automatically up- and downloads media files that are attached to your cards.
 
@@ -45,16 +51,22 @@ Yes!<br />
   Confirm by clicking OK, and you're done
 </details>
 <details close>
-<summary><b>Can I protect certain cards or fields from being updated?</b></summary>
-Yes, you can safeguard specific fields within individual cards to prevent them from being updated. This is particularly useful if you want certain information to remain constant, despite updates. Here's how you can do it:
+<summary><b>Can I protect certain notes, fields or tags from being updated?</b></summary>
+Yes, you can safeguard specific fields within individual notes to prevent them from being updated. This is particularly useful if you want certain information to remain constant, despite updates. Safeguarding content is achieved through tags with a specific syntax.<br>AnkiCollab offers an option to manage those tags:
+<br><br>
+  
+- Select any amount of notes of the same notetype in the browser
+- Right-click → choose `AnkiCollab: Protect fields of note(s)`
+  
+![Context Menu - Protect Fields](https://i.imgur.com/rZHm1XR.png)
+<br>
+- A dialog with a checkbox for every field of the notetype will open. you can choose every field you want to protect or select the top checkbox to protect every field.
 
-- **To protect a specific field:** Use the `AnkiCollab_Protect::` command followed by the field name. For example, if you have a card with fields named `Front` and `Back`, and you wish to keep the `Back` field unchanged, add the following tag to your card: `AnkiCollab_Protect::Back`.
-
-- **Handling fields with spaces:** If the field name includes spaces (e.g., `Question Mask`), replace the spaces with underscores when adding the tag, as tags cannot contain spaces. For instance, use `AnkiCollab_Protect::Question_Mask`.
-
-  ![Example Image](https://i.imgur.com/Alpi0VJ.png)
-
-- **To protect all fields on a card:** If your goal is to protect the entire card, thereby preventing any updates to it, add the tag `AnkiCollab_Protect::All`.
+![Protect Fields Dialog with arrow to tag checkbox](https://i.imgur.com/SUYumAe.png)
+<br>
+- Pressing `Save` will add the needed tags and your content is going to be protected from AnkiCollab updates. Note that this only applies to the notes you selected.
+- To protect all tags of the selected notes, choose the `Protect Tags` checkbox.
+- If you want to protect specific tags only, you need to add them to the AnkiCollab addon configuration (case sensitive). Tags that are routinely added to notes by Anki automatically (`marked`, `missing-media` and `leech`) are present there by default.
 
 Additionally, it's worth noting that certain fields may already be protected by the maintainers on the website. This is often the case for "personal" fields designed for individual customization. If you're unsure whether a field is protected, or if you're a maintainer looking to protect fields for all users, you can check and adjust these settings in the Deck Settings on the website.
 </details>
@@ -118,37 +130,7 @@ Keep in mind that when you change the deck name on AnkiCollab, you will also hav
 
 <details close>
 <summary><b>How can I use Optional Tags on AnkiCollab?</b></summary>
-Optional Tags are a cool way to make your Deck Tag Structure less crowded. Imagine your deck is used by 3 different schools and each school has the cards tagged according to their school curriculum. Not all subscribers want to have all these curriculums in their local collection because it makes it a lot less readable. 
-To solve that issue, you can use Optional Tags! These tags are only synchronized to the users that subscribed to them.
-<br /><br />
-To create a new Optional Tag group, navigate to the AnkiCollab Website → Manage Decks → Select your Deck → Optional Tags: Show All.
-
-<br />
-This will bring you to a page like this:
-<br />
-<img src="https://i.imgur.com/HCIiDMR.png" width="100%">
-
-Here you can add the new Tag Groups you want to use (For example, one for each school).
-
-After you've added these, go ahead and open Anki!
-
-To classify a tag as an "optional tag" it needs the prefix <code>AnkiCollab_Optional::</code> followed by the tag group you just specified on the website.
-
-An example tag could look like this:
-<br />
-<img src="https://i.imgur.com/lsj1pg1.png" width="50%">
-
-Now you can go ahead and tag your notes to your liking and the subscribers will see a popup like this, when they subscribe to your deck:
-<br />
-<img src="https://i.imgur.com/gC8hMWS.png" width="50%">
-
-and if they choose to subscribe to the NYU Tag, they will find all the tagged cards in their collection, but none of the tags they haven't subscribed to!
-<br />
-<img src="https://i.imgur.com/BWwwiUc.png" width="50%"> 
-
-Note that this only affects tags. Notes and Cards are unaffected by this. All subscribers will always get all cards no matter what tag they have.
-
-Update 08/2025: A new feature to enable decks being linked to other decks and therefore creating the possibility of "optional cards" is currently WIP.
+These are Work in progress and currently not recommended.
 Follow the [Discord](https://discord.com/invite/9x4DRxzqwM) for current information.
 </details>
 
