@@ -14,7 +14,8 @@ AnkiCollab does not currently respect separate Anki profiles. If you subscribe t
 
 <details close>
 <summary><b>Is AnkiCollab going to affect my card scheduling or review data?</b></summary>
-No. AnkiCollab does not change card scheduling in any way. If you opt in, AnkiCollab will read your review data and provide the maintainers with statistics to help them improve the deck.
+No. AnkiCollab should not affect card scheduling. If you opt in, AnkiCollab will read your review data and provide the maintainers with statistics to help them improve the deck.
+  If you feel like AnkiCollab changed the review history, please revert to a backup and reach out for assistance.
 </details>
 
 <details close>
@@ -129,37 +130,7 @@ Keep in mind that when you change the deck name on AnkiCollab, you will also hav
 
 <details close>
 <summary><b>How can I use Optional Tags on AnkiCollab?</b></summary>
-Optional Tags are a cool way to make your Deck Tag Structure less crowded. Imagine your deck is used by 3 different schools and each school has the notes tagged according to their school curriculum. Not all subscribers want to have all these curriculums in their local collection because it makes it a lot less readable. 
-To solve that issue, you can use Optional Tags! These tags are only synchronized to the users that subscribed to them.
-<br /><br />
-To create a new Optional Tag group, navigate to the AnkiCollab Website → Manage Decks → Select your Deck → Optional Tags: Show All.
-
-<br />
-This will bring you to a page like this:
-<br />
-<img src="https://i.imgur.com/HCIiDMR.png" width="100%">
-
-Here you can add the new Tag Groups you want to use (For example, one for each school).
-
-After you've added these, go ahead and open Anki!
-
-To classify a tag as an "optional tag" it needs the prefix <code>AnkiCollab_Optional::</code> followed by the tag group you just specified on the website.
-
-An example tag could look like this:
-<br />
-<img src="https://i.imgur.com/lsj1pg1.png" width="50%">
-
-Now you can go ahead and tag your notes to your liking and the subscribers will see a popup like this, when they subscribe to your deck:
-<br />
-<img src="https://i.imgur.com/gC8hMWS.png" width="50%">
-
-and if they choose to subscribe to the NYU Tag, they will find all the tagged notes in their collection, but none of the tags they haven't subscribed to!
-<br />
-<img src="https://i.imgur.com/BWwwiUc.png" width="50%"> 
-
-Note that this only affects tags. Notes and cards are unaffected by this. All subscribers will always get all cards no matter what tag they have.
-
-Update 05/20256 A new feature to enable decks being linked to other decks and therefore creating the possibility of "optional cards" has been developed, but remains untested up until now.
+These are Work in progress and currently not recommended.
 Follow the [Discord](https://discord.com/invite/9x4DRxzqwM) for current information.
 </details>
 
