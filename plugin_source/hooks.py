@@ -28,6 +28,7 @@ from .auth_manager import auth_manager
 from .notifications_center import refresh_notifications, register_sync_refresh_hook
 from .utils import get_logger
 import requests
+from .auto_protect import on_card_reviewed, protect_all_learned
 
 logger = get_logger("ankicollab.hooks")
 
@@ -698,3 +699,6 @@ def hooks_init():
     # Context Menus (callbacks have internal checks)
     gui_hooks.browser_sidebar_will_show_context_menu.append(add_sidebar_context_menu)
     gui_hooks.browser_will_show_context_menu.append(context_menu_bulk_suggest)
+
+    # Reviewer related
+    gui_hooks.reviewer_did_answer_card.append(on_card_reviewed)
