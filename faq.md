@@ -39,16 +39,11 @@ Deck settings — learning steps, new card limits, maximum interval, etc. — ar
 ## Subscriber
 
 <details close>
-<summary><b>Can I exclude certain (personal) tags from uploading, like "leech"?</b></summary>
+<summary><b>Can I have personal Tags on shared decks?</b></summary>
 Yes!<br />
-  Open Anki<br />
-  Open the Add-ons window (where you install new add-ons), then double-click/Open the Config of AnkiCollab.<br />
-  In the respective deck you're trying to edit, locate this line:<br />
-  <img src="https://i.imgur.com/HrZyNZu.png" width="50%"><br />
-  and add your desired tags to it.<br />
-  Separate the tags with commas and enclose them in quotes, like this:<br />
-  <img src="https://i.imgur.com/zMyYDxC.png" width="50%">  <br />
-  Confirm by clicking OK, and you're done
+  If you want to protect personal tags from being up- / or downloaded to the shared AnkiCollab Deck, you need to move them into a Tag called <code>AnkiCollab_Personal</code>.<br><br>
+  <img src="https://i.imgur.com/j9EsC7M.png" width="30%"><br>
+  That way, all tags inside the <code>AnkiCollab_Personal</code> Tree are left untouched by AnkiCollab. Please make sure you copy and paste this exact format. Upper- and lowercase matters!
 </details>
 <details close>
 <summary><b>Can I protect certain notes, fields or tags from being updated?</b></summary>
