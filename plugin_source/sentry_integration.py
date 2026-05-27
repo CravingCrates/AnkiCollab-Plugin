@@ -355,7 +355,7 @@ def init_sentry() -> None:
             send_default_pii=False,
             traces_sample_rate=traces_sample_rate_map.get(environment, 0.0),
             sample_rate=sample_rate,
-            with_locals=False,
+            include_local_variables=False,
             before_send=_before_send_factory(addon_root),
             before_breadcrumb=_before_breadcrumb_factory(addon_root),
             default_integrations=True,

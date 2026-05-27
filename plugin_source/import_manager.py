@@ -32,7 +32,7 @@ from .dialogs import ChangelogDialog, DeletedNotesDialog, OptionalTagsDialog, As
 from .crowd_anki.representation import deck_initializer
 from .crowd_anki.importer.import_dialog import ImportConfig
 
-from .utils import create_backup, get_local_deck_from_id, DeckManager, get_logger, is_collection_available, ensure_collection, CollectionUnavailableError, OperationAbortedError, check_collection_or_abort, BackupFailedError
+from .utils import create_backup, get_local_deck_from_id, DeckManager, get_logger, get_personal_tags, is_collection_available, ensure_collection, CollectionUnavailableError, OperationAbortedError, check_collection_or_abort, BackupFailedError
 
 from .stats import ReviewHistory, on_stats_upload_done, update_stats_timestamp
 
@@ -761,8 +761,9 @@ def postpone_update():
 def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
     home_deck = get_home_deck(deck_hash)
     new_notes_home_deck = get_new_notes_home_deck(deck_hash)
+    personal_tags = get_personal_tags(deck_hash)
+    
     config = ImportConfig(
-        add_tag_to_cards=[],
         optional_tags=optional_tags,
         has_optional_tags=has_optional_tags,
         use_notes=True,
@@ -773,6 +774,7 @@ def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
         home_deck=home_deck or "",  # Provide empty string as default
         new_notes_home_deck=new_notes_home_deck or "",  # Provide empty string as default
         deck_hash=deck_hash,
+        personal_tags=personal_tags
     )
     for protected_field in protected_fields:
         model_name = protected_field["name"]

@@ -490,7 +490,7 @@ class Deck(JsonSerializableAnkiDict):
                 max=100,
             ) if aqt.mw.progress.busy() else None
         )
-        
+    
         silent_clear_unused_tags()
         silent_clear_empty_cards()
         
