@@ -32,10 +32,9 @@ class PersonalFieldsHolder:
 
 @dataclass
 class ImportConfig(PersonalFieldsHolder):
-    add_tag_to_cards: List[str]
-
     optional_tags: List[str]
     has_optional_tags: bool
+    personal_tags: List[str]
 
     use_notes: bool
     use_media: bool
@@ -47,6 +46,7 @@ class ImportConfig(PersonalFieldsHolder):
     home_deck: Optional[str] = None
     deck_hash: Optional[str] = None
     new_notes_home_deck: Optional[str] = None
+    
     
 
 

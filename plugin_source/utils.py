@@ -11,6 +11,8 @@ import aqt.utils
 from contextlib import AbstractContextManager
 import logging
 
+from .var_defs import DEFAULT_PROTECTED_TAGS, PREFIX_PROTECTED_FIELDS, PREFIX_PROTECTED_TAGS
+
 
 class CollectionUnavailableError(Exception):
     """Raised when the Anki collection is not available."""
@@ -117,6 +119,31 @@ class _SentryBreadcrumbHandler(logging.Handler):
         except Exception:
             # Never fail due to logging
             pass
+
+
+def get_personal_tags(deck_hash):
+    """
+    Get personal tags that should be stripped during exports and protected during imports.
+    Returns DEFAULT_PROTECTED_TAGS + PREFIX_PROTECTED_FIELDS + PREFIX_PROTECTED_TAGS if no deck-specific config exists.
+    """
+    strings_data = mw.addonManager.getConfig(__name__)
+    combined_tags = set()
+
+    if strings_data and deck_hash:
+        for hash_key, details in strings_data.items():
+            if hash_key == deck_hash:
+                personal_tags = details.get("personal_tags", DEFAULT_PROTECTED_TAGS)
+                if "personal_tags" not in details:
+                    details["personal_tags"] = personal_tags
+                    mw.addonManager.writeConfig(__name__, strings_data)
+                combined_tags.update(personal_tags)
+                combined_tags.add(PREFIX_PROTECTED_FIELDS)
+                combined_tags.add(PREFIX_PROTECTED_TAGS)
+                return list(combined_tags)
+    
+    # Fallback: deck not found in config, use default protected tags
+    # This ensures tags like "leech", "marked" are always stripped from exports
+    return DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS, PREFIX_PROTECTED_TAGS]
 
 
 def get_logger(name: str = "ankicollab") -> logging.Logger:

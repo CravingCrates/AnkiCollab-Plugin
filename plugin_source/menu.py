@@ -136,13 +136,14 @@ def add_to_table(line_edit, table, dialog):
         ):
         return
     strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data is None: strings_data = {} # Initialize if None
     if string:
         # Check if already subscribed
         if string in strings_data:
             showInfo(f"You're already subscribed to this deck.\n\nUse 'Update Decks' to get the latest changes.")
             line_edit.setText('')
             return
-
+                
         strings_data[string] = {
             'timestamp': '2022-12-31 23:59:59',
             'deckId': 0,

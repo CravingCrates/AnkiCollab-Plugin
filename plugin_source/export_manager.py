@@ -55,7 +55,7 @@ from .crowd_anki.representation.note_model import NoteModel
 
 from .crowd_anki.utils.uuid import UuidFetcher
 
-from .var_defs import DEFAULT_PROTECTED_TAGS, PREFIX_PROTECTED_FIELDS
+from .utils import get_personal_tags
 
 from .dialogs import RateAddonDialog
 
@@ -72,9 +72,9 @@ from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
 
 from .auth_manager import auth_manager
-from .var_defs import API_BASE_URL
+from .var_defs import API_BASE_URL, DEFAULT_PROTECTED_TAGS
 
-from .utils import get_deck_hash_from_did, get_deck_hash_from_card, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger, is_collection_available, ensure_collection, CollectionUnavailableError, OperationAbortedError, check_collection_or_abort, BackupFailedError
+from .utils import get_deck_hash_from_did, get_deck_hash_from_card, get_local_deck_from_hash, get_timestamp, get_did_from_hash, create_backup, get_logger, is_collection_available, ensure_collection, CollectionUnavailableError, OperationAbortedError, check_collection_or_abort, BackupFailedError, get_personal_tags
 from .media_progress_indicator import show_media_progress, update_media_progress, complete_media_progress
 from . import main
 from .sentry_integration import capture_media_exception, capture_media_message
@@ -233,29 +233,6 @@ def get_maintainer_data(deckHash):
             # Network error, return current token but don't force logout
 
     return token, auto_approve
-
-def get_personal_tags(deck_hash):
-    """
-    Get personal tags that should be stripped during export.
-    Returns DEFAULT_PROTECTED_TAGS + PREFIX_PROTECTED_FIELDS if no deck-specific config exists.
-    """
-    strings_data = mw.addonManager.getConfig(__name__)
-    combined_tags = set()
-
-    if strings_data:
-        for hash_key, details in strings_data.items():
-            if hash_key == deck_hash:
-                personal_tags = details.get("personal_tags", DEFAULT_PROTECTED_TAGS)
-                if "personal_tags" not in details:
-                    details["personal_tags"] = personal_tags
-                    mw.addonManager.writeConfig(__name__, strings_data)
-                combined_tags.update(personal_tags)
-                combined_tags.add(PREFIX_PROTECTED_FIELDS)
-                return list(combined_tags)
-    
-    # Fallback: deck not found in config, use default protected tags
-    # This ensures tags like "leech", "marked" are always stripped from exports
-    return DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS]
 
 def get_note_id_from_guid(guid):
     try:
@@ -1810,8 +1787,9 @@ def _create_deck_op(
         except Exception as e:
             logger.warning(f"Deck refresh inside create op failed; proceeding: {e}")
     
+    personal_tags = get_personal_tags(None) # No hash, so just the global defautls
     # Always remove protected tags before serialization (must be after refresh if refresh occurred)
-    deck_initializer.remove_tags_from_notes(deck_repr, DEFAULT_PROTECTED_TAGS + [PREFIX_PROTECTED_FIELDS])
+    deck_initializer.remove_tags_from_notes(deck_repr, personal_tags)
     
     deck_res = json.dumps(deck_repr, default=Deck.default_json, sort_keys=True, indent=4, ensure_ascii=False)
     data = {"deck": deck_res}

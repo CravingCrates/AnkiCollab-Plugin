@@ -26,8 +26,7 @@ pip-item-hawaii-skylark-network-rugby
 
 If you prefer to watch a video, check out our latest Video Guide that walks you through the necessary steps to subscribe to a deck!
 
-(Note: the video guide was created using a previous version of the plugin, which didn't require login.)
-[![AnkiCollab Subscriber Video](https://img.youtube.com/vi/-INzy3mF06I/0.jpg)](https://www.youtube.com/watch?v=-INzy3mF06I)
+[https://www.youtube.com/watch?v=-INzy3mF06I](https://youtu.be/F9oVTlPffeQ)
 
 ## Getting a Key
 
