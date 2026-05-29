@@ -18,11 +18,11 @@
 
 If you prefer to watch a video, check out our latest Video Guide that walks you through the necessary steps to subscribe to a deck!
 
-[https://www.youtube.com/watch?v=-INzy3mF06I](https://youtu.be/F9oVTlPffeQ)
+[AnkiCollab Subscriber Tutorial - Collaboration on Anki Decks](https://youtu.be/F9oVTlPffeQ)
 
 ## Creating an Account
 
-You'll need an account to use AnkiCollab. To create one, go to [AnkiCollab.com/signup](https://www.ankicollab.com/signup). You can choose any username, no e-mail is required. We only use this measure to prevent exploits. 
+You'll need an account to use AnkiCollab. To create one, go to [AnkiCollab.com/signup](https://www.ankicollab.com/signup). You can choose any username, no e-mail is required. Accounts are only required to prevent exploits and to help deck maintainers reference suggestion authors.
 
 <img src="https://i.imgur.com/LVwfVhk.png" alt="The sign up page for AnkiCollab website" width="500"><br>AnkiCollab signup page
 
