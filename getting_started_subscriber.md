@@ -1,18 +1,38 @@
 # Getting Started - Subscriber
 
 - [Getting Started - Subscriber](#getting-started---subscriber)
+  - [Video Guide](#video-guide)
+  - [Creating an Account](#creating-an-account)
+  - [Downloading the Addon](#downloading-the-addon)
+  - [Logging in](#logging-in)
   - [Getting a Key](#getting-a-key)
   - [Adding the Key to Anki](#adding-the-key-to-anki)
   - [Suggesting Changes](#suggesting-changes)
     - [Card Content and Tags](#card-content-and-tags)
     - [New Cards](#new-cards)
   - [Downloading Updates](#downloading-updates)
-    - [Update Decks Manually](#check-for-new-content-manually)
-    - [Update Decks Automatically](#check-for-new-content-automatically)
+    - [Update Decks Manually](#update-decks-manually)
+    - [Update Decks Automatically](#update-decks-automatically)
 
-If you don't want to maintain or publish decks, you'll still need an account. To create one, go to [AnkiCollab.com/Login](https://www.ankicollab.com/login) and click **Sign Up Here**.
+## Video Guide
 
-<img src="https://i.imgur.com/LVwfVhk.png" alt="The sign up page for AnkiCollab website" width="500">
+If you prefer to watch a video, check out our latest Video Guide that walks you through the necessary steps to subscribe to a deck!
+
+[AnkiCollab Subscriber Tutorial - Collaboration on Anki Decks](https://youtu.be/F9oVTlPffeQ)
+
+## Creating an Account
+
+You'll need an account to use AnkiCollab. To create one, go to [AnkiCollab.com/signup](https://www.ankicollab.com/signup). You can choose any username, no e-mail is required. Accounts are only required to prevent exploits and to help deck maintainers reference suggestion authors.
+
+<img src="https://i.imgur.com/LVwfVhk.png" alt="The sign up page for AnkiCollab website" width="500"><br>AnkiCollab signup page
+
+## Downloading the Addon
+
+If you didn't install the Addon yet, go to the [AnkiWeb-Page](https://ankiweb.net/shared/info/1957538407), read through the info, copy the Addon's code and paste it in Anki (Tools → Addons → Get Add-ons...) to do so. Restart Anki to finish the install.
+
+## Logging in
+
+After you restarted Anki, ```AnkiCollab``` will appear as a menu item. Choose ```AnkiCollab → Login``` and sign in with the account you created on the website.
 
 After that, the **subscription key** 🔑 is all you need!
 
@@ -21,12 +41,6 @@ The key will be a series of words separated by dashes. Example:
 ```txt
 pip-item-hawaii-skylark-network-rugby
 ```
-
-## Video Guide
-
-If you prefer to watch a video, check out our latest Video Guide that walks you through the necessary steps to subscribe to a deck!
-
-[https://www.youtube.com/watch?v=-INzy3mF06I](https://youtu.be/F9oVTlPffeQ)
 
 ## Getting a Key
 
@@ -44,7 +58,7 @@ Click on the deck and the subscription key will be on the top in blue. Copy it.
 
 Open Anki and make sure you're logged in to AnkiCollab.
 
-On the toolbar, click `AnkiCollab → Edit Subscriptions`.
+On the toolbar, click `AnkiCollab → Manage Subscriptions`.
 
 ![A cursor hovering over the Edit Subscriptions button on the AnkiCollab toolbar tab in Anki.](https://i.imgur.com/vC4fI5n.png)
 
@@ -136,7 +150,7 @@ This will retrieve any available updates for your subscription.
 
 ### Update Decks Automatically
 
-On the toolbar, click `AnkiCollab → Edit Subscriptions → Global Settings → Update Decks on startup`.
+On the toolbar, click `AnkiCollab → Settings → Update Decks on startup`.
 
 <img src="https://i.imgur.com/4vr1YO0.png" alt="A cursor hovering over the Update Decks on startup button on the AnkiCollab toolbar tab in Anki" width="500">
 
