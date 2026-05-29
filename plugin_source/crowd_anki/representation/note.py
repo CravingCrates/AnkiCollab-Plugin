@@ -257,6 +257,7 @@ class Note(JsonSerializableAnkiObject):
         # Then handle deck movement if not ignored
         if not import_config.ignore_deck_movement:
             deck_groups = defaultdict(list)  # target_deck_id -> [card_ids]
+            cards_to_update = []
             
             # Collect all card IDs we need to check
             all_card_ids = []
@@ -300,8 +301,13 @@ class Note(JsonSerializableAnkiObject):
                             deck_name_to_id_cache[target_deck_name] = collection.decks.id(target_deck_name)
                         target_deck_id = deck_name_to_id_cache[target_deck_name]
                         
-                        # Only move if not already in target and not in filtered deck
-                        if current_deck_id != target_deck_id and odid == 0:
+                        # Normal cards moved properly with set_deck; filtered cards get a ghetto update of odid and we pray nothing breaks down the road with the scheduler
+                        if odid != 0:
+                            if odid != target_deck_id:
+                                card = collection.get_card(card_id)
+                                card.odid = target_deck_id
+                                cards_to_update.append(card)
+                        elif current_deck_id != target_deck_id:
                             deck_groups[target_deck_id].append(card_id)
                             
                 except Exception as e:
@@ -316,6 +322,14 @@ class Note(JsonSerializableAnkiObject):
                         collection.set_deck(chunk, deck_id)
                 except Exception as e:
                     logger.warning(f"Error moving cards to deck {deck_id}: {e}")
+
+            if cards_to_update:
+                try:
+                    for i in range(0, len(cards_to_update), CHUNK_SIZE):
+                        chunk = cards_to_update[i:i + CHUNK_SIZE]
+                        collection.update_cards(chunk)
+                except Exception as e:
+                    logger.warning(f"Error updating filtered card odid values: {e}")
         
     @staticmethod
     def bulk_add_notes(collection, notes, deck_id, import_config):
