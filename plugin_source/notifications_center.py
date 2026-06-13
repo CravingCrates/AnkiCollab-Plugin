@@ -11,6 +11,9 @@ from aqt.qt import (
     QAction,
     QDialog,
     QIcon,
+    QKeySequence,
+    QShortcut,
+    Qt,
     QUrl,
     QThread,
     QTimer,
@@ -272,6 +275,14 @@ class NotificationCenterDialog(QDialog):
         self._web = None
         self._web_loaded = False
         self._on_refresh = on_refresh
+
+        # Window-level shortcuts so Escape / Cmd+W (Ctrl+W) close the dialog
+        # even when the embedded QWebEngineView has keyboard focus.
+        for key_seq in (QKeySequence(Qt.Key.Key_Escape), QKeySequence.StandardKey.Close):
+            shortcut = QShortcut(key_seq, self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(self.close)
+            
         self._payload = {
             "unread": unread_payload,
             "history": history_payload,
