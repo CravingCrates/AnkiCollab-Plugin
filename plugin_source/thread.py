@@ -27,6 +27,16 @@ def run_function_in_thread(function, *args, **kwargs):
     def wrapped_function():
         try:
             return function(*args, **kwargs)
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error in thread function {function.__name__}: {str(e)}")
+            aqt.mw.taskman.run_on_main(
+                lambda: aqt.utils.showWarning(
+                    "Unable to connect to AnkiCollab. Please check your internet connection and try again.",
+                    title="AnkiCollab Error",
+                    parent=mw
+                )
+            )
+            # Do not re-raise to avoid traceback popup
         except Exception as e:
             logger.error(f"Exception in thread function {function.__name__}: {str(e)}")
             logger.error(traceback.format_exc())
