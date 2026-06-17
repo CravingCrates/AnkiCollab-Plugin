@@ -77,6 +77,9 @@ def bulk_suggest_handler(browser: Browser, nids: Sequence[NoteId]) -> None:
         return
     suggest_notes(nids, 9)
 
+def trigger_bulk_suggest_from_browser(browser: Browser) -> None:
+    bulk_suggest_handler(browser, browser.selected_notes())
+
 def remove_notes(nids: Sequence[NoteId], window=None) -> None:
     if not auth_manager.is_logged_in():
          showInfo("Please log in to remove notes.", parent=window if window is not None else mw)
@@ -283,7 +286,7 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
 
     context_menu.addSeparator()
     context_menu.addAction(
-        "AnkiCollab: Bulk suggest notes",
+        "AnkiCollab: Bulk suggest notes\tCtrl+Alt+B",
         lambda: bulk_suggest_handler(browser, nids=selected_nids),
     )
     context_menu.addAction(
@@ -320,6 +323,13 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
                         )
     except Exception:
         pass
+
+def add_browser_bulk_suggest_action(browser: Browser) -> None:
+    action = QAction("AnkiCollab: Bulk suggest notes", browser)
+    action.setShortcut(QKeySequence("Ctrl+Alt+B"))
+    action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+    action.triggered.connect(lambda: trigger_bulk_suggest_from_browser(browser))
+    browser.form.menu_Notes.addAction(action)
 
 def create_note_links_handler(browser: Browser, nids: Sequence[NoteId], subscriber_hash: str, base_hash: Optional[str] = None) -> None:
     if not auth_manager.is_logged_in():
@@ -694,6 +704,7 @@ def hooks_init():
         on_deck_browser_will_show_options_menu
     )
     gui_hooks.browser_menus_did_init.append(add_browser_menu_item)
+    gui_hooks.browser_menus_did_init.append(add_browser_bulk_suggest_action)
 
     # Context Menus (callbacks have internal checks)
     gui_hooks.browser_sidebar_will_show_context_menu.append(add_sidebar_context_menu)
