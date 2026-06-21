@@ -501,6 +501,8 @@ def init_add_card(addCardsDialog):
 
     cfg = mw.addonManager.getConfig(__name__) or {}
     settings = cfg.get("settings", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(settings, dict):
+        settings = {}
     remember_between_sessions = bool(settings.get("remember_suggest_state_between_sessions", False))
 
     checkbox = QCheckBox("Suggest on AnkiCollab")
