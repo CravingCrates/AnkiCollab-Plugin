@@ -918,6 +918,7 @@ def show_global_settings_dialog(parent_dialog):
     error_reporting_cb.setToolTip("Help us fix bugs faster - no personal data is collected")
 
     remember_suggest_state_cb = QCheckBox("Remember 'Suggest on AnkiCollab' state between sessions")
+    remember_suggest_state_cb.setStyleSheet(checkbox_style)
     remember_suggest_state_cb.setChecked(bool(settings.get("remember_suggest_state_between_sessions", False)))
     remember_suggest_state_cb.setToolTip(
         "When enabled, the add-on will remember whether the 'Suggest on AnkiCollab' checkbox in the Add Cards dialog was last checked or not, even after restarting Anki."
