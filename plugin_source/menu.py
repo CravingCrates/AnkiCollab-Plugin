@@ -21,6 +21,8 @@ from aqt.qt import (
     QRadioButton,
     QAbstractItemView,
     QHeaderView,
+    QKeySequence,
+    QKeySequenceEdit,
     QSizePolicy,
     QApplication,
     Qt,
@@ -45,6 +47,7 @@ from .notifications_center import (
     set_notification_visibility,
 )
 from .sentry_integration import init_sentry
+from .shortcut_validator import Context, Severity, validate_shortcut
 from .ui.colors import (
     get_colors,
     get_button_style,
@@ -53,7 +56,6 @@ from .ui.colors import (
     get_table_style,
     get_groupbox_style,
     get_combobox_style,
-    get_info_box_style,
 )
 from anki.utils import point_version
 
@@ -951,7 +953,7 @@ def show_global_settings_dialog(parent_dialog):
 
     dialog = QDialog(parent_dialog)
     dialog.setWindowTitle("Global Settings")
-    dialog.setMinimumSize(420, 420)
+    dialog.setMinimumSize(610, 560)
     dialog.setStyleSheet(get_dialog_style())
 
     layout = QVBoxLayout()
@@ -979,7 +981,7 @@ def show_global_settings_dialog(parent_dialog):
         mw.addonManager.writeConfig(__name__, strings_data)
 
     # Subscription setting checkboxes
-    global_group = QGroupBox("Subscription Settings")
+    global_group = QGroupBox("Global Subscription Settings")
     global_group.setStyleSheet(get_groupbox_style())
     global_layout = QVBoxLayout(global_group)
 
@@ -1049,13 +1051,99 @@ def show_global_settings_dialog(parent_dialog):
     global_layout.addWidget(error_reporting_cb)
     layout.addWidget(global_group)
 
-    # Subscription Info section
-    setting_info_label = QLabel(
-        "These settings apply globally to all your subscriptions. Changes take effect on the next import."
+    # Keyboard Shortcuts section
+    shortcuts_group = QGroupBox("Keyboard Shortcuts")
+    shortcuts_group.setStyleSheet(get_groupbox_style())
+    shortcuts_group.setMinimumHeight(100)
+    shortcuts_layout = QHBoxLayout(shortcuts_group)
+    shortcuts_layout.setSpacing(16)
+
+    shortcut_label_style = (
+        f"color: {colors['text_primary']}; font-size: 12px; margin-bottom: 2px;"
     )
-    setting_info_label.setWordWrap(True)
-    setting_info_label.setStyleSheet(get_info_box_style())
-    layout.addWidget(setting_info_label)
+
+    def _make_hint_icon(tooltip_text: str) -> QLabel:
+        icon = QLabel("?")
+        icon.setToolTip(tooltip_text)
+        icon.setFixedSize(14, 14)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet(f"""
+            QLabel {{
+                color: {colors['text_muted']};
+                background-color: transparent;
+                border: 1px solid {colors['text_muted']};
+                border-radius: 7px;
+                font-size: 8px;
+                font-weight: bold;
+            }}
+        """)
+        icon.setCursor(Qt.CursorShape.PointingHandCursor)
+        return icon
+
+    def _make_shortcut_block(label_text, settings_key, hint_text):
+        block = QWidget()
+        block_layout = QVBoxLayout(block)
+        block_layout.setContentsMargins(0, 0, 0, 0)
+        block_layout.setSpacing(2)
+
+        label = QLabel(label_text)
+        label.setStyleSheet(shortcut_label_style)
+        block_layout.addWidget(label)
+
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        edit = QKeySequenceEdit()
+        edit.setStyleSheet(get_input_style())
+        edit.setMaximumWidth(120)
+        existing = settings.get(settings_key, "")
+        if existing:
+            edit.setKeySequence(QKeySequence.fromString(existing))
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {colors['text_secondary']};
+                border: 1px solid {colors['border']};
+                padding: 2px 10px;
+                border-radius: 3px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors['surface_hover']};
+                color: {colors['text_primary']};
+            }}
+        """)
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.clicked.connect(edit.clear)
+
+        hint_icon = _make_hint_icon(hint_text)
+
+        row.addWidget(edit)
+        row.addWidget(clear_btn)
+        row.addWidget(hint_icon)
+        block_layout.addLayout(row)
+
+        return block, edit
+
+    update_block, update_shortcut_edit = _make_shortcut_block(
+        "Update Decks:",
+        "shortcut_update_decks",
+        "Must contain at least two modifier keys (e.g. ⌃⌥U). "
+        "Works only in the main Anki window (deck overview).",
+    )
+    shortcuts_layout.addWidget(update_block)
+
+    bulk_block, bulk_shortcut_edit = _make_shortcut_block(
+        "Bulk Suggest:",
+        "shortcut_bulk_suggest",
+        "Must contain at least two modifier keys (e.g. Ctrl+Alt+U). "
+        "Works only in the Browser window.",
+    )
+    shortcuts_layout.addStretch()
+    shortcuts_layout.addWidget(bulk_block)
+
+    layout.addWidget(shortcuts_group)
 
     # Media and Statistics container
     media_stats_container = QWidget()
@@ -1142,6 +1230,28 @@ def show_global_settings_dialog(parent_dialog):
     save_button.setStyleSheet(get_button_style("success"))
 
     def save_global_settings():
+        # Validate shortcuts before saving
+        update_seq = update_shortcut_edit.keySequence()
+        bulk_seq = bulk_shortcut_edit.keySequence()
+
+        # Update Decks (main window context)
+        result = validate_shortcut(update_seq, Context.MAIN_WINDOW)
+        if not result.is_valid:
+            showInfo(result.message, parent=dialog)
+            return
+        if result.severity == Severity.WARNING:
+            if not askUser(result.message, parent=dialog, title="Shortcut Conflict"):
+                return
+
+        # Bulk Suggest (browser context)
+        result = validate_shortcut(bulk_seq, Context.BROWSER)
+        if not result.is_valid:
+            showInfo(result.message, parent=dialog)
+            return
+        if result.severity == Severity.WARNING:
+            if not askUser(result.message, parent=dialog, title="Shortcut Conflict"):
+                return
+
         settings["preserve_deck_structure"] = True
         settings["pull_on_startup"] = pull_on_startup_cb.isChecked()
         settings["suspend_new_cards"] = suspend_new_cards_cb.isChecked()
@@ -1151,6 +1261,12 @@ def show_global_settings_dialog(parent_dialog):
             remember_suggest_state_cb.isChecked()
         )
         settings["error_reporting_enabled"] = error_reporting_cb.isChecked()
+        settings["shortcut_update_decks"] = (
+            update_seq.toString() if not update_seq.isEmpty() else ""
+        )
+        settings["shortcut_bulk_suggest"] = (
+            bulk_seq.toString() if not bulk_seq.isEmpty() else ""
+        )
         mw.addonManager.writeConfig(__name__, strings_data)
         auth_manager.set_auto_approve(auto_approve_cb.isChecked())
         # Apply telemetry setting immediately
@@ -1158,7 +1274,7 @@ def show_global_settings_dialog(parent_dialog):
             init_sentry()
         except Exception:
             pass
-        showInfo("Settings saved! Changes will apply on the next sync.")
+        showInfo("Settings saved! Changes will apply on the next sync.", parent=dialog)
         dialog.accept()
 
     save_button.clicked.connect(save_global_settings)
@@ -1288,10 +1404,31 @@ def update_ui_for_login_state():
         refresh_notifications()
 
 
+def _apply_shortcut_hint():
+    # Append the configured shortcut in native format to the Update Decks action text.
+    config = mw.addonManager.getConfig(__name__) or {}
+    settings = config.get("settings", {}) if config else {}
+    raw = settings.get("shortcut_update_decks", "")
+    if not raw:
+        return
+    seq = QKeySequence.fromString(raw)
+    if seq.isEmpty():
+        return
+    display = seq.toString(QKeySequence.SequenceFormat.NativeText)
+    if not display:
+        return
+    # Strip any existing shortcut hint before appending
+    label = pull_changes_action.text().split("\t")[0]
+    pull_changes_action.setText(f"{label}\t{display}")
+
+
 def menu_init():
     store_default_config()
 
     mw.form.menubar.addMenu(collab_menu)
+
+    # Show the configured shortcut hint in the menu item label
+    _apply_shortcut_hint()
 
     collab_menu.addAction(pull_changes_action)
     collab_menu.addSeparator()

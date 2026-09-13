@@ -6,12 +6,14 @@ from anki.decks import DeckId
 from anki.notes import NoteId
 from aqt.qt import *
 from aqt.qt import (
+    QAction,
     QMenu,
     QModelIndex,
     QCheckBox,
     QDialogButtonBox,
     QApplication,
     QInputDialog,
+    QKeySequence,
 )
 from aqt.utils import askUser, showInfo
 from aqt.operations import QueryOp
@@ -90,6 +92,10 @@ def bulk_suggest_handler(browser: Browser, nids: Sequence[NoteId]) -> None:
         )
         return
     suggest_notes(nids, 9)
+
+
+def trigger_bulk_suggest_from_browser(browser: Browser) -> None:
+    bulk_suggest_handler(browser, browser.selected_notes())
 
 
 def remove_notes(nids: Sequence[NoteId], window=None) -> None:
@@ -329,9 +335,15 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
     if not selected_nids:
         return  # Don't add if no notes selected
 
+    # Build bulk-suggest label with shortcut hint if configured
+    bulk_label = "AnkiCollab: Bulk suggest notes"
+    bulk_shortcut = _shortcut_display(SHORTCUT_BULK_SUGGEST)
+    if bulk_shortcut:
+        bulk_label += "\t" + bulk_shortcut
+
     context_menu.addSeparator()
     context_menu.addAction(
-        "AnkiCollab: Bulk suggest notes",
+        bulk_label,
         lambda: bulk_suggest_handler(browser, nids=selected_nids),
     )
     context_menu.addAction(
@@ -370,6 +382,23 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
                         )
     except Exception:
         pass
+
+
+def add_browser_bulk_suggest_action(browser: Browser) -> None:
+    shortcut_str = _get_shortcut(SHORTCUT_BULK_SUGGEST)
+    shortcut_display = _shortcut_display(SHORTCUT_BULK_SUGGEST)
+    label = "AnkiCollab: Bulk suggest notes"
+    if shortcut_display:
+        label += "\t" + shortcut_display
+
+    action = QAction(label, browser)
+    if shortcut_str:
+        seq = QKeySequence.fromString(shortcut_str)
+        if not seq.isEmpty():
+            action.setShortcut(seq)
+            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    action.triggered.connect(lambda: trigger_bulk_suggest_from_browser(browser))
+    browser.form.menu_Notes.addAction(action)
 
 
 def create_note_links_handler(
@@ -846,12 +875,52 @@ def update_hooks_for_login_state(logged_in: bool):
     pass
 
 
+# ── Keyboard Shortcuts ────────────────────────────────────────────────
+
+SHORTCUT_UPDATE_DECKS = "update_decks"
+SHORTCUT_BULK_SUGGEST = "bulk_suggest"
+
+
+def _get_shortcut(key: str) -> str:
+    """Return the configured shortcut string, or empty if not set."""
+    config = mw.addonManager.getConfig(__name__) or {}
+    settings = config.get("settings", {}) if config else {}
+    return settings.get(f"shortcut_{key}", "")
+
+
+def _shortcut_display(key: str) -> str:
+    """Return the shortcut in the native platform display format (e.g. ⌃⌥B on macOS), or empty."""
+    raw = _get_shortcut(key)
+    if not raw:
+        return ""
+    seq = QKeySequence.fromString(raw)
+    if seq.isEmpty():
+        return ""
+    return seq.toString(QKeySequence.SequenceFormat.NativeText)
+
+
+def register_update_decks_shortcut() -> None:
+    """Register the Update Decks shortcut on the main window."""
+    shortcut_str = _get_shortcut(SHORTCUT_UPDATE_DECKS)
+    if not shortcut_str:
+        return
+    seq = QKeySequence.fromString(shortcut_str)
+    if seq.isEmpty():
+        return
+    action = QAction("AnkiCollab: Update Decks", mw)
+    action.setShortcut(seq)
+    action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+    action.triggered.connect(lambda: async_update(silent=False))
+    mw.addAction(action)
+
+
 # --- Hook Registration ---
 def hooks_init():
     """Registers all hooks. Internal checks within callbacks manage behavior."""
     gui_hooks.profile_did_open.append(onProfileLoaded)
     gui_hooks.profile_will_close.append(onProfileWillClose)
     register_sync_refresh_hook()
+    register_update_decks_shortcut()
 
     # Add Cards related
     gui_hooks.add_cards_did_init.append(init_add_card)
@@ -865,6 +934,7 @@ def hooks_init():
         on_deck_browser_will_show_options_menu
     )
     gui_hooks.browser_menus_did_init.append(add_browser_menu_item)
+    gui_hooks.browser_menus_did_init.append(add_browser_bulk_suggest_action)
 
     # Context Menus (callbacks have internal checks)
     gui_hooks.browser_sidebar_will_show_context_menu.append(add_sidebar_context_menu)

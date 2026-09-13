@@ -8,6 +8,7 @@ note IDs are included in the removal request — same rigor as the path-traversa
 test for import destinations.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,8 @@ import hooks
 from hooks import (
     _get_linked_base_hashes,
     _get_protected_fields_from_tags,
+    _get_shortcut,
+    _shortcut_display,
     remove_notes,
     request_note_removal,
 )
@@ -42,6 +45,33 @@ class _FakeNote:
 
     def keys(self):
         return self._fields
+
+
+class _FakeSeq:
+    """Minimal stand-in for the QKeySequence returned by ``fromString``."""
+
+    def __init__(self, native="", empty=False):
+        self._native = native
+        self._empty = empty
+
+    def isEmpty(self):
+        return self._empty
+
+    def toString(self, _format):
+        return self._native
+
+
+def _fake_qkeysequence(native="", empty=False):
+    """Build a QKeySequence stand-in whose ``fromString`` yields a fixed seq."""
+
+    class _QKS:
+        SequenceFormat = SimpleNamespace(NativeText="native")
+
+        @staticmethod
+        def fromString(raw):
+            return _FakeSeq(native=native, empty=empty)
+
+    return _QKS
 
 
 class TestGetProtectedFieldsFromTags:
@@ -256,3 +286,38 @@ class TestRemoveNotes:
             request_note_removal(None, [])
             mock_remove.assert_not_called()
             mock_show.assert_called_once()
+
+
+class TestShortcutConfigHelpers:
+    """Config lookup and display formatting for the keyboard shortcuts."""
+
+    def _configure(self, mw_mock, settings):
+        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {
+            "settings": settings
+        }
+
+    def test_get_shortcut_returns_configured_value(self, mw_mock):
+        self._configure(mw_mock, {"shortcut_update_decks": "Ctrl+Alt+U"})
+        assert _get_shortcut("update_decks") == "Ctrl+Alt+U"
+
+    def test_get_shortcut_empty_when_missing(self, mw_mock):
+        self._configure(mw_mock, {})
+        assert _get_shortcut("update_decks") == ""
+
+    def test_get_shortcut_empty_when_no_config(self, mw_mock):
+        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: None
+        assert _get_shortcut("bulk_suggest") == ""
+
+    def test_shortcut_display_empty_without_config(self, mw_mock):
+        self._configure(mw_mock, {})
+        assert _shortcut_display("update_decks") == ""
+
+    def test_shortcut_display_native_text(self, mw_mock, monkeypatch):
+        self._configure(mw_mock, {"shortcut_update_decks": "Ctrl+Alt+U"})
+        monkeypatch.setattr(hooks, "QKeySequence", _fake_qkeysequence(native="⌃⌥U"))
+        assert _shortcut_display("update_decks") == "⌃⌥U"
+
+    def test_shortcut_display_empty_when_unparseable(self, mw_mock, monkeypatch):
+        self._configure(mw_mock, {"shortcut_update_decks": "not-a-shortcut"})
+        monkeypatch.setattr(hooks, "QKeySequence", _fake_qkeysequence(empty=True))
+        assert _shortcut_display("update_decks") == ""
