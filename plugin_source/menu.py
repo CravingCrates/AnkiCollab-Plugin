@@ -1060,28 +1060,27 @@ def show_global_settings_dialog(parent_dialog):
     hint_caption_style = (
         f"color: {colors['text_muted']}; font-size: 11px; margin-top: 2px;"
     )
-    
+
     def _example_shortcut(letter: str) -> str:
         if is_mac:
             return f"\u2318\u2325{letter}"  # Cmd+Option, e.g. macOS convention
-        return f"Ctrl+Alt+{letter}"    
+        return f"Ctrl+Alt+{letter}"
 
-    
     def _make_shortcut_box(title, settings_key, caption_text):
         box = QGroupBox(title)
         box.setStyleSheet(get_groupbox_style())
         box_layout = QVBoxLayout(box)
         box_layout.setSpacing(6)
-    
+
         field_row = QHBoxLayout()
         field_row.setSpacing(6)
-    
+
         edit = QKeySequenceEdit()
         edit.setStyleSheet(get_input_style())
         existing = settings.get(settings_key, "")
         if existing:
             edit.setKeySequence(QKeySequence.fromString(existing))
-    
+
         clear_btn = QToolButton()
         clear_btn.setText("\u2715")
         clear_btn.setAutoRaise(True)
@@ -1097,26 +1096,25 @@ def show_global_settings_dialog(parent_dialog):
                 color: {colors['text_primary']};
             }}
         """)
-    
+
         def _update_clear_visibility():
             clear_btn.setVisible(not edit.keySequence().isEmpty())
-    
+
         clear_btn.clicked.connect(edit.clear)
         edit.keySequenceChanged.connect(_update_clear_visibility)
         _update_clear_visibility()
-    
+
         field_row.addWidget(edit, 1)
         field_row.addWidget(clear_btn)
         box_layout.addLayout(field_row)
-    
+
         caption = QLabel(caption_text)
         caption.setWordWrap(True)
         caption.setStyleSheet(hint_caption_style)
         box_layout.addWidget(caption)
-    
+
         return box, edit
-    
-    
+
     update_box, update_shortcut_edit = _make_shortcut_box(
         "Update Decks",
         "shortcut_update_decks",
@@ -1127,7 +1125,7 @@ def show_global_settings_dialog(parent_dialog):
         "shortcut_bulk_suggest",
         f"Two modifiers minimum, e.g. {_example_shortcut('B')}.",
     )
-    
+
     # Shortcuts container
     shortcuts_container = QWidget()
     shortcuts_row = QHBoxLayout(shortcuts_container)
