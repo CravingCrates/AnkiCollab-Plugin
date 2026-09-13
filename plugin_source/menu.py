@@ -24,12 +24,11 @@ from aqt.qt import (
     QKeySequence,
     QKeySequenceEdit,
     QSizePolicy,
-    QApplication,
+    QToolButton,
     Qt,
 )
-from aqt.theme import theme_manager
+
 from datetime import datetime, timezone
-import requests
 import webbrowser
 
 from .identifier import subscribe_to_deck, unsubscribe_from_deck
@@ -57,7 +56,7 @@ from .ui.colors import (
     get_groupbox_style,
     get_combobox_style,
 )
-from anki.utils import point_version
+from anki.utils import is_mac, point_version
 
 collab_menu = QMenu("AnkiCollab", mw)
 links_menu = QMenu("Links", mw)
@@ -953,7 +952,7 @@ def show_global_settings_dialog(parent_dialog):
 
     dialog = QDialog(parent_dialog)
     dialog.setWindowTitle("Global Settings")
-    dialog.setMinimumSize(610, 560)
+    dialog.setMinimumSize(460, 480)
     dialog.setStyleSheet(get_dialog_style())
 
     layout = QVBoxLayout()
@@ -1058,92 +1057,85 @@ def show_global_settings_dialog(parent_dialog):
     shortcuts_layout = QHBoxLayout(shortcuts_group)
     shortcuts_layout.setSpacing(16)
 
-    shortcut_label_style = (
-        f"color: {colors['text_primary']}; font-size: 12px; margin-bottom: 2px;"
+    hint_caption_style = (
+        f"color: {colors['text_muted']}; font-size: 11px; margin-top: 2px;"
     )
+    
+    def _example_shortcut(letter: str) -> str:
+        if is_mac:
+            return f"\u2318\u2325{letter}"  # Cmd+Option, e.g. macOS convention
+        return f"Ctrl+Alt+{letter}"    
 
-    def _make_hint_icon(tooltip_text: str) -> QLabel:
-        icon = QLabel("?")
-        icon.setToolTip(tooltip_text)
-        icon.setFixedSize(14, 14)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet(f"""
-            QLabel {{
-                color: {colors['text_muted']};
-                background-color: transparent;
-                border: 1px solid {colors['text_muted']};
-                border-radius: 7px;
-                font-size: 8px;
-                font-weight: bold;
-            }}
-        """)
-        icon.setCursor(Qt.CursorShape.PointingHandCursor)
-        return icon
-
-    def _make_shortcut_block(label_text, settings_key, hint_text):
-        block = QWidget()
-        block_layout = QVBoxLayout(block)
-        block_layout.setContentsMargins(0, 0, 0, 0)
-        block_layout.setSpacing(2)
-
-        label = QLabel(label_text)
-        label.setStyleSheet(shortcut_label_style)
-        block_layout.addWidget(label)
-
-        row = QHBoxLayout()
-        row.setSpacing(4)
+    
+    def _make_shortcut_box(title, settings_key, caption_text):
+        box = QGroupBox(title)
+        box.setStyleSheet(get_groupbox_style())
+        box_layout = QVBoxLayout(box)
+        box_layout.setSpacing(6)
+    
+        field_row = QHBoxLayout()
+        field_row.setSpacing(6)
+    
         edit = QKeySequenceEdit()
         edit.setStyleSheet(get_input_style())
-        edit.setMaximumWidth(120)
         existing = settings.get(settings_key, "")
         if existing:
             edit.setKeySequence(QKeySequence.fromString(existing))
-
-        clear_btn = QPushButton("Clear")
+    
+        clear_btn = QToolButton()
+        clear_btn.setText("\u2715")
+        clear_btn.setAutoRaise(True)
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.setToolTip("Clear shortcut")
         clear_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {colors['text_secondary']};
-                border: 1px solid {colors['border']};
-                padding: 2px 10px;
-                border-radius: 3px;
+            QToolButton {{
+                color: {colors['text_muted']};
                 font-size: 11px;
+                padding: 2px;
             }}
-            QPushButton:hover {{
-                background-color: {colors['surface_hover']};
+            QToolButton:hover {{
                 color: {colors['text_primary']};
             }}
         """)
-        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    
+        def _update_clear_visibility():
+            clear_btn.setVisible(not edit.keySequence().isEmpty())
+    
         clear_btn.clicked.connect(edit.clear)
-
-        hint_icon = _make_hint_icon(hint_text)
-
-        row.addWidget(edit)
-        row.addWidget(clear_btn)
-        row.addWidget(hint_icon)
-        block_layout.addLayout(row)
-
-        return block, edit
-
-    update_block, update_shortcut_edit = _make_shortcut_block(
-        "Update Decks:",
+        edit.keySequenceChanged.connect(_update_clear_visibility)
+        _update_clear_visibility()
+    
+        field_row.addWidget(edit, 1)
+        field_row.addWidget(clear_btn)
+        box_layout.addLayout(field_row)
+    
+        caption = QLabel(caption_text)
+        caption.setWordWrap(True)
+        caption.setStyleSheet(hint_caption_style)
+        box_layout.addWidget(caption)
+    
+        return box, edit
+    
+    
+    update_box, update_shortcut_edit = _make_shortcut_box(
+        "Update Decks",
         "shortcut_update_decks",
-        "Must contain at least two modifier keys (e.g. ⌃⌥U). "
-        "Works only in the main Anki window (deck overview).",
+        f"Two modifiers minimum, e.g. {_example_shortcut('U')}.",
     )
-    shortcuts_layout.addWidget(update_block)
-
-    bulk_block, bulk_shortcut_edit = _make_shortcut_block(
-        "Bulk Suggest:",
+    bulk_box, bulk_shortcut_edit = _make_shortcut_box(
+        "Bulk Suggest",
         "shortcut_bulk_suggest",
-        "Must contain at least two modifier keys (e.g. Ctrl+Alt+U). "
-        "Works only in the Browser window.",
+        f"Two modifiers minimum, e.g. {_example_shortcut('B')}.",
     )
-    shortcuts_layout.addStretch()
-    shortcuts_layout.addWidget(bulk_block)
-
-    layout.addWidget(shortcuts_group)
+    
+    # Shortcuts container
+    shortcuts_container = QWidget()
+    shortcuts_row = QHBoxLayout(shortcuts_container)
+    shortcuts_row.setContentsMargins(0, 0, 0, 0)
+    shortcuts_row.setSpacing(12)
+    shortcuts_row.addWidget(update_box, 1)
+    shortcuts_row.addWidget(bulk_box, 1)
+    layout.addWidget(shortcuts_container)
 
     # Media and Statistics container
     media_stats_container = QWidget()
@@ -1174,9 +1166,7 @@ def show_global_settings_dialog(parent_dialog):
         "Import media files from a folder into your Anki collection."
     )
     media_info_label.setWordWrap(True)
-    media_info_label.setStyleSheet(
-        f"color: {colors['text_secondary']}; font-size: 12px;"
-    )
+    media_info_label.setStyleSheet(hint_caption_style)
     media_info_label.setSizePolicy(
         QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
     )
@@ -1205,9 +1195,7 @@ def show_global_settings_dialog(parent_dialog):
         "Share your review history to help the maintainers improve the deck."
     )
     stats_info_label.setWordWrap(True)
-    stats_info_label.setStyleSheet(
-        f"color: {colors['text_secondary']}; font-size: 12px;"
-    )
+    stats_info_label.setStyleSheet(hint_caption_style)
     stats_info_label.setSizePolicy(
         QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
     )
