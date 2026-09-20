@@ -475,11 +475,10 @@ if _IN_MUTMUT_SANDBOX:
             # ``mutants.crowd_anki...``), so __package__ carries that prefix
             # while __name__ stays top-level for mutmut's trampoline keys.
             module.__package__ = ADDON_PACKAGE + (("." + pkg) if pkg else "")
+            sys.modules.setdefault(self._topname, module)
             source = self._path.read_text(encoding="utf-8")
             code = compile(source, str(self._path), "exec")
             exec(code, module.__dict__)
-            # Also reachable by its top-level name without a second copy.
-            sys.modules.setdefault(self._topname, module)
 
     class _SandboxFinder(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, path=None, target=None):

@@ -40,6 +40,7 @@ source_paths = [
     "hooks.py",
     "gear_menu_setup.py",
     "notifications_center.py",
+    "shortcut_validator.py",
     "ui/",
     "crowd_anki/",
 ]
