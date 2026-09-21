@@ -63,18 +63,28 @@ jobs:
         working-directory: plugin_source
         run: python -m mutmut run
 
-      - name: Summarize mutation results
+      - name: Generate mutation results
         working-directory: plugin_source
-        run: |
-          echo "## Mutation results" >> "$GITHUB_STEP_SUMMARY"
-          python -m mutmut results >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Surviving mutants must be triaged (equivalent / missing test / weak assertion)." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload mutmut cache
-        uses: actions/upload-artifact@v4
         if: always()
+        run: |
+          python -m mutmut results > mutmut-results.txt
+
+          {
+            echo "## Mutation results"
+            echo
+            echo '```text'
+            head -n 100 mutmut-results.txt
+            echo '```'
+            echo
+            echo "Full results are available in the mutmut-results artifact."
+            echo
+            echo "Surviving mutants must be triaged (equivalent / missing test / weak assertion)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: mutmut-results
-          path: plugin_source/.mutmut-cache
+          path: mutmut-results.txt
           if-no-files-found: ignore
