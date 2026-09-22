@@ -86,5 +86,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mutmut-results
-          path: mutmut-results.txt
+          path: plugin_source/mutmut-results.txt
           if-no-files-found: ignore
