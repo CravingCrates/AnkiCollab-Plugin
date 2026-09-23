@@ -248,3 +248,95 @@ class TestValidateNotetypeOperations:
         with _patch_logger("error"):
             assert deck._validate_notetype_operations(col, failed) is False
         assert any("Missing notetypes" in f for f in failed)
+
+    def test_uuid_mismatch_fails_validation(self):
+        col = create_mock_collection()
+        model = _model(name="Basic", model_uuid="expected-uuid", model_id=1)
+        deck = _deck_with_models({"m": model})
+        failed = []
+
+        with (
+            patch.object(
+                deck_module.UuidFetcher,
+                "get_model",
+                return_value={"id": 1, UUID_FIELD_NAME: "different-uuid"},
+            ),
+            _patch_logger("error"),
+        ):
+            assert deck._validate_notetype_operations(col, failed) is False
+
+        assert any("UUID validation failures" in item for item in failed)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Existing-note notetype migration
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestExistingNoteNotetypeMigration:
+    def test_migration_groups_note_ids_by_old_and_new_notetype(self):
+        col = create_mock_collection()
+        old = make_notetype(
+            name="Old", fields=["A", "B"], model_id=10, model_uuid="old-uuid"
+        )
+        target = make_notetype(
+            name="Target", fields=["A", "B"], model_id=20, model_uuid="target-uuid"
+        )
+        col.models.add(old)
+        col.models.add(target)
+        col.db.all.return_value = [
+            (101, 10, "note-a"),
+            (102, 10, "note-b"),
+        ]
+
+        note_a = MagicMock(get_uuid=MagicMock(return_value="note-a"))
+        note_a.note_model_uuid = "target-uuid"
+        note_b = MagicMock(get_uuid=MagicMock(return_value="note-b"))
+        note_b.note_model_uuid = "target-uuid"
+        deck = _deck_with_models(
+            {"target": NoteModel(target)},
+        )
+        deck.notes = [note_a, note_b]
+
+        with patch.object(
+            deck,
+            "_apply_notetype_change_optimized",
+            return_value=True,
+        ) as apply_change:
+            assert deck._change_existing_note_types(col, []) is True
+
+        apply_change.assert_called_once_with(col, 10, 20, [101, 102])
+
+    def test_apply_notetype_change_preserves_captured_field_mapping(self):
+        col = create_mock_collection()
+        old = make_notetype(
+            name="Old", fields=["Front", "Back"], model_id=10, model_uuid="old-uuid"
+        )
+        target = make_notetype(
+            name="Target",
+            fields=["Back", "Front"],
+            model_id=20,
+            model_uuid="target-uuid",
+        )
+        col.models.add(old)
+        col.models.add(target)
+        col.db.scalar.return_value = 987
+        deck = _deck_with_models({"target": NoteModel(target)})
+        deck._field_mappings["target-uuid"] = [1, 0]
+
+        with (
+            patch.object(deck_module, "NotetypeId", side_effect=lambda value: value),
+            patch.object(deck_module, "ChangeNotetypeRequest") as request_type,
+        ):
+            assert deck._apply_notetype_change(col, 10, 20, [101]) is True
+
+        request_type.assert_called_once_with(
+            note_ids=[101],
+            old_notetype_id=10,
+            new_notetype_id=20,
+            current_schema=987,
+            new_fields=[1, 0],
+        )
+        col.models.change_notetype_of_notes.assert_called_once_with(
+            request_type.return_value
+        )

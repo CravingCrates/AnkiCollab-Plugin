@@ -28,20 +28,14 @@ import os
 import aqt
 import anki
 import anki.utils
-import requests
-import logging
-import time
 import sentry_sdk
 from anki.collection import Collection
 from aqt.operations import QueryOp
-from aqt.utils import showWarning, tooltip
 from anki.notes import Note as AnkiNote
 from aqt import mw
 from anki.errors import NotFoundError
 
 from anki.utils import point_version
-
-from ...var_defs import API_BASE_URL
 
 CHUNK_SIZE = 1000
 

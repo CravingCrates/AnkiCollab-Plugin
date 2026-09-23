@@ -387,3 +387,61 @@ def get_deck_and_subdecks(deck_id):
     except Exception as e:
         return deck_ids
     return deck_ids
+
+
+def get_noteids_from_uuids(logger, guids):
+    """Get note IDs from GUIDs using prepared statements for better performance."""
+    if not mw.col or not guids:
+        return []
+
+    noteids = []
+    try:
+        batch_size = 1000
+        for i in range(0, len(guids), batch_size):
+            batch = guids[i : i + batch_size]
+            placeholders = ",".join(["?" for _ in batch])
+            query = f"SELECT id FROM notes WHERE guid IN ({placeholders})"
+            noteids.extend(mw.col.db.list(query, *batch))  # type: ignore
+    except Exception as e:
+        logger.error(
+            f"Error getting note IDs from GUIDs using prepared statements: {e}"
+        )
+        for guid in guids:
+            try:
+                note_id = mw.col.db.scalar("SELECT id FROM notes WHERE guid = ?", guid)  # type: ignore
+                if note_id:
+                    noteids.append(note_id)
+            except Exception as e2:
+                logger.error(f"Error getting note ID for GUID {guid}: {e2}")
+    return noteids
+
+
+def get_guids_from_noteids(logger, nids):
+    """Get GUIDs from note IDs using prepared statements for better performance."""
+    if not mw.col or not nids:
+        return []
+    database = mw.col.db
+    if not database:
+        return []
+
+    guids = []
+    try:
+        batch_size = 1000
+        for i in range(0, len(nids), batch_size):
+            batch = nids[i : i + batch_size]
+            placeholders = ",".join(["?" for _ in batch])
+            query = f"SELECT guid FROM notes WHERE id IN ({placeholders})"
+            guids.extend(database.list(query, *batch))
+    except Exception as e:
+        logger.error(
+            f"Error getting GUIDs from note IDs using prepared statements: {e}"
+        )
+        query = "SELECT guid FROM notes WHERE id = ?"
+        for nid in nids:
+            try:
+                guid = database.scalar(query, nid)
+                if guid:
+                    guids.append(guid)
+            except Exception as e2:
+                logger.error(f"Error getting GUID for note ID {nid}: {e2}")
+    return guids

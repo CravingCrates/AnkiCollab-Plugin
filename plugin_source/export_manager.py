@@ -3,10 +3,8 @@ import json
 import os
 import re
 import sys
-from threading import current_thread, main_thread
 import traceback
 import requests
-import functools
 
 import aqt
 import aqt.utils
@@ -35,44 +33,29 @@ from aqt.qt import (
 from aqt import mw
 import aqt.utils
 from aqt.operations import QueryOp
-from anki.utils import ids2str, join_fields, split_fields
-from anki.errors import NotFoundError
 from aqt.errors import show_exception
-from datetime import datetime, timedelta, timezone
-import base64
-import gzip
-import logging
-from concurrent.futures import Future  # Keep for main thread sync
+from datetime import datetime, timezone
 import subprocess
 
-from typing import Callable, cast, Tuple, Dict, List, Any, Optional, Set
-from pathlib import Path
+from typing import Callable, Tuple, Dict, List, Any, Optional, Set
 import os
 
 from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style
-
-from .crowd_anki.representation.note_model import NoteModel
-
-from .crowd_anki.utils.uuid import UuidFetcher
 
 from .utils import get_personal_tags
 
 from .dialogs import RateAddonDialog
 
-from .crowd_anki.anki.adapters.note_model_file_provider import NoteModelFileProvider
-from .media_exporter import gather_media_from_css, gather_media_from_template
-from .crowd_anki.representation.note import Note
 from .crowd_anki.config.config_settings import ConfigSettings
 from .crowd_anki.export.note_sorter import NoteSorter
 from .crowd_anki.utils.disambiguate_uuids import disambiguate_note_model_uuids
 
 from .crowd_anki.representation import *
 from .crowd_anki.representation import deck_initializer
-from .crowd_anki.anki.adapters.anki_deck import AnkiDeck
 from .crowd_anki.representation.deck import Deck
 
 from .auth_manager import auth_manager
-from .var_defs import API_BASE_URL, DEFAULT_PROTECTED_TAGS
+from .var_defs import DEFAULT_PROTECTED_TAGS
 
 from .utils import (
     get_deck_hash_from_did,
@@ -221,10 +204,6 @@ def _handle_operation_aborted(e: Exception, operation_name: str = "Operation"):
             logger.warning(f"Could not show abort dialog: {dialog_error}")
         return True
     return False
-
-
-def do_nothing(count: int):
-    pass
 
 
 def ask_for_rating():
@@ -511,7 +490,7 @@ def _apply_media_reference_updates(
 
     for upd in updates:
         try:
-            note = mw.col.get_note(upd["note_id"])
+            note = mw.col.get_note(upd["note_id"])  # type: ignore
             if not note:
                 continue
             if note.mod != upd["mod"]:
@@ -553,7 +532,7 @@ def _apply_media_reference_updates(
         for start in range(0, len(notes_to_save), BATCH_UPDATE_NOTES_SIZE):
             batch = notes_to_save[start : start + BATCH_UPDATE_NOTES_SIZE]
             try:
-                opchanges = mw.col.update_notes(notes=batch)
+                opchanges = mw.col.update_notes(notes=batch)  # type: ignore
                 if opchanges:
                     combined_opchanges = (
                         opchanges  # keep last; sufficient for editor refresh heuristic
@@ -1043,7 +1022,7 @@ def _submit_deck_op(
     media_files_info: List[Dict],
     media_file_paths: Dict[str, str],
     media_files_refresh: Optional[List[Tuple[str, str]]] = None,
-) -> Optional[Tuple[str, str, str, List[Dict], Dict[str, str], bool]]:
+) -> Optional[Tuple[str, str, List[Dict], Dict[str, str], bool]]:
     assert mw.col is not None, "Collection must be available for deck submission"
     deckHash = get_deck_hash_from_did(did)
     if not deckHash:
@@ -1578,7 +1557,8 @@ def _start_media_upload(
 
 def suggest_notes(nids: List[int], rationale_id: int, editor: Optional[Any] = None):
     """Suggest changes for specific notes."""
-    parent_widget = QApplication.focusWidget() or mw
+    # use editor.widget if provided, else focusWidget or mw as fallback
+    parent_widget = editor.widget if editor else QApplication.focusWidget() or mw
 
     # Check collection availability with user-friendly message
     if not is_collection_available():

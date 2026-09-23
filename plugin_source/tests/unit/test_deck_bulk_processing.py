@@ -396,6 +396,41 @@ class TestSaveDecksAndNotesBulk:
         assert media_result["skipped"] == 1
         assert "missing_files" not in media_result
 
+    def test_media_path_filter_excludes_subdirectories_and_parent_traversal(
+        self, tmp_path
+    ):
+        deck, col, cfg, progress = self._setup()
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        col.media.dir.return_value = str(media_dir)
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    Deck,
+                    "get_media_file_list",
+                    return_value={"safe.png", "nested/unsafe.png", "../escape.png"},
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    Deck,
+                    "_bulk_process_all_notes",
+                    return_value=(1, 99, "_ankicollab_import_x"),
+                )
+            )
+            stack.enter_context(
+                patch.object(Deck, "_create_deck_structure", return_value="Home")
+            )
+            stack.enter_context(patch.object(Note, "_move_notes_to_decks"))
+            stack.enter_context(patch.object(Deck, "_cleanup_temp_deck"))
+
+            _, media_result = deck.save_decks_and_notes_bulk(col, progress, cfg)
+
+        assert media_result["missing_files"] == ["safe.png"]
+        assert "nested/unsafe.png" not in media_result["missing_files"]
+        assert "../escape.png" not in media_result["missing_files"]
+
     def test_no_notes_returns_early(self):
         deck, col, cfg, progress = self._setup()
         deck.notes = []

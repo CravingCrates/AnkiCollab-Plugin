@@ -580,6 +580,52 @@ class TestSuspensionPreservation:
 class TestDeckMovementPreservation:
     """Verify that cards in filtered decks are NOT moved during import."""
 
+    def test_new_cards_move_out_of_temp_deck_and_temp_deck_is_removed(self):
+        """New cards are moved to their mapped deck before the temp deck is removed."""
+        col = create_mock_collection()
+        col.decks._store[1] = {
+            "id": 1,
+            "name": "_ankicollab_import_abc",
+            "crowdanki_uuid": "",
+        }
+        col.decks._store[2] = {
+            "id": 2,
+            "name": "Target::Deck",
+            "crowdanki_uuid": "",
+        }
+        col.db.all.return_value = [("uuid1", 10, 100, 1, 0)]
+
+        Note._move_notes_to_decks(
+            col,
+            {"uuid1": "Target::Deck"},
+            MagicMock(),
+        )
+
+        col.set_deck.assert_called_once_with([100], 2)
+        col.decks.remove.assert_called_once_with([1])
+
+    def test_filtered_card_updates_original_deck_without_moving_card(self):
+        """A filtered card keeps its current deck while its original deck is updated."""
+        col = create_mock_collection()
+        note = MagicMock()
+        note.get_uuid.return_value = "uuid1"
+        mock_anki = MockAnkiNote()
+        mock_anki._card_ids = [100]
+        note.anki_object = mock_anki
+        col.db.all.return_value = [(100, 5, 3)]
+        col.decks.id = MagicMock(return_value=10)
+        filtered_card = MagicMock()
+        col.get_card.return_value = filtered_card
+
+        config = MagicMock(ignore_deck_movement=False)
+        Note._bulk_update_notes_preserving_placement(
+            col, [note], {"uuid1": "Target::Deck"}, config
+        )
+
+        assert filtered_card.odid == 10
+        col.update_cards.assert_called_once_with([filtered_card])
+        col.set_deck.assert_not_called()
+
     def test_filtered_deck_cards_not_moved(self):
         """Cards in filtered decks (odid != 0) must not be moved."""
         col = create_mock_collection()

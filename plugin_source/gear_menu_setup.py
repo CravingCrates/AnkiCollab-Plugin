@@ -20,7 +20,7 @@ from .var_defs import API_BASE_URL
 try:
     from aqt.browser.browser import Browser
 except ImportError:
-    from aqt.browser import Browser
+    from aqt.browser import Browser  # type: ignore
 
 from aqt.qt import *
 from aqt.qt import (

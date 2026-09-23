@@ -1,14 +1,12 @@
 from collections import defaultdict
 import json
-import logging
-import os
 import shutil
 import tempfile
+import os
 import time
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
 
 import requests
 from datetime import datetime, timedelta, timezone
@@ -16,15 +14,11 @@ from datetime import datetime, timedelta, timezone
 import aqt
 import aqt.utils
 from aqt.operations import QueryOp
-from anki.errors import NotFoundError
-from anki.notes import NoteId
 
 from aqt.qt import *
 from aqt.qt import QDialog, QApplication, QMessageBox
 from aqt import mw
-from anki.decks import DeckId
 
-from .var_defs import API_BASE_URL
 from .api_client import api_client
 
 from .dialogs import (
@@ -40,16 +34,14 @@ from .crowd_anki.importer.import_dialog import ImportConfig
 
 from .utils import (
     create_backup,
-    get_local_deck_from_id,
     DeckManager,
     get_logger,
     get_personal_tags,
     is_collection_available,
-    ensure_collection,
-    CollectionUnavailableError,
     OperationAbortedError,
     check_collection_or_abort,
     BackupFailedError,
+    get_noteids_from_uuids,
 )
 
 from .stats import ReviewHistory, on_stats_upload_done, update_stats_timestamp
@@ -57,20 +49,21 @@ from .stats import ReviewHistory, on_stats_upload_done, update_stats_timestamp
 import base64
 import gzip
 
-import logging
-
 logger = get_logger("ankicollab.import_manager")
 
 CACHE_BOOTSTRAP_MODE = "cache-bootstrap"
 DEFAULT_REQUEST_TIMEOUT = (30, 120)  # connect, read
-
-
-def do_nothing(count: int):
-    pass
+MAX_DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_CHUNK_SIZE = 64 * 1024
+MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB — sanity cap on server-supplied size
 
 
 class CacheBootstrapError(RuntimeError):
     """Raised when a cache bootstrap payload cannot be processed."""
+
+
+class CacheArchiveRefreshError(CacheBootstrapError):
+    """Raised when a fresh cache archive URL is required."""
 
 
 def _notify_cache_bootstrap_failure() -> None:
@@ -97,20 +90,12 @@ def _fetch_manifest(manifest_url: str) -> Dict[str, Any]:
 
 
 def _safe_destination(root: Path, relative_path: str) -> Path:
+    root = root.resolve()
     destination = (root / relative_path).resolve()
-    root_resolved = root.resolve()
-
-    if os.name == "nt":
-        if not str(destination).lower().startswith(str(root_resolved).lower()):
-            raise CacheBootstrapError(
-                f"Media path escapes target directory: {relative_path}"
-            )
-    else:
-        if not str(destination).startswith(str(root_resolved)):
-            raise CacheBootstrapError(
-                f"Media path escapes target directory: {relative_path}"
-            )
-
+    if not destination.is_relative_to(root):
+        raise CacheBootstrapError(
+            f"Media path escapes target directory: {relative_path}"
+        )
     return destination
 
 
@@ -162,6 +147,9 @@ def _extract_media_entries(archive: zipfile.ZipFile, media_info: Dict[str, Any])
         if not relative_name:
             continue
 
+        if (entry.external_attr >> 16) & 0o170000 == 0o120000:
+            raise CacheBootstrapError(f"Symlink in archive rejected: {entry.filename}")
+
         destination = _safe_destination(media_dir, relative_name)
         destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -182,130 +170,222 @@ def _subscription_from_manifest(
     manifest: Dict[str, Any],
     archive_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    try:
-        if not archive_url:
-            raise CacheBootstrapError("Cache manifest missing archive URL")
-        response = requests.get(
-            archive_url, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        logger.error(
-            "Failed to download cache archive for %s from %s: %s",
-            deck_hash,
-            archive_url,
-            exc,
-        )
-        raise CacheBootstrapError("Unable to download cache archive") from exc
+    if not archive_url:
+        raise CacheBootstrapError("Cache manifest missing archive URL")
 
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_path = Path(tmp_file.name)
-        try:
-            total_size_str = response.headers.get("Content-Length")
-            total_size = (
-                int(total_size_str)
-                if total_size_str and total_size_str.isdigit()
-                else 0
-            )
-            downloaded = 0
-            cancelled = False
-            last_ui_update = 0.0
-            started_at = time.monotonic()
-            last_rate_sample_at = started_at
-            last_rate_sample_bytes = 0
-            smoothed_bps = 0.0
-
-            def _format_eta(seconds: int) -> str:
-                eta_seconds = max(0, seconds)
-                if eta_seconds < 10:
-                    return ""
-                if eta_seconds < 60:
-                    return "less than a minute left"
-                if eta_seconds < 3600:
-                    minutes = int((eta_seconds + 59) // 60)
-                    return f"about {minutes} min left"
-
-                hours = eta_seconds // 3600
-                minutes = int(((eta_seconds % 3600) + 59) // 60)
-                if minutes == 60:
-                    hours += 1
-                    minutes = 0
-                if minutes == 0:
-                    return f"about {hours} h left"
-                return f"about {hours} h {minutes} min left"
-
-            def update_progress(
-                dl_bytes: int, tot_bytes: int, speed_bps: float, elapsed: float
-            ) -> None:
-                if not getattr(aqt.mw, "progress", None):
-                    return
-
-                if tot_bytes > 0:
-                    bar_value = min(1000, int((dl_bytes / tot_bytes) * 1000))
-                    label = "Downloading deck..."
-                    if speed_bps > 0 and elapsed >= 8 and dl_bytes < tot_bytes:
-                        remaining_seconds = int((tot_bytes - dl_bytes) / speed_bps)
-                        eta = _format_eta(remaining_seconds)
-                        if eta:
-                            label = f"Downloading deck... {eta}"
-
-                    aqt.mw.progress.update(label=label, value=bar_value, max=1000)
-                else:
-                    label = "Downloading deck..."
-
-                    aqt.mw.progress.update(label=label)
-
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if getattr(aqt.mw, "progress", None) and aqt.mw.progress.want_cancel():
-                    cancelled = True
-                    break
-
-                if chunk:
-                    tmp_file.write(chunk)
-                    downloaded += len(chunk)
-
-                    now = time.monotonic()
-                    rate_window = now - last_rate_sample_at
-                    if rate_window >= 0.5:
-                        window_bytes = downloaded - last_rate_sample_bytes
-                        instant_bps = (
-                            window_bytes / rate_window if rate_window > 0 else 0.0
-                        )
-                        if smoothed_bps <= 0:
-                            smoothed_bps = instant_bps
-                        else:
-                            smoothed_bps = (0.12 * instant_bps) + (0.88 * smoothed_bps)
-                        last_rate_sample_at = now
-                        last_rate_sample_bytes = downloaded
-
-                    should_update = now - last_ui_update >= 0.4
-                    if total_size > 0 and downloaded >= total_size:
-                        should_update = True
-
-                    if should_update:
-                        aqt.mw.taskman.run_on_main(
-                            lambda d=downloaded, t=total_size, s=smoothed_bps, e=(
-                                now - started_at
-                            ): update_progress(d, t, s, e)
-                        )
-                        last_ui_update = now
-
-            if cancelled:
-                response.close()
-                raise OperationAbortedError(
-                    "Cache bootstrap download cancelled by user"
-                )
-
-            if downloaded > 0:
-                aqt.mw.taskman.run_on_main(
-                    lambda d=downloaded, t=total_size, s=smoothed_bps, e=(
-                        time.monotonic() - started_at
-                    ): update_progress(d, t, s, e)
-                )
-        finally:
-            tmp_file.flush()
+    tmp_path: Optional[Path] = None
 
     try:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            try:
+                session = api_client.session_with_retries()
+                downloaded = 0
+                ignored_range = 0
+                total_size = 0
+                last_ui_update = 0.0
+                started_at = time.monotonic()
+                last_rate_sample_at = started_at
+                last_rate_sample_bytes = 0
+                smoothed_bps = 0.0
+
+                def _format_eta(seconds: int) -> str:
+                    eta_seconds = max(0, seconds)
+                    if eta_seconds < 10:
+                        return ""
+                    if eta_seconds < 60:
+                        return "less than a minute left"
+                    if eta_seconds < 3600:
+                        minutes = int((eta_seconds + 59) // 60)
+                        return f"about {minutes} min left"
+                    hours = eta_seconds // 3600
+                    minutes = int(((eta_seconds % 3600) + 59) // 60)
+                    if minutes == 60:
+                        hours += 1
+                        minutes = 0
+                    if minutes == 0:
+                        return f"about {hours} h left"
+                    return f"about {hours} h {minutes} min left"
+
+                def update_progress(
+                    dl_bytes: int, tot_bytes: int, speed_bps: float, elapsed: float
+                ) -> None:
+                    if not getattr(aqt.mw, "progress", None):
+                        return
+                    if tot_bytes > 0:
+                        bar_value = min(1000, int((dl_bytes / tot_bytes) * 1000))
+                        label = "Downloading deck..."
+                        if speed_bps > 0 and elapsed >= 8 and dl_bytes < tot_bytes:
+                            remaining_seconds = int((tot_bytes - dl_bytes) / speed_bps)
+                            eta = _format_eta(remaining_seconds)
+                            if eta:
+                                label = f"Downloading deck... {eta}"
+                        aqt.mw.progress.update(label=label, value=bar_value, max=1000)
+                    else:
+                        aqt.mw.progress.update(label="Downloading deck...")
+
+                for attempt in range(MAX_DOWNLOAD_ATTEMPTS):
+                    headers = {"Range": f"bytes={downloaded}-"} if downloaded else {}
+                    response = None
+                    try:
+                        response = session.get(
+                            archive_url,
+                            headers=headers,
+                            stream=True,
+                            timeout=DEFAULT_REQUEST_TIMEOUT,
+                            verify=True,
+                        )
+
+                        if response.status_code in (401, 403):
+                            raise CacheArchiveRefreshError(
+                                "Cache archive URL expired or was rejected"
+                            )
+
+                        if response.status_code == 416:
+                            downloaded = 0
+                            tmp_file.seek(0)
+                            tmp_file.truncate()
+                            response.close()
+                            continue
+
+                        if downloaded and response.status_code == 200:
+                            ignored_range += 1
+                            logger.warning(
+                                "Cache archive server ignored Range request for %s "
+                                "(%d/3)",
+                                deck_hash,
+                                ignored_range,
+                            )
+                            if ignored_range >= 3:
+                                raise CacheBootstrapError(
+                                    "Cache archive endpoint does not support resume"
+                                )
+                            downloaded = 0
+                            tmp_file.seek(0)
+                            tmp_file.truncate()
+                        elif response.status_code not in (200, 206):
+                            response.raise_for_status()
+
+                        if downloaded == 0:
+                            total_size_str = response.headers.get("Content-Length")
+                            total_size = (
+                                int(total_size_str)
+                                if total_size_str and total_size_str.isdigit()
+                                else 0
+                            )
+                            content_range = response.headers.get("Content-Range", "")
+                            if "/" in content_range:
+                                try:
+                                    total_size = int(content_range.rsplit("/", 1)[1])
+                                except ValueError:
+                                    pass
+
+                            # Guard against a bogus/hostile Content-Length.
+                            if total_size > MAX_ARCHIVE_BYTES:
+                                raise CacheBootstrapError(
+                                    f"Cache archive too large "
+                                    f"({total_size} bytes, max {MAX_ARCHIVE_BYTES})"
+                                )
+
+                        if downloaded:
+                            tmp_file.seek(downloaded)
+
+                        cancelled = False
+                        for chunk in response.iter_content(
+                            chunk_size=DOWNLOAD_CHUNK_SIZE
+                        ):
+                            if (
+                                getattr(aqt.mw, "progress", None)
+                                and aqt.mw.progress.want_cancel()
+                            ):
+                                cancelled = True
+                                break
+
+                            if chunk:
+                                tmp_file.write(chunk)
+                                downloaded += len(chunk)
+
+                                # Guard against streams without Content-Length
+                                # (chunked transfer, HTTP/2 without length).
+                                if downloaded > MAX_ARCHIVE_BYTES:
+                                    raise CacheBootstrapError(
+                                        f"Cache archive exceeded size limit "
+                                        f"({MAX_ARCHIVE_BYTES} bytes)"
+                                    )
+
+                                now = time.monotonic()
+                                rate_window = now - last_rate_sample_at
+                                if rate_window >= 0.5:
+                                    window_bytes = downloaded - last_rate_sample_bytes
+                                    instant_bps = (
+                                        window_bytes / rate_window
+                                        if rate_window > 0
+                                        else 0.0
+                                    )
+                                    if smoothed_bps <= 0:
+                                        smoothed_bps = instant_bps
+                                    else:
+                                        smoothed_bps = (0.12 * instant_bps) + (
+                                            0.88 * smoothed_bps
+                                        )
+                                    last_rate_sample_at = now
+                                    last_rate_sample_bytes = downloaded
+
+                                should_update = now - last_ui_update >= 0.4
+                                if total_size > 0 and downloaded >= total_size:
+                                    should_update = True
+
+                                if should_update:
+                                    aqt.mw.taskman.run_on_main(
+                                        lambda d=downloaded, t=total_size, s=smoothed_bps, e=(
+                                            now - started_at
+                                        ): update_progress(
+                                            d, t, s, e
+                                        )
+                                    )
+                                    last_ui_update = now
+
+                        if cancelled:
+                            raise OperationAbortedError(
+                                "Cache bootstrap download cancelled by user"
+                            )
+
+                        if total_size and downloaded < total_size:
+                            raise requests.exceptions.ChunkedEncodingError(
+                                "Cache archive transfer ended before Content-Length"
+                            )
+
+                        if downloaded > 0:
+                            aqt.mw.taskman.run_on_main(
+                                lambda d=downloaded, t=total_size, s=smoothed_bps, e=(
+                                    time.monotonic() - started_at
+                                ): update_progress(d, t, s, e)
+                            )
+                        break
+                    except CacheArchiveRefreshError:
+                        raise
+                    except OperationAbortedError:
+                        raise
+                    except requests.RequestException as exc:
+                        logger.warning(
+                            "Cache archive transfer interrupted for %s at %d bytes "
+                            "(attempt %d/%d): %s",
+                            deck_hash,
+                            downloaded,
+                            attempt + 1,
+                            MAX_DOWNLOAD_ATTEMPTS,
+                            exc,
+                        )
+                        if attempt == MAX_DOWNLOAD_ATTEMPTS - 1:
+                            raise CacheBootstrapError(
+                                "Unable to download cache archive"
+                            ) from exc
+                    finally:
+                        if response is not None:
+                            response.close()
+            finally:
+                tmp_file.flush()
+
         with zipfile.ZipFile(tmp_path) as archive:
             deck_info = manifest.get("deck_data", {})
             deck_path = deck_info.get("path")
@@ -361,21 +441,12 @@ def _subscription_from_manifest(
             )
 
             return subscription
-    except requests.exceptions.ChunkedEncodingError as exc:
-        # Surface a user-friendly error when the upstream terminates the transfer early
-        logger.error("Cache archive download interrupted for %s: %s", deck_hash, exc)
-        raise CacheBootstrapError("Download interrupted; please retry.") from exc
-    except OperationAbortedError:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
-        raise
     finally:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def _resolve_cache_bootstrap_entries(entries: List[Any]) -> List[Any]:
@@ -466,45 +537,6 @@ def update_deck_stats_enabled(given_deck_hash, stats_enabled):
                 )
 
 
-def get_noteids_from_uuids(guids):
-    """Get note IDs from GUIDs using prepared statements for better performance."""
-    if not mw.col or not guids:
-        return []
-
-    noteids = []
-    try:
-        # Process in batches to avoid memory issues with large GUID lists
-        batch_size = 1000  # Process 1000 GUIDs at a time
-
-        for i in range(0, len(guids), batch_size):
-            batch = guids[i : i + batch_size]
-
-            # Use prepared statement with IN clause for batch processing
-            placeholders = ",".join(["?" for _ in batch])
-            query = f"SELECT id FROM notes WHERE guid IN ({placeholders})"
-
-            # Pass parameters using *batch to unpack the list
-            batch_results = mw.col.db.list(query, *batch)  # type: ignore
-            noteids.extend(batch_results)
-
-    except Exception as e:
-        logger.error(
-            f"Error getting note IDs from GUIDs using prepared statements: {e}"
-        )
-        # Fallback to individual queries if batch processing fails
-        for guid in guids:
-            try:
-                query = "SELECT id FROM notes WHERE guid = ?"
-                note_id = mw.col.db.scalar(query, guid)  # type: ignore
-                if note_id:
-                    noteids.append(note_id)
-            except Exception as e2:
-                logger.error(f"Error getting note ID for GUID {guid}: {e2}")
-                continue
-
-    return noteids
-
-
 def delete_notes(nids):
     if not nids:
         return
@@ -516,48 +548,6 @@ def delete_notes(nids):
             "Deleted %d notes." % len(nids), parent=QApplication.focusWidget()
         )
     )
-
-
-def get_guids_from_noteids(nids):
-    """Get GUIDs from note IDs using prepared statements for better performance."""
-    if not mw.col or not nids:
-        return []
-    database = mw.col.db
-    if not database:
-        return []
-
-    guids = []
-    try:
-        # Process in batches to avoid memory issues with large note ID lists
-        batch_size = 1000  # Process 1000 note IDs at a time
-
-        for i in range(0, len(nids), batch_size):
-            batch = nids[i : i + batch_size]
-
-            # Use prepared statement with IN clause for batch processing
-            placeholders = ",".join(["?" for _ in batch])
-            query = f"SELECT guid FROM notes WHERE id IN ({placeholders})"
-
-            # Pass parameters using *batch to unpack the list
-            batch_results = database.list(query, *batch)
-            guids.extend(batch_results)
-
-    except Exception as e:
-        logger.error(
-            f"Error getting GUIDs from note IDs using prepared statements: {e}"
-        )
-        # Fallback to individual queries if batch processing fails
-        query = "SELECT guid FROM notes WHERE id = ?"
-        for nid in nids:
-            try:
-                guid = database.scalar(query, nid)
-                if guid:
-                    guids.append(guid)
-            except Exception as e2:
-                logger.error(f"Error getting GUID for note ID {nid}: {e2}")
-                continue
-
-    return guids
 
 
 def open_browser_with_nids(nids):
@@ -664,7 +654,7 @@ def _on_deck_installed(
     if deleted_notes:
         logger.info(f"Processing {len(deleted_notes)} deleted notes...")
         # Handle deleted Notes
-        deleted_nids = get_noteids_from_uuids(subscription["deleted_notes"])
+        deleted_nids = get_noteids_from_uuids(logger, subscription["deleted_notes"])
         logger.info(f"Found {len(deleted_nids)} note IDs for deleted notes.")
         if deleted_nids:
             del_notes_dialog = DeletedNotesDialog(deleted_nids, deck_hash, parent=mw)
@@ -741,10 +731,7 @@ def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
                 if deck_name:
                     dialog = AskShareStatsDialog(deck_name, parent=mw)
                     choice = dialog.exec()
-                    if choice == QDialog.DialogCode.Accepted:
-                        stats_enabled = True
-                    else:
-                        stats_enabled = False
+                    stats_enabled = choice == QDialog.DialogCode.Accepted
 
                     if dialog.isChecked():
                         details["share_stats"] = stats_enabled
@@ -1052,7 +1039,7 @@ def remove_nonexistent_decks():
                         )
                     )
                 else:
-                    webresult = json.loads(response.content)
+                    webresult = json.loads(response.content)  # type: ignore
                     # we need to remove all the decks that don't exist anymore from the strings_data
                     strings_data = mw.addonManager.getConfig(__name__)
                     if strings_data is not None and len(strings_data) > 0:
@@ -1127,12 +1114,40 @@ def async_start_pull(input_hash, silent=False):
                 "/pullChanges", strings_data_to_send, auth=False
             )
             if response.status_code == 200:
-                compressed_data = base64.b64decode(response.content)
+                compressed_data = base64.b64decode(response.content)  # type: ignore
                 decompressed_data = gzip.decompress(compressed_data)
                 webresult = json.loads(decompressed_data.decode("utf-8"))
 
                 try:
                     webresult = _resolve_cache_bootstrap_entries(webresult)
+                except CacheArchiveRefreshError as exc:
+                    logger.warning(
+                        "Cache archive URL rejected; requesting a fresh cache URL: %s",
+                        exc,
+                    )
+                    response = api_client.post_json(
+                        "/pullChanges", strings_data_to_send, auth=False
+                    )
+                    if response.status_code == 200:
+                        compressed_data = base64.b64decode(response.content)  # type: ignore
+                        decompressed_data = gzip.decompress(compressed_data)
+                        webresult = json.loads(decompressed_data.decode("utf-8"))
+                        try:
+                            webresult = _resolve_cache_bootstrap_entries(webresult)
+                        except CacheBootstrapError as refresh_exc:
+                            logger.error(
+                                "Cache bootstrap failed after refreshing archive URL: %s",
+                                refresh_exc,
+                            )
+                            aqt.mw.taskman.run_on_main(_notify_cache_bootstrap_failure)
+                            return (None, None, silent)
+                    else:
+                        logger.error(
+                            "Unable to refresh cache archive URL (HTTP %s)",
+                            response.status_code,
+                        )
+                        aqt.mw.taskman.run_on_main(_notify_cache_bootstrap_failure)
+                        return (None, None, silent)
                 except CacheBootstrapError as exc:
                     logger.error("Cache bootstrap failed: %s", exc)
                     # Surface a user-visible error on the main thread.

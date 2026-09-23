@@ -187,7 +187,7 @@ def add_to_table(line_edit, table, dialog):
 
 def update_local_deck(input_hash, new_deck, popup_dialog, subs_dialog):
     strings_data = mw.addonManager.getConfig(__name__)
-    deck_id = mw.col.decks.id(new_deck)  # Get deck ID
+    deck_id = mw.col.decks.id(new_deck)  # Get deck ID # type: ignore
     if strings_data and input_hash in strings_data:
         strings_data[input_hash]["deckId"] = deck_id
         mw.addonManager.writeConfig(__name__, strings_data)
@@ -239,13 +239,14 @@ def on_edit_list():
     # Style the table
     table.setAlternatingRowColors(True)
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    table.verticalHeader().setVisible(False)
-    table.verticalHeader().setDefaultSectionSize(
+    table.verticalHeader().setVisible(False)  # type: ignore
+    table.verticalHeader().setDefaultSectionSize(  # type: ignore
         36
     )  # Default row height that works across DPI
-    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)  # type: ignore
 
     header = table.horizontalHeader()
+    assert header is not None
     header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
     header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
     header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -1021,12 +1022,10 @@ def show_global_settings_dialog(parent_dialog):
         "Automatically approve outgoing changes for your decks. Only works if you are a maintainer."
     )
 
-    error_reporting_cb = QCheckBox("Send anonymous error reports (recommended)")
+    error_reporting_cb = QCheckBox("Send error reports (recommended)")
     error_reporting_cb.setStyleSheet(checkbox_style)
     error_reporting_cb.setChecked(bool(settings.get("error_reporting_enabled", False)))
-    error_reporting_cb.setToolTip(
-        "Help us fix bugs faster - no personal data is collected"
-    )
+    error_reporting_cb.setToolTip("Help us fix bugs faster")
 
     remember_suggest_state_cb = QCheckBox(
         "Remember 'Suggest on AnkiCollab' state between sessions"

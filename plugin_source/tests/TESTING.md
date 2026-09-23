@@ -10,7 +10,7 @@ python -m pytest tests/ -k utils   # run only tests matching "utils"
 python -m pytest tests/integration -m integration   # run only workflow-level tests
 ```
 
-**Current test count: 831** (CI verifies this against `pytest --collect-only`; if you
+**Current test count: 891** (CI verifies this against `pytest --collect-only`; if you
 add or remove tests, update this number in the same change).
 
 The core data-integrity files (`crowd_anki/representation/deck.py`,

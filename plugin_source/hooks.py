@@ -25,18 +25,17 @@ from .media_manager import MediaManager  # Import List
 
 from .export_manager import *
 from .import_manager import *
-from .utils import get_deck_hash_from_card
 
 from .gear_menu_setup import (
     add_browser_menu_item,
     on_deck_browser_will_show_options_menu,
 )
 from .dialogs import AddChangelogDialog, ProtectFieldsDialog
-from .var_defs import PREFIX_PROTECTED_FIELDS
+from .var_defs import API_BASE_URL, PREFIX_PROTECTED_FIELDS
 
 from .auth_manager import auth_manager
 from .notifications_center import refresh_notifications, register_sync_refresh_hook
-from .utils import get_logger
+from .utils import get_logger, get_guids_from_noteids, get_deck_hash_from_card
 import requests
 
 logger = get_logger("ankicollab.hooks")
@@ -91,7 +90,7 @@ def bulk_suggest_handler(browser: Browser, nids: Sequence[NoteId]) -> None:
             "Please use the regular suggest button for single notes", parent=browser
         )
         return
-    suggest_notes(nids, 9)
+    suggest_notes(nids, 9)  # type: ignore
 
 
 def trigger_bulk_suggest_from_browser(browser: Browser) -> None:
@@ -99,6 +98,9 @@ def trigger_bulk_suggest_from_browser(browser: Browser) -> None:
 
 
 def remove_notes(nids: Sequence[NoteId], window=None) -> None:
+    if not aqt.mw.col:
+        return
+
     if not auth_manager.is_logged_in():
         showInfo(
             "Please log in to remove notes.",
@@ -133,7 +135,7 @@ def remove_notes(nids: Sequence[NoteId], window=None) -> None:
             )
             return
 
-    guids = get_guids_from_noteids(nids)
+    guids = get_guids_from_noteids(logger, nids)
     if not guids:
         showInfo(
             "Could not retrieve unique identifiers for the selected notes.",
@@ -207,7 +209,7 @@ def protect_fields_handler(browser: Browser, nids: Sequence[NoteId]) -> None:
     # Get the note types (mids) of selected notes
     mids = set()
     for nid in nids:
-        note = aqt.mw.col.get_note(nid)
+        note = aqt.mw.col.get_note(nid)  # type: ignore
         if note:
             mids.add(note.mid)
 
@@ -219,7 +221,7 @@ def protect_fields_handler(browser: Browser, nids: Sequence[NoteId]) -> None:
         return
 
     # Get field names from the first note
-    first_note = aqt.mw.col.get_note(nids[0])
+    first_note = aqt.mw.col.get_note(nids[0])  # type: ignore
     field_names = list(first_note.keys())
 
     # Get currently protected fields from tags (for single note selection)
@@ -257,6 +259,10 @@ def protect_fields_handler(browser: Browser, nids: Sequence[NoteId]) -> None:
 
     def update_notes_task():
         """Background task to update note tags."""
+
+        if not aqt.mw.col:
+            return  # pointless, but to silence the static python analyzer
+
         notes = [aqt.mw.col.get_note(nid) for nid in nids]
         for note in notes:
             # Remove existing protection tags
@@ -328,6 +334,9 @@ def _get_protected_fields_from_tags(note) -> List[str]:
 
 
 def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
+    if not aqt.mw.col:
+        return  # pointless, but to silence the static python analyzer
+
     if not auth_manager.is_logged_in():
         return  # Don't add menu items if not logged in
 
@@ -416,7 +425,7 @@ def create_note_links_handler(
 
     # Validate all notes belong to the subscriber deck
     for nid in nids:
-        note = aqt.mw.col.get_note(nid)
+        note = aqt.mw.col.get_note(nid)  # type: ignore
         if not note or not note.cards():
             continue
         note_hash, _ = get_deck_hash_from_card(note.cards()[0])
@@ -455,7 +464,7 @@ def create_note_links_handler(
             if not ok or not base_hash:
                 return
 
-    guids = get_guids_from_noteids(nids)
+    guids = get_guids_from_noteids(logger, nids)
     if not guids:
         showInfo("Could not retrieve note GUIDs.", parent=browser)
         return
@@ -571,7 +580,7 @@ def _get_linked_base_hashes(subscriber_hash: str) -> List[str]:
 
 
 def _open_note_on_ankicollab(note_id: NoteId, editor=None) -> None:
-    note = mw.col.get_note(note_id)
+    note = mw.col.get_note(note_id)  # type: ignore
     if not note or not note.cards():
         showInfo(
             "Could not find the note or its cards.",
@@ -605,11 +614,11 @@ def _open_note_on_ankicollab(note_id: NoteId, editor=None) -> None:
 
 def init_editor_card(buttons: List[str], editor):
     if not auth_manager.is_logged_in():
-        return buttons
+        return
 
     # Avoid duplicates in the "Add" Window
-    if isinstance(editor.parentWindow, aqt.addcards.AddCards):
-        return buttons
+    if isinstance(editor.parentWindow, aqt.addcards.AddCards):  # type: ignore
+        return
 
     b = editor.addButton(
         icon=None,
@@ -635,7 +644,6 @@ def init_editor_card(buttons: List[str], editor):
 
     buttons.append(b)
     buttons.append(b2)
-    return buttons
 
 
 def init_add_card(addCardsDialog):
@@ -718,7 +726,7 @@ def make_new_card(note: NoteId):
     if not add_cards_window:
         # Try finding the active AddCards window (less reliable)
         for widget in QApplication.topLevelWidgets():
-            if isinstance(widget, aqt.addcards.AddCards):
+            if isinstance(widget, aqt.addcards.AddCards):  # type: ignore
                 add_cards_window = widget
                 break
 
@@ -729,7 +737,7 @@ def make_new_card(note: NoteId):
     )
 
     if checkbox and checkbox.isChecked():
-        suggest_notes([note.id], 6)  # New card rationale
+        suggest_notes([note.id], 6)  # type: ignore # New card rationale
 
 
 def request_update(silent) -> None:
@@ -818,7 +826,7 @@ def hk_get_image_dimensions(image_path: str) -> Tuple[int, int]:
                 else:
                     raise ValueError("Unsupported WebP file")
                 return width, height
-    return original_get_image_dimensions_ioe(image_path)
+    return original_get_image_dimensions_ioe(image_path)  # type: ignore
 
 
 def patch_image_occlusion_enhanced():
@@ -831,8 +839,8 @@ def patch_image_occlusion_enhanced():
         return False
     global original_get_image_dimensions_ioe
     original_get_image_dimensions_ioe = ioe_utils.get_image_dimensions
-    ioe_utils.get_image_dimensions = hk_get_image_dimensions
-    ioe_add.get_image_dimensions = hk_get_image_dimensions
+    ioe_utils.get_image_dimensions = hk_get_image_dimensions  # type: ignore
+    ioe_add.get_image_dimensions = hk_get_image_dimensions  # type: ignore
     return True
 
 
@@ -842,6 +850,7 @@ def onProfileLoaded():
 
     if not main.media_manager.is_manager_available():  # re-init after profile switching
         main.media_manager = MediaManager(api_base_url=API_BASE_URL, media_folder="")
+    assert mw.col is not None
     main.media_manager.set_media_folder(mw.col.media.dir())
 
     autoUpdate()

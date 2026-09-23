@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import mimetypes
 import os
 import time
@@ -10,7 +9,6 @@ import uuid
 import requests
 import base64
 import binascii
-import threading
 from functools import wraps
 from pathlib import Path
 from typing import Dict, List, NoReturn, Optional, Set, Tuple, Type, Union, cast
