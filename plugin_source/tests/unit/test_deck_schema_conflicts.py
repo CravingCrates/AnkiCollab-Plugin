@@ -11,6 +11,7 @@ must be merged into (or renamed out of) the user's local collection.
 """
 
 import uuid
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -143,7 +144,7 @@ class TestCreateAndUpdateNotetypes:
     def test_collection_none_returns_false(self):
         deck = _deck_with_models({"m": _model()})
         failed = []
-        assert deck._create_and_update_notetypes(None, failed) is False
+        assert deck._create_and_update_notetypes(cast(Any, None), failed) is False
         assert any("Collection is None" in f for f in failed)
 
     def test_new_notetype_created(self):
@@ -266,6 +267,28 @@ class TestValidateNotetypeOperations:
             assert deck._validate_notetype_operations(col, failed) is False
 
         assert any("UUID validation failures" in item for item in failed)
+
+
+class TestSaveMetadataMutationOrdering:
+    def test_save_metadata_saves_configs_and_deck_after_notetypes(self):
+        deck = _deck_with_models({})
+        config = MagicMock()
+        deck.metadata = DeckMetadata(deck_configs={"cfg": config}, models={})
+        collection = create_mock_collection()
+        events = []
+
+        deck.handle_notetype_changes = MagicMock(
+            side_effect=lambda col: events.append("notetypes") or True
+        )
+        config.save_to_collection.side_effect = lambda col: events.append("config")
+        deck._save_deck = MagicMock(
+            side_effect=lambda col, parent, home, name: events.append("deck")
+        )
+
+        deck.save_metadata(collection, home_deck="Home")
+
+        assert events == ["notetypes", "config", "deck"]
+        deck._save_deck.assert_called_once_with(collection, "", "Home", "Root")
 
 
 # ──────────────────────────────────────────────────────────────────────

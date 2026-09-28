@@ -5,6 +5,7 @@ path safety, optional tags, note ID lookups.
 import os
 import zipfile
 import pytest
+import import_manager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import base64
@@ -29,7 +30,10 @@ from import_manager import (
     CacheBootstrapError,
     CacheArchiveRefreshError,
     async_start_pull,
+    _install_deck_op,
+    _on_deck_installed,
 )
+from crowd_anki.representation.deck import Deck
 
 # ──────────────────────────────────────────────────────────────────────
 # CacheBootstrapError
@@ -261,6 +265,92 @@ class TestWantsToShareStats:
         enabled, ts = wants_to_share_stats("hash_s")
         assert enabled is True
         assert ts == 12345
+
+
+class TestCollectionMutatingImportOperations:
+    def test_install_deck_op_saves_metadata_then_bulk_notes(self, mw_mock):
+        col = mw_mock.col
+        deck = MagicMock(spec=Deck)
+        deck.calculate_total_work.return_value = 12
+        deck.create_unified_progress_tracker.return_value = "progress"
+        deck.save_decks_and_notes_bulk.return_value = (12, {"success": True})
+        config = MagicMock(home_deck="Home")
+
+        with (
+            patch(
+                "import_manager.check_collection_or_abort", return_value=col
+            ) as check,
+            patch("import_manager.deck_initializer"),
+        ):
+            result = _install_deck_op(deck, config)
+
+        assert result == (12, {"success": True})
+        deck.save_metadata.assert_called_once_with(col, "Home")
+        deck.calculate_total_work.assert_called_once_with()
+        deck.create_unified_progress_tracker.assert_called_once_with(12)
+        deck.save_decks_and_notes_bulk.assert_called_once_with(
+            collection=col, progress_tracker="progress", import_config=config
+        )
+        assert check.call_count == 2
+        assert [call.args[0] for call in check.call_args_list] == [
+            "deck_installation_start",
+            "after_metadata_save",
+        ]
+
+    def test_on_deck_installed_registers_new_subscription_and_updates_timestamp(
+        self, mw_mock
+    ):
+        deck = MagicMock()
+        deck.anki_dict = {"name": "Imported"}
+        subscription = {
+            "deck_hash": "hash1",
+            "stats_enabled": False,
+            "deleted_notes": [],
+            "deck_last_modified": "2026-09-24T12:34:56Z",
+        }
+        config = {
+            "hash1": {"deckId": 0},
+        }
+        mw_mock.addonManager.getConfig = MagicMock(return_value=config)
+        mw_mock.addonManager.writeConfig = MagicMock()
+        mw_mock.col.decks.id.return_value = 44
+
+        manager = MagicMock()
+        manager.__enter__.return_value = manager
+        manager.__iter__.return_value = iter([])
+        manager.get_by_hash.return_value = config["hash1"]
+
+        with (
+            patch("import_manager.is_collection_available", return_value=True),
+            patch("import_manager.DeckManager", return_value=manager),
+            patch("import_manager.update_timestamp") as update_timestamp,
+            patch("import_manager.ask_for_rating"),
+            patch("import_manager._handle_stats_sharing_after_import"),
+        ):
+            result = _on_deck_installed(
+                (1, {"success": True}),
+                deck,
+                subscription,
+                input_hash="hash1",
+                update_timestamp_after=True,
+            )
+
+        assert result == "Imported"
+        assert config["hash1"]["deckId"] == 44
+        assert config["hash1"]["stats_enabled"] is False
+        assert "timestamp" in config["hash1"]
+        update_timestamp.assert_called_once_with("hash1")
+        mw_mock.reset.assert_called_once()
+
+    def test_delete_notes_removes_notes_resets_collection_and_notifies(self, mw_mock):
+        mw_mock.col.reset = MagicMock()
+        with patch("import_manager.QApplication.focusWidget", return_value=None):
+            import_manager.delete_notes([10, 11])
+
+        mw_mock.col.remove_notes.assert_called_once_with([10, 11])
+        mw_mock.col.reset.assert_called_once()
+        mw_mock.reset.assert_called_once()
+        mw_mock.taskman.run_on_main.assert_called_once()
 
 
 # ──────────────────────────────────────────────────────────────────────

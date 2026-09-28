@@ -478,3 +478,30 @@ class TestBulkAddNotes:
 
         Note.bulk_add_notes(col, [n], 1, import_config)
         col.sched.suspend_cards.assert_called()
+
+    @patch("crowd_anki.representation.note.ANKI_INT_VERSION", 231100)
+    def test_bulk_add_chunks_collection_requests_and_suspends_all_cards(self):
+        col = MagicMock()
+        notes = []
+        for index in range(1001):
+            note = Note()
+            note.anki_object = MockAnkiNote()
+            note.anki_object._card_ids = [index]
+            notes.append(note)
+
+        import_config = MagicMock(suspend_new_cards=True)
+
+        with patch("crowd_anki.representation.note.AddNoteRequest") as add_request:
+            Note.bulk_add_notes(col, notes, 7, import_config)
+
+        assert [len(call.args[0]) for call in col.add_notes.call_args_list] == [
+            1000,
+            1,
+        ]
+        assert [
+            len(call.args[0]) for call in col.sched.suspend_cards.call_args_list
+        ] == [
+            1000,
+            1,
+        ]
+        assert all(call.kwargs["deck_id"] == 7 for call in add_request.call_args_list)

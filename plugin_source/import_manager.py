@@ -55,7 +55,7 @@ CACHE_BOOTSTRAP_MODE = "cache-bootstrap"
 DEFAULT_REQUEST_TIMEOUT = (30, 120)  # connect, read
 MAX_DOWNLOAD_ATTEMPTS = 4
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
-MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB — sanity cap on server-supplied size
+MAX_ARCHIVE_BYTES = 3 * 1024 * 1024 * 1024  # 3 GiB — sanity cap on server-supplied size
 
 
 class CacheBootstrapError(RuntimeError):

@@ -21,10 +21,10 @@ import xml.etree.ElementTree as ET
 # session that introduced this check (2026-08-15, WSL coverage run after
 # closing the data-integrity gaps). Raise, don't lower.
 PER_FILE_FLOORS = {
-    "crowd_anki/representation/deck.py": 60.0,  # measured 61.02
+    "crowd_anki/representation/deck.py": 60.0,  # measured 61.53
     "crowd_anki/representation/note.py": 70.0,  # measured 70.97
     "export_manager.py": 31.0,  # measured 31.58
-    "import_manager.py": 43.0,  # measured 43.49
+    "import_manager.py": 59.0,  # measured 59.16
 }
 
 
