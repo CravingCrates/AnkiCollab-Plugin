@@ -508,13 +508,17 @@ class TestNoActiveProfile:
         config_manager.get_config()["s"]["a"] = 999
         assert config_manager.get_config() == {"s": {"a": 1}}
 
-    def test_no_profile_is_logged_once(self, tmp_path, caplog, monkeypatch):
+    def test_no_profile_is_logged_once(self, tmp_path, monkeypatch):
         config_manager.reset_for_tests(tmp_path / "user_files")
-        monkeypatch.setattr(config_manager.logger, "propagate", True)
-        with caplog.at_level(logging.WARNING, logger="ankicollab"):
-            for _ in range(5):
-                config_manager.get_config()
-        assert len([r for r in caplog.records if "profile" in r.getMessage()]) == 1
+        warnings = []
+        monkeypatch.setattr(
+            config_manager.logger,
+            "warning",
+            lambda message, *args: warnings.append(message % args if args else message),
+        )
+        for _ in range(5):
+            config_manager.get_config()
+        assert len([message for message in warnings if "profile" in message]) == 1
 
     def test_writes_raise(self, tmp_path):
         config_manager.reset_for_tests(tmp_path / "user_files")

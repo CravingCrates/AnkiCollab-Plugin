@@ -57,7 +57,7 @@ jobs:
             keyring==25.7.0 \
             pygtrie==2.5.0 \
             pyyaml==6.0.3 \
-            mutmut==3.8.0
+            mutmut==3.7.0
 
       - name: Run mutation testing
         working-directory: plugin_source
