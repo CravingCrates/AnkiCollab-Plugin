@@ -329,6 +329,9 @@ class TestExistingNoteNotetypeMigration:
             assert deck._change_existing_note_types(col, []) is True
 
         apply_change.assert_called_once_with(col, 10, 20, [101, 102])
+        query, *params = col.db.all.call_args.args
+        assert query.startswith("SELECT id, mid, guid FROM notes WHERE guid IN")
+        assert params == ["note-a", "note-b"]
 
     def test_apply_notetype_change_preserves_captured_field_mapping(self):
         col = create_mock_collection()

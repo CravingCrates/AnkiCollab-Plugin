@@ -12,6 +12,8 @@ import sentry_sdk
 
 from .utils import get_logger
 
+from . import config_manager
+
 LOGGER = get_logger("ankicollab.sentry")
 
 # Anki
@@ -341,7 +343,7 @@ def init_sentry() -> None:
         LOGGER.info("sentry-sdk version: unknown")
 
     try:
-        cfg = mw.addonManager.getConfig(__name__) or {}
+        cfg = config_manager.get_config()
         settings = cfg.get("settings", {})
         enabled = bool(settings.get("error_reporting_enabled", enabled))
     except Exception as e:
@@ -442,7 +444,7 @@ def is_sentry_enabled() -> bool:
     """
     try:
         # Config flag
-        cfg = mw.addonManager.getConfig(__name__) or {}
+        cfg = config_manager.get_config()
         settings = cfg.get("settings", {})
         if not bool(settings.get("error_reporting_enabled", False)):
             return False
@@ -467,7 +469,7 @@ def get_sentry_status() -> Tuple[bool, str]:
     """
     try:
         # Config
-        cfg = mw.addonManager.getConfig(__name__) or {}
+        cfg = config_manager.get_config()
         settings = cfg.get("settings", {})
         if not bool(settings.get("error_reporting_enabled", False)):
             return False, "Opt-out via settings"

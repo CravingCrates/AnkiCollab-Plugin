@@ -10,7 +10,9 @@ import re
 
 import pytest
 
+import config_manager
 from menu import validate_deck_hash, store_default_config
+from tests.mocks import spy_config_writes
 
 _ALL_DEFAULTS = {
     "pull_on_startup": False,
@@ -24,6 +26,8 @@ _ALL_DEFAULTS = {
     "remember_suggest_state_between_sessions": False,
     "suggest_on_ankicollab_last_state": False,
     "error_reporting_enabled": False,
+    "impact_nudge_enabled": True,
+    "last_impact_nudge": "",
 }
 
 
@@ -70,29 +74,22 @@ class TestStoreDefaultConfig:
     overwriting a value the user (or another module) has set, and must not
     write at all when nothing changed."""
 
-    def _get_store(self, mw_mock, initial):
-        """Point getConfig at *initial* and expose the write log."""
-        writes = []
+    def _seed(self, stored):
+        """Overwrite the active profile's stored config."""
+        config_manager.write_config(stored)
 
-        def _get(addon_id=None):
-            return initial
+    def test_none_config_writes_full_defaults(self, mw_mock, monkeypatch):
+        self._seed({})
+        writes = spy_config_writes(monkeypatch)
 
-        def _write(addon_id, cfg):
-            writes.append(cfg)
-
-        mw_mock.addonManager.getConfig.side_effect = _get
-        mw_mock.addonManager.writeConfig.side_effect = _write
-        return writes
-
-    def test_none_config_writes_full_defaults(self, mw_mock):
-        writes = self._get_store(mw_mock, None)
         store_default_config()
 
         assert len(writes) == 1
         written = writes[0]
         settings = written["settings"]
-        # settings and auth keys are always ensured
-        assert "settings" in written and "auth" in written
+        # only `settings` is ensured; auth now lives in auth.json
+        assert "settings" in written
+        assert "auth" not in written
         for key, value in _ALL_DEFAULTS.items():
             assert key in settings, f"default key {key} missing"
             if key != "last_ratepls":
@@ -102,9 +99,11 @@ class TestStoreDefaultConfig:
             r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", settings["last_ratepls"]
         )
 
-    def test_partial_config_only_fills_missing(self, mw_mock):
+    def test_partial_config_only_fills_missing(self, mw_mock, monkeypatch):
         existing = {"settings": {"pull_on_startup": True, "rated_addon": True}}
-        writes = self._get_store(mw_mock, existing)
+        self._seed(existing)
+        writes = spy_config_writes(monkeypatch)
+
         store_default_config()
 
         assert len(writes) == 1
@@ -117,23 +116,32 @@ class TestStoreDefaultConfig:
         assert settings["push_counter"] == 0
         assert settings["suspend_new_cards"] is False
 
-    def test_complete_config_does_not_write(self, mw_mock):
+    def test_complete_config_does_not_write(self, mw_mock, monkeypatch):
         complete_settings = dict(_ALL_DEFAULTS)
         complete_settings["last_ratepls"] = "2025-01-01 00:00:00"
-        existing = {"settings": complete_settings, "auth": {}}
-        self._get_store(mw_mock, existing)
+        self._seed({"settings": complete_settings})
+        writes = spy_config_writes(monkeypatch)
 
         store_default_config()
 
         # The `updated` short-circuit must hold: nothing changed → no write
-        mw_mock.addonManager.writeConfig.assert_not_called()
+        assert writes == []
 
-    def test_missing_auth_key_is_ensured(self, mw_mock):
-        """A write triggered by a missing setting also persists the auth key."""
-        existing = {"settings": {"last_ratepls": "2025-01-01 00:00:00"}}
-        writes = self._get_store(mw_mock, existing)
+    def test_store_default_config_is_a_no_op_without_a_profile(self, tmp_path, mw_mock):
+        config_manager.reset_for_tests(tmp_path / "user_files")
+
+        store_default_config()  # must not raise
+
+        assert config_manager.current_profile_name() is None
+
+    def test_store_default_config_writes_the_defaults_for_an_open_profile(
+        self, tmp_path, mw_mock
+    ):
+        config_manager.reset_for_tests(tmp_path / "user_files")
+        config_manager.activate_for_tests("Medicine")
+
         store_default_config()
 
-        assert len(writes) == 1
-        assert "settings" in writes[0]
-        assert "auth" in writes[0]
+        stored = config_manager.get_stored_config()
+        assert stored["settings"]["pull_on_startup"] is False
+        assert "auth" not in stored

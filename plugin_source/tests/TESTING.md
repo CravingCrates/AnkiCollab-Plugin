@@ -10,8 +10,15 @@ python -m pytest tests/ -k utils   # run only tests matching "utils"
 python -m pytest tests/integration -m integration   # run only workflow-level tests
 ```
 
-**Current test count: 901** (CI verifies this against `pytest --collect-only`; if you
+**Current test count: 1343** (CI verifies this against `pytest --collect-only`; if you
 add or remove tests, update this number in the same change).
+
+Tests exist to catch regressions that would reach a user's collection. They do
+not assert log text, Sentry payloads, Qt styling, layout constants or other
+presentation details — if a change there cannot damage a collection, a deck, or
+a user's ability to recover from a failure, it does not need a test. See
+`MUTATION_TRIAGE.md` for how the current suite was assessed and
+`tests/mutation/` for how to re-run that assessment.
 
 The core data-integrity files (`crowd_anki/representation/deck.py`,
 `crowd_anki/representation/note.py`, `export_manager.py`, `import_manager.py`)
@@ -106,26 +113,39 @@ Provides the autouse `mw_mock` fixture that runs before every test:
 │       ├── test_crowd_anki_adapters.py
 │       ├── test_crowd_anki_anki_misc.py
 │       ├── test_crowd_anki_representation_misc.py
+│       ├── test_deck_bulk_import.py      # Deck.save_decks_and_notes_bulk
 │       ├── test_deck_chunking.py         # CHUNK_SIZE batching boundaries
 │       ├── test_deck_import.py
 │       ├── test_export.py
 │       ├── test_export_manager.py
+│       ├── test_export_manager_deck_publishing.py  # handle_export, _on_export_deck_created
+│       ├── test_export_manager_media_upload.py     # media upload + result reporting
+│       ├── test_export_manager_suggestions.py      # suggest_notes, _submit_deck_op
 │       ├── test_hooks.py
 │       ├── test_http_contracts.py        # Calls real payload builders
 │       ├── test_identifier.py
 │       ├── test_import_manager.py
+│       ├── test_import_manager_cache_download.py  # _subscription_from_manifest
+│       ├── test_import_manager_pull.py            # async_start_pull, import_webresult
 │       ├── test_import_safety.py
 │       ├── test_media_glue.py
 │       ├── test_media_manager.py
 │       ├── test_media_optimizer.py
 │       ├── test_menu_logic.py
 │       ├── test_note_import.py
+│       ├── test_note_import_config.py    # Note.handle_import_config_changes
 │       ├── test_note_model.py
+│       ├── test_note_model_save.py       # NoteModel -> collection persistence
 │       ├── test_notifications_center.py
 │       ├── test_sentry_integration.py
 │       ├── test_stats.py
 │       ├── test_utils.py
 │       └── test_var_defs.py
+├── mutation/
+│   ├── README.md               # Scoped mutation testing (WSL + mutmut)
+│   ├── run_scoped.sh           # Runs a filtered mutmut pass in a sandbox copy
+│   ├── report_by_function.py   # Per-function before/after survivor accounting
+│   └── classify_survivors.py   # Splits survivors into log-only vs behavioural
 ```
 
 ---
@@ -212,13 +232,13 @@ The `mw_mock` fixture (autouse in unit tests) provides:
 | Attribute | Behavior |
 |---|---|
 | `mw.col` | `FakeCol` with mocked `.decks`, `.db`, `.models`, `.media`, etc. |
-| `mw.addonManager.getConfig(id)` | Returns a mutable dict (shared `_config_store`) |
-| `mw.addonManager.writeConfig(id, cfg)` | Updates the same `_config_store` |
+| `config_manager` | Owns all settings/auth/device-id storage. `create_mock_mw` activates a fake profile named `TestProfile` in a sandboxed `user_files` directory and writes `config=` into it. |
+| `mw.addonManager.getConfig(id)` | **No longer used by production code.** Kept on the mock only so un-migrated tests fail loudly instead of silently reading defaults. |
 | `mw.taskman.run_on_main(fn)` | Calls `fn()` synchronously |
 | `mw.progress.want_cancel()` | Returns `False` |
 
-Tests that need custom config use `mw_mock.addonManager.getConfig.side_effect`
-to override the default. Tests that need `mw.col = None` use the `mw_no_col` fixture.
+Tests that need custom config use `config_manager.write_config(...)` to
+override the default. Tests that need `mw.col = None` use the `mw_no_col` fixture.
 
 ---
 
@@ -245,7 +265,7 @@ checks output/behavior. The mock layer only replaces Anki's runtime
 
 1. Import from the **short module name** (e.g., `from utils import DeckManager`).
 2. Use `mw_mock` fixture for anything touching `mw`. Override config via
-   `mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(my_config)`.
+   `config_manager.write_config(dict(my_config))`.
 3. Mock network calls with `@patch("module_name.requests.post")`.
 4. For new modules that use `from aqt import mw`, add the module name to
    `_MW_MODULES` in `tests/unit/conftest.py`.
@@ -294,3 +314,20 @@ Coverage is enforced in CI with a real (measured) baseline: `pytest --cov` with
 measurement to the addon's own source (excluding vendored `dist/`, Qt-only `ui/`,
 and `dialogs.py`).  The floor should be raised as coverage of the core modules
 improves.
+
+## Per-profile storage in tests
+
+Production code reads settings through `config_manager`, never through
+`mw.addonManager`. Two fixtures keep that honest:
+
+* `tests/conftest.py::_isolate_config_manager` (autouse) points
+  `config_manager` at a `tmp_path_factory` sandbox's `user_files` directory
+  for every test, so no test can
+  read or write the real add-on folder.
+* `tests/unit/conftest.py::mw_mock` (autouse) calls `create_mock_mw`, which
+  activates `TestProfile` and writes the `config=` argument into the real
+  store.
+
+To change config mid-test, call `config_manager.write_config(cfg)` or
+`config_manager.set_value(k, v)`. Do **not** set
+`mw_mock.addonManager.getConfig.side_effect`: production code never calls it.

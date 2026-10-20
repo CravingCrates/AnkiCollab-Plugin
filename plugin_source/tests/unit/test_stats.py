@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from collections import defaultdict
 from datetime import datetime, timezone
 
+import config_manager
 from stats import ReviewHistory, update_stats_timestamp
 
 
@@ -19,7 +20,7 @@ class TestReviewHistoryInit:
                 "last_stats_timestamp": 0,
             },
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         mw_mock.col.decks.children.return_value = []
 
     def test_stores_deck_hash(self, mw_mock):
@@ -39,7 +40,7 @@ class TestCalcRetention:
             "settings": {},
             "hash_r": {"deckId": 1, "timestamp": "2025-01-01 00:00:00"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         mw_mock.col.decks.children.return_value = []
         return ReviewHistory("hash_r")
 
@@ -88,7 +89,7 @@ class TestGetCardData:
             "settings": {},
             "hash_cd": {"deckId": 1, "timestamp": "2025-01-01 00:00:00"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         mw_mock.col.decks.children.return_value = []
         return ReviewHistory("hash_cd")
 
@@ -118,7 +119,7 @@ class TestUploadReviewHistory:
             "settings": {},
             "hash_up": {"deckId": 1, "timestamp": "2025-01-01 00:00:00"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         mw_mock.col.decks.children.return_value = []
         return ReviewHistory("hash_up")
 
@@ -154,7 +155,6 @@ class TestUploadReviewHistory:
 
 class TestUpdateStatsTimestamp:
     def test_updates_timestamp(self, mw_mock):
-        stored = {}
         config = {
             "settings": {},
             "hash_ts": {
@@ -163,11 +163,9 @@ class TestUpdateStatsTimestamp:
                 "last_stats_timestamp": 0,
             },
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
-        def capture_write(mod, data):
-            stored.update(data)
-
-        mw_mock.addonManager.writeConfig.side_effect = capture_write
         update_stats_timestamp("hash_ts")
-        assert stored.get("hash_ts", {}).get("last_stats_timestamp", 0) > 0
+
+        stored = config_manager.get_stored_config()
+        assert stored["hash_ts"]["last_stats_timestamp"] > 0

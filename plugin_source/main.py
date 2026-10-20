@@ -61,6 +61,7 @@ from aqt import mw
 from aqt.qt import *
 from anki.utils import point_version
 
+from . import config_manager
 from .menu import *
 from .hooks import *
 from .var_defs import API_BASE_URL
@@ -71,6 +72,10 @@ from .utils import get_logger
 # Setup logging
 logger = get_logger("ankicollab")
 logger.setLevel(logging.WARNING)
+
+# First add-on-specific action: registers the profile_did_open listener before
+# any other listener, so the config caches are populated before they run.
+config_manager.init()
 
 logger.info("AnkiCollab Add-on Loading...")
 
@@ -87,11 +92,6 @@ except Exception:
     # Never fail startup due to telemetry
     logger.error(f"AnkiCollab: Sentry initialization failed: {sys.exc_info()[1]}")
     pass
-
-strings_data = mw.addonManager.getConfig(__name__)
-if strings_data is not None:
-    mw.addonManager.writeConfig(__name__, strings_data)
-    strings_data = mw.addonManager.getConfig(__name__)
 
 media_manager = MediaManager(api_base_url=API_BASE_URL, media_folder="")
 

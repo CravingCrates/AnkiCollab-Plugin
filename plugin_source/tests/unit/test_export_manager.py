@@ -3,6 +3,9 @@
 import os
 import export_manager
 from contextlib import ExitStack
+
+import config_manager
+from tests.mocks import spy_config_writes
 from typing import cast
 from unittest.mock import AsyncMock
 import pytest
@@ -158,6 +161,80 @@ class TestAsyncMediaRefThreshold:
         mock_sync.assert_not_called()
         mock_qop.assert_called_once()
         cont.assert_not_called()
+
+    def test_async_operation_receives_collection_and_preserves_mapping(self, mw_mock):
+        continuation = MagicMock()
+        result = {"updates": [], "count": 0}
+        with (
+            patch("export_manager.QueryOp") as mock_qop,
+            patch(
+                "export_manager._compute_media_reference_updates", return_value=result
+            ) as compute,
+            patch(
+                "export_manager._apply_media_reference_updates",
+                return_value=(3, ["change"]),
+            ) as apply,
+        ):
+            schedule_media_reference_updates(
+                cast(Deck, None),
+                {"old.mp3": "new.mp3"},
+                [("old.mp3", "note-1")],
+                "editor",
+                continuation,
+                force_async=True,
+            )
+
+            operation = mock_qop.call_args.kwargs["op"]
+            background_result = operation(mw_mock.col)
+            assert background_result["filename_mapping"] == {"old.mp3": "new.mp3"}
+            assert compute.call_args.args[:3] == (
+                mw_mock.col,
+                {"old.mp3": "new.mp3"},
+                [("old.mp3", "note-1")],
+            )
+            assert callable(compute.call_args.args[3])
+
+            success = mock_qop.call_args.kwargs["success"]
+            success(background_result)
+
+        apply.assert_called_once_with(background_result, "editor")
+        continuation.assert_called_once_with(3, ["change"])
+
+    def test_empty_mapping_completes_without_background_work(self, mw_mock):
+        continuation = MagicMock()
+        with patch("export_manager.QueryOp") as mock_qop:
+            schedule_media_reference_updates(
+                cast(Deck, None), {}, [("old.mp3", "note-1")], None, continuation
+            )
+
+        mock_qop.assert_not_called()
+        continuation.assert_called_once_with(0, None)
+
+    def test_async_apply_failure_reports_no_updates(self, mw_mock):
+        continuation = MagicMock()
+        with (
+            patch("export_manager.QueryOp") as mock_qop,
+            patch(
+                "export_manager._compute_media_reference_updates",
+                return_value={"updates": []},
+            ),
+            patch(
+                "export_manager._apply_media_reference_updates",
+                side_effect=RuntimeError("apply failed"),
+            ),
+        ):
+            schedule_media_reference_updates(
+                cast(Deck, None),
+                {"old.mp3": "new.mp3"},
+                [("old.mp3", "note-1")],
+                None,
+                continuation,
+                force_async=True,
+            )
+            result = mock_qop.call_args.kwargs["op"](mw_mock.col)
+            mock_qop.call_args.kwargs["success"](result)
+
+        continuation.assert_called_once_with(0, None)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -516,7 +593,7 @@ class TestMaintainerAuthentication:
                 export_manager.auth_manager, "get_token", side_effect=["old", "new"]
             ),
             patch.object(
-                export_manager.auth_manager, "get_auto_approve", return_value=True
+                export_manager.config_manager, "get_auto_approve", return_value=True
             ),
             patch(
                 "api_client.api_client.post_empty",
@@ -535,7 +612,7 @@ class TestMaintainerAuthentication:
         with (
             patch.object(export_manager.auth_manager, "get_token", return_value=None),
             patch.object(
-                export_manager.auth_manager, "get_auto_approve", return_value=False
+                export_manager.config_manager, "get_auto_approve", return_value=False
             ),
             patch("api_client.api_client.post_empty") as post_empty,
         ):
@@ -727,10 +804,10 @@ class TestMediaOperationWrappers:
 
 class TestDeckCreationCallbacks:
     def test_successful_creation_without_media_persists_subscription_and_finishes(
-        self, mw_mock
+        self, mw_mock, monkeypatch
     ):
-        mw_mock.addonManager.getConfig = MagicMock(return_value={})
-        mw_mock.addonManager.writeConfig = MagicMock()
+        config_manager.write_config({})
+        writes = spy_config_writes(monkeypatch)
         with (
             patch("export_manager.mw", mw_mock),
             patch("export_manager.aqt.utils.askUser", return_value=False),
@@ -744,7 +821,7 @@ class TestDeckCreationCallbacks:
                 {},
             )
 
-        stored = mw_mock.addonManager.writeConfig.call_args.args[1]
+        stored = writes[-1]
         assert stored["new-hash"]["deckId"] == 17
         assert "new-hash" in info.call_args.args[0]
         uploaded.assert_called_once()

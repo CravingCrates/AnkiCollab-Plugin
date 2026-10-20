@@ -15,7 +15,9 @@ import pytest
 import requests_mock as rmock
 
 import auth_manager as auth_manager_module
+import config_manager
 import hooks
+from tests.mocks import spy_config_writes  # noqa: F401 (used in config tests)
 from hooks import (
     _get_linked_base_hashes,
     _get_protected_fields_from_tags,
@@ -121,16 +123,13 @@ class TestGetLinkedBaseHashes:
             "settings": {},
             "abc": {"linked_deck_hashes": ["base1", "base2"]},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         assert _get_linked_base_hashes("abc") == ["base1", "base2"]
 
-    def test_legacy_single_hash_migrates_and_writes(self, mw_mock):
+    def test_legacy_single_hash_migrates_and_writes(self, mw_mock, monkeypatch):
         config = {"settings": {}, "abc": {"linked_deck_hash": "legacy_hash"}}
-        writes = []
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: config
-        mw_mock.addonManager.writeConfig.side_effect = lambda aid, cfg: writes.append(
-            cfg
-        )
+        config_manager.write_config(config)
+        writes = spy_config_writes(monkeypatch)
 
         result = _get_linked_base_hashes("abc")
         assert result == ["legacy_hash"]
@@ -138,22 +137,20 @@ class TestGetLinkedBaseHashes:
         assert writes and "linked_deck_hashes" in writes[0]["abc"]
 
     def test_empty_config_returns_empty_list(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: None
+        config_manager.write_config({})
         assert _get_linked_base_hashes("abc") == []
 
     def test_missing_subscriber_returns_empty(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {"settings": {}}
+        config_manager.write_config({"settings": {}})
         assert _get_linked_base_hashes("nope") == []
 
     def test_non_dict_details_returns_empty(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {
-            "abc": "not-a-dict"
-        }
+        config_manager.write_config({"abc": "not-a-dict"})
         assert _get_linked_base_hashes("abc") == []
 
     def test_empty_hashes_list_falls_through(self, mw_mock):
         config = {"abc": {"linked_deck_hashes": []}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         assert _get_linked_base_hashes("abc") == []
 
 
@@ -292,9 +289,7 @@ class TestShortcutConfigHelpers:
     """Config lookup and display formatting for the keyboard shortcuts."""
 
     def _configure(self, mw_mock, settings):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {
-            "settings": settings
-        }
+        config_manager.write_config({"settings": settings})
 
     def test_get_shortcut_returns_configured_value(self, mw_mock):
         self._configure(mw_mock, {"shortcut_update_decks": "Ctrl+Alt+U"})
@@ -305,7 +300,7 @@ class TestShortcutConfigHelpers:
         assert _get_shortcut("update_decks") == ""
 
     def test_get_shortcut_empty_when_no_config(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: None
+        config_manager.write_config({})
         assert _get_shortcut("bulk_suggest") == ""
 
     def test_shortcut_display_empty_without_config(self, mw_mock):

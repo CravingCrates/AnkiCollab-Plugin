@@ -31,6 +31,7 @@ from aqt.qt import (
 from datetime import datetime, timezone
 import webbrowser
 
+from . import config_manager
 from .identifier import subscribe_to_deck, unsubscribe_from_deck
 from .var_defs import DEFAULT_PROTECTED_TAGS
 from .utils import get_local_deck_from_hash, DeckManager
@@ -46,6 +47,7 @@ from .notifications_center import (
     set_notification_visibility,
 )
 from .sentry_integration import init_sentry
+from .impact import init_impact_menu, set_impact_visibility
 from .shortcut_validator import Context, Severity, validate_shortcut
 from .ui.colors import (
     get_colors,
@@ -94,12 +96,10 @@ def delete_selected_rows(table, dialog):
         )
         return
     dialog.accept()
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_stored_config()
     selected_rows = sorted(
         set(index.row() for index in table.selectedIndexes()), reverse=True
     )
-    if not strings_data:
-        strings_data = {}
     for row in selected_rows:
         if table.item(row, 0) is not None:
             deck_hash = table.item(row, 0).text()
@@ -117,7 +117,7 @@ def delete_selected_rows(table, dialog):
                 logger.debug(f"Unsubscribing from deck: {deck_hash}")
                 strings_data.pop(deck_hash)
         table.removeRow(row)
-    mw.addonManager.writeConfig(__name__, strings_data)
+    config_manager.write_config(strings_data)
     on_edit_list()  # This will create a fresh DeckManager() and table
 
 
@@ -156,9 +156,7 @@ def add_to_table(line_edit, table, dialog):
         title="AnkiCollab",
     ):
         return
-    strings_data = mw.addonManager.getConfig(__name__)
-    if strings_data is None:
-        strings_data = {}  # Initialize if None
+    strings_data = config_manager.get_stored_config()
     if string:
         # Check if already subscribed
         if string in strings_data:
@@ -174,7 +172,7 @@ def add_to_table(line_edit, table, dialog):
             "optional_tags": {},
             "personal_tags": DEFAULT_PROTECTED_TAGS,
         }
-        mw.addonManager.writeConfig(__name__, strings_data)
+        config_manager.write_config(strings_data)
         line_edit.setText("")
         num_rows = table.rowCount()
         table.insertRow(num_rows)
@@ -186,11 +184,11 @@ def add_to_table(line_edit, table, dialog):
 
 
 def update_local_deck(input_hash, new_deck, popup_dialog, subs_dialog):
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_stored_config()
     deck_id = mw.col.decks.id(new_deck)  # Get deck ID # type: ignore
-    if strings_data and input_hash in strings_data:
+    if input_hash in strings_data:
         strings_data[input_hash]["deckId"] = deck_id
-        mw.addonManager.writeConfig(__name__, strings_data)
+        config_manager.write_config(strings_data)
         popup_dialog.accept()
         subs_dialog.accept()
         on_edit_list()  # Reopen with updated data
@@ -222,14 +220,10 @@ def on_edit_list():
 
     table = QTableWidget()
     table.setStyleSheet(get_table_style())
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_config()
 
     # Filter out settings/auth keys before counting rows
-    filtered_keys = (
-        [k for k in strings_data if k not in ["settings", "auth"]]
-        if strings_data
-        else []
-    )
+    filtered_keys = [k for k in strings_data if k not in ["settings", "auth"]]
     table.setRowCount(len(filtered_keys))
     table.setColumnCount(5)
     table.setHorizontalHeaderLabels(
@@ -384,8 +378,8 @@ def edit_subscription_details(deck_hash, parent_dialog):
     """Edit detailed settings for a specific subscription"""
     colors = get_colors()
 
-    strings_data = mw.addonManager.getConfig(__name__)
-    if not strings_data or deck_hash not in strings_data:
+    strings_data = config_manager.get_stored_config()
+    if deck_hash not in strings_data:
         showInfo("Subscription not found!")
         return
 
@@ -554,7 +548,7 @@ def edit_subscription_details(deck_hash, parent_dialog):
                 details["new_notes_home_deck"] = new_notes_deck_id
 
             # Save to config
-            mw.addonManager.writeConfig(__name__, strings_data)
+            config_manager.write_config(strings_data)
             dialog.accept()
             parent_dialog.accept()  # Close parent dialog
             on_edit_list()  # Reopen with updated data
@@ -968,9 +962,7 @@ def show_global_settings_dialog(parent_dialog):
     layout.addWidget(header_label)
 
     # Get current settings
-    strings_data = mw.addonManager.getConfig(__name__)
-    if not strings_data:
-        strings_data = {}
+    strings_data = config_manager.get_stored_config()
     if "settings" not in strings_data:
         strings_data["settings"] = {}
     settings = strings_data["settings"]
@@ -978,7 +970,7 @@ def show_global_settings_dialog(parent_dialog):
     # Ensure legacy configs default to preserving deck structure
     if settings.get("preserve_deck_structure") is False:
         settings["preserve_deck_structure"] = True
-        mw.addonManager.writeConfig(__name__, strings_data)
+        config_manager.write_config(strings_data)
 
     # Subscription setting checkboxes
     global_group = QGroupBox("Global Subscription Settings")
@@ -1017,7 +1009,7 @@ def show_global_settings_dialog(parent_dialog):
 
     auto_approve_cb = QCheckBox("Auto-approve changes (maintainer only)")
     auto_approve_cb.setStyleSheet(checkbox_style)
-    auto_approve_cb.setChecked(bool(auth_manager.get_auto_approve()))
+    auto_approve_cb.setChecked(bool(settings.get("auto_approve", False)))
     auto_approve_cb.setToolTip(
         "Automatically approve outgoing changes for your decks. Only works if you are a maintainer."
     )
@@ -1246,14 +1238,14 @@ def show_global_settings_dialog(parent_dialog):
             remember_suggest_state_cb.isChecked()
         )
         settings["error_reporting_enabled"] = error_reporting_cb.isChecked()
+        settings["auto_approve"] = auto_approve_cb.isChecked()
         settings["shortcut_update_decks"] = (
             update_seq.toString() if not update_seq.isEmpty() else ""
         )
         settings["shortcut_bulk_suggest"] = (
             bulk_seq.toString() if not bulk_seq.isEmpty() else ""
         )
-        mw.addonManager.writeConfig(__name__, strings_data)
-        auth_manager.set_auto_approve(auto_approve_cb.isChecked())
+        config_manager.write_config(strings_data)
         # Apply telemetry setting immediately
         try:
             init_sentry()
@@ -1327,15 +1319,30 @@ def on_login_manager_btn():
             update_ui_for_login_state()  # Update UI after successful login
 
 
+def _on_profile_changed_for_default_config(_profile_name):
+    """Seed the newly opened profile's defaults."""
+    store_default_config()
+
+
+def _on_profile_changed_for_ui_update(_profile_name):
+    """Update the UI when a new profile is opened."""
+    update_ui_for_login_state()
+
+
 def store_default_config():
-    config = mw.addonManager.getConfig(__name__)
-    if config is None:
-        config = {}
+    """Ensure the active profile's config has every default key.
+
+    Does nothing when no profile is open: the add-on is imported before a
+    profile is chosen, so there is nothing to write to yet. The listener
+    registered in menu_init() re-runs this once a profile opens.
+    """
+    if config_manager.current_profile_name() is None:
+        return
+
+    config = config_manager.get_config()
 
     if "settings" not in config:
         config["settings"] = {}
-    if "auth" not in config:
-        config["auth"] = {}  # Should be managed by auth_manager, but ensure key exists
 
     defaults = {
         "pull_on_startup": False,
@@ -1351,6 +1358,9 @@ def store_default_config():
         "suggest_on_ankicollab_last_state": False,
         # Error reporting (Sentry)
         "error_reporting_enabled": False,
+        # "My Impact": gates only the once-a-day post-sync line; the menu view is always available.
+        "impact_nudge_enabled": True,
+        "last_impact_nudge": "",
     }
 
     settings = config["settings"]
@@ -1361,13 +1371,13 @@ def store_default_config():
             updated = True
 
     if updated:
-        mw.addonManager.writeConfig(__name__, config)
+        config_manager.write_config(config)
 
 
 def update_ui_for_login_state():
     logged_in = auth_manager.is_logged_in()
-    config = mw.addonManager.getConfig(__name__)
-    settings = config.get("settings", {}) if config else {}
+    config = config_manager.get_config()
+    settings = config.get("settings", {})
 
     # Update Menu Items Visibility
     edit_list_action.setVisible(logged_in)
@@ -1375,6 +1385,7 @@ def update_ui_for_login_state():
     pull_changes_action.setVisible(logged_in)
     general_settings_action.setVisible(logged_in)
     set_notification_visibility(logged_in)
+    set_impact_visibility(logged_in)
 
     login_manager_action.setText("Logout" if logged_in else "Login")
 
@@ -1391,8 +1402,8 @@ def update_ui_for_login_state():
 
 def _apply_shortcut_hint():
     # Append the configured shortcut in native format to the Update Decks action text.
-    config = mw.addonManager.getConfig(__name__) or {}
-    settings = config.get("settings", {}) if config else {}
+    config = config_manager.get_config()
+    settings = config.get("settings", {})
     raw = settings.get("shortcut_update_decks", "")
     if not raw:
         return
@@ -1408,6 +1419,10 @@ def _apply_shortcut_hint():
 
 
 def menu_init():
+    # The add-on loads before a profile is chosen, so the defaults cannot be
+    # stored until one opens.
+    config_manager.add_profile_changed_listener(_on_profile_changed_for_default_config)
+    config_manager.add_profile_changed_listener(_on_profile_changed_for_ui_update)
     store_default_config()
 
     mw.form.menubar.addMenu(collab_menu)
@@ -1421,6 +1436,7 @@ def menu_init():
     collab_menu.addAction(push_deck_action)
     collab_menu.addSeparator()
     init_notification_center(collab_menu)
+    init_impact_menu(collab_menu)
     collab_menu.addAction(general_settings_action)
     collab_menu.addAction(login_manager_action)
     collab_menu.addMenu(links_menu)

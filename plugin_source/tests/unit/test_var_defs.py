@@ -2,6 +2,7 @@
 
 from var_defs import (
     API_BASE_URL,
+    WEBSITE_BASE_URL,
     VERSION,
     DEFAULT_PROTECTED_TAGS,
     PREFIX_OPTIONAL_TAGS,
@@ -17,6 +18,12 @@ from var_defs import (
 class TestConstants:
     def test_api_base_url_is_http(self):
         assert API_BASE_URL.startswith("http")
+
+    def test_website_base_url_is_http_and_has_no_trailing_slash(self):
+        # Pairing builds `/pair?code=...` from this, so a trailing slash would make
+        # a double slash in a link the user is asked to open.
+        assert WEBSITE_BASE_URL.startswith("http")
+        assert not WEBSITE_BASE_URL.endswith("/")
 
     def test_version_format(self):
         # Version should be a dotted date string like "2026.01.15.1"

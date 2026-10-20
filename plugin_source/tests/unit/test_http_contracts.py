@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests_mock as rmock
 
+import config_manager
 from auth_manager import auth_manager
 from api_client import _ApiClient
 from dialogs import AddChangelogDialog
@@ -304,7 +305,7 @@ class TestUploadDeckStats:
             "settings": {},
             "hash_up": {"deckId": 1, "timestamp": "2025-01-01 00:00:00"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         mw_mock.col.decks.children.return_value = []
         mw_mock.col.db.execute.return_value = [(100, 5, 1, "guid", 1)]
         mw_mock.col.decks.name.return_value = "Deck"

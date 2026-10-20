@@ -21,6 +21,7 @@ from aqt.operations import QueryOp
 import json
 from typing import Sequence, List, Tuple, Optional
 
+from . import config_manager
 from .media_manager import MediaManager  # Import List
 
 from .export_manager import *
@@ -556,7 +557,7 @@ def _get_linked_base_hashes(subscriber_hash: str) -> List[str]:
     Migrates old single-value config (linked_deck_hash) to a list (linked_deck_hashes) on read.
     """
     try:
-        strings_data = mw.addonManager.getConfig(__name__) or {}
+        strings_data = config_manager.get_stored_config()
         details = strings_data.get(subscriber_hash)
         if not isinstance(details, dict):
             return []
@@ -572,7 +573,7 @@ def _get_linked_base_hashes(subscriber_hash: str) -> List[str]:
                 del details["linked_deck_hash"]
             except Exception:
                 pass
-            mw.addonManager.writeConfig(__name__, strings_data)
+            config_manager.write_config(strings_data)
             return [legacy]
         return []
     except Exception:
@@ -654,8 +655,8 @@ def init_add_card(addCardsDialog):
     if hasattr(addCardsDialog, "ankicollab_suggest_checkbox"):
         return
 
-    cfg = mw.addonManager.getConfig(__name__) or {}
-    settings = cfg.get("settings", {}) if isinstance(cfg, dict) else {}
+    cfg = config_manager.get_config()
+    settings = cfg.get("settings", {})
     if not isinstance(settings, dict):
         settings = {}
     remember_between_sessions = bool(
@@ -675,15 +676,13 @@ def init_add_card(addCardsDialog):
         if not remember_between_sessions:
             return
         try:
-            current_cfg = mw.addonManager.getConfig(__name__) or {}
-            if not isinstance(current_cfg, dict):
-                return
+            current_cfg = config_manager.get_stored_config()
             current_settings = current_cfg.get("settings")
             if not isinstance(current_settings, dict):
                 current_settings = {}
                 current_cfg["settings"] = current_settings
             current_settings["suggest_on_ankicollab_last_state"] = bool(checked)
-            mw.addonManager.writeConfig(__name__, current_cfg)
+            config_manager.write_config(current_cfg)
         except Exception:
             # Never fail UI init due to settings persistence.
             pass
@@ -774,8 +773,8 @@ def async_update(silent: bool = False) -> None:
 
 
 def autoUpdate():
-    config = mw.addonManager.getConfig(__name__)
-    settings = config.get("settings", {}) if config else {}
+    config = config_manager.get_config()
+    settings = config.get("settings", {})
     startup_check_enabled = bool(settings.get("pull_on_startup", False))
 
     if startup_check_enabled:
@@ -892,8 +891,8 @@ SHORTCUT_BULK_SUGGEST = "bulk_suggest"
 
 def _get_shortcut(key: str) -> str:
     """Return the configured shortcut string, or empty if not set."""
-    config = mw.addonManager.getConfig(__name__) or {}
-    settings = config.get("settings", {}) if config else {}
+    config = config_manager.get_config()
+    settings = config.get("settings", {})
     return settings.get(f"shortcut_{key}", "")
 
 

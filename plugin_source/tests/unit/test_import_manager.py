@@ -5,6 +5,7 @@ path safety, optional tags, note ID lookups.
 import os
 import zipfile
 import pytest
+import config_manager
 import import_manager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -61,6 +62,12 @@ class TestFetchManifest:
 
         result = _fetch_manifest("http://example.com/manifest.json")
         assert result == {"version": 1, "files": []}
+        mock_get.assert_called_once_with(
+            "http://example.com/manifest.json",
+            timeout=import_manager.DEFAULT_REQUEST_TIMEOUT,
+        )
+        mock_resp.raise_for_status.assert_called_once_with()
+        mock_resp.json.assert_called_once_with()
 
     @patch("import_manager.requests.get")
     def test_network_error(self, mock_get):
@@ -69,6 +76,10 @@ class TestFetchManifest:
         mock_get.side_effect = requests.RequestException("timeout")
         with pytest.raises(CacheBootstrapError, match="Unable to download"):
             _fetch_manifest("http://example.com/manifest.json")
+        mock_get.assert_called_once_with(
+            "http://example.com/manifest.json",
+            timeout=import_manager.DEFAULT_REQUEST_TIMEOUT,
+        )
 
     @patch("import_manager.requests.get")
     def test_invalid_json(self, mock_get):
@@ -79,6 +90,8 @@ class TestFetchManifest:
 
         with pytest.raises(CacheBootstrapError, match="not valid JSON"):
             _fetch_manifest("http://example.com/bad.json")
+        mock_resp.raise_for_status.assert_called_once_with()
+        mock_resp.json.assert_called_once_with()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -223,7 +236,7 @@ class TestOptionalTags:
                 "optional_tags": {"tag_a": True, "tag_b": False},
             },
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
     def test_get_optional_tags(self, mw_mock):
         tags = get_optional_tags("hash_ot")
@@ -246,7 +259,7 @@ class TestOptionalTags:
 
 class TestWantsToShareStats:
     def test_unknown_deck_returns_false(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {"settings": {}}
+        config_manager.write_config({"settings": {}})
         enabled, ts = wants_to_share_stats("nonexistent")
         assert enabled is False
         assert ts == 0
@@ -261,7 +274,7 @@ class TestWantsToShareStats:
                 "last_stats_timestamp": 12345,
             },
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         enabled, ts = wants_to_share_stats("hash_s")
         assert enabled is True
         assert ts == 12345
@@ -311,8 +324,6 @@ class TestCollectionMutatingImportOperations:
         config = {
             "hash1": {"deckId": 0},
         }
-        mw_mock.addonManager.getConfig = MagicMock(return_value=config)
-        mw_mock.addonManager.writeConfig = MagicMock()
         mw_mock.col.decks.id.return_value = 44
 
         manager = MagicMock()
@@ -341,6 +352,58 @@ class TestCollectionMutatingImportOperations:
         assert "timestamp" in config["hash1"]
         update_timestamp.assert_called_once_with("hash1")
         mw_mock.reset.assert_called_once()
+
+    def test_on_deck_installed_deletes_only_after_dialog_accepts(self, mw_mock):
+        deck = MagicMock()
+        deck.anki_dict = {"name": "Imported"}
+        subscription = {
+            "deck_hash": "hash1",
+            "stats_enabled": False,
+            "deleted_notes": ["note-uuid"],
+        }
+        dialog = MagicMock()
+        dialog.exec.return_value = 1
+
+        with (
+            patch("import_manager.is_collection_available", return_value=True),
+            patch("import_manager.get_noteids_from_uuids", return_value=[10, 20]),
+            patch("import_manager.DeletedNotesDialog", return_value=dialog),
+            patch("import_manager.delete_notes") as delete_notes,
+            patch("import_manager.open_browser_with_nids") as open_browser,
+            patch("import_manager._handle_stats_sharing_after_import"),
+        ):
+            result = _on_deck_installed((1, {}), deck, subscription)
+
+        assert result == "Imported"
+        delete_notes.assert_called_once_with([10, 20])
+        open_browser.assert_not_called()
+        dialog.exec.assert_called_once_with()
+
+    def test_on_deck_installed_keeps_notes_and_opens_browser_when_rejected(
+        self, mw_mock
+    ):
+        deck = MagicMock()
+        deck.anki_dict = {"name": "Imported"}
+        subscription = {
+            "deck_hash": "hash1",
+            "stats_enabled": False,
+            "deleted_notes": ["note-uuid"],
+        }
+        dialog = MagicMock()
+        dialog.exec.return_value = 0
+
+        with (
+            patch("import_manager.is_collection_available", return_value=True),
+            patch("import_manager.get_noteids_from_uuids", return_value=[10, 20]),
+            patch("import_manager.DeletedNotesDialog", return_value=dialog),
+            patch("import_manager.delete_notes") as delete_notes,
+            patch("import_manager.open_browser_with_nids") as open_browser,
+            patch("import_manager._handle_stats_sharing_after_import"),
+        ):
+            _on_deck_installed((1, {}), deck, subscription)
+
+        delete_notes.assert_not_called()
+        open_browser.assert_called_once_with([10, 20])
 
     def test_delete_notes_removes_notes_resets_collection_and_notifies(self, mw_mock):
         mw_mock.col.reset = MagicMock()
@@ -431,7 +494,7 @@ class TestAsyncStartPullCacheRefresh:
     def test_expired_archive_url_triggers_refresh(self, mw_mock):
         """CacheArchiveRefreshError should cause a second /pullChanges call."""
         config = {"h1": {"deckId": 0, "timestamp": "2025-01-01 00:00:00"}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
         fake_resp = _fake_pull_response({"h1": "payload"})
 
@@ -456,7 +519,7 @@ class TestAsyncStartPullCacheRefresh:
     def test_refresh_failure_surfaces_error(self, mw_mock):
         """If the refreshed URL also fails, we must abort with a user error."""
         config = {"h1": {"deckId": 0}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
         fake_resp = _fake_pull_response({"h1": "payload"})
 
@@ -480,7 +543,7 @@ class TestAsyncStartPullCacheRefresh:
     def test_cache_bootstrap_error_surfaces_error(self, mw_mock):
         """A plain CacheBootstrapError shows the user-facing error, no refresh."""
         config = {"h1": {"deckId": 0}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
         fake_resp = _fake_pull_response({"h1": "payload"})
 
@@ -504,7 +567,7 @@ class TestAsyncStartPullCacheRefresh:
     def test_abort_removes_pending_subscription(self, mw_mock):
         """OperationAbortedError with an input_hash must clean up the config."""
         config = {"h1": {"deckId": 0, "timestamp": "2025-01-01 00:00:00"}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
         fake_resp = _fake_pull_response({"h1": "payload"})
 
@@ -525,7 +588,7 @@ class TestAsyncStartPullCacheRefresh:
     def test_abort_without_input_hash_keeps_config(self, mw_mock):
         """An update (no input_hash) must not purge the subscription."""
         config = {"h1": {"deckId": 1, "timestamp": "2025-01-01 00:00:00"}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
         fake_resp = _fake_pull_response({"h1": "payload"})
 
@@ -546,7 +609,7 @@ class TestAsyncStartPullCacheRefresh:
     def test_server_error_response_returns_none(self, mw_mock):
         """Non-200/401 responses must return the sentinel tuple, not crash."""
         config = {"h1": {"deckId": 0}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
         fake_resp = MagicMock()
         fake_resp.status_code = 500
@@ -561,7 +624,7 @@ class TestAsyncStartPullCacheRefresh:
 
     def test_unauthorized_response_returns_none(self, mw_mock):
         config = {"h1": {"deckId": 0}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
         fake_resp = MagicMock()
         fake_resp.status_code = 401

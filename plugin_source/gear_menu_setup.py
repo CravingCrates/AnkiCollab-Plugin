@@ -9,6 +9,7 @@ from aqt import gui_hooks, mw
 from aqt.operations import QueryOp
 import aqt.utils
 
+from . import config_manager
 from .export_manager import get_server_missing_media, start_suggest_missing_media
 
 from .auth_manager import auth_manager
@@ -44,7 +45,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
         return
 
     def export_media() -> None:
-        config = mw.addonManager.getConfig(__name__)
+        config = config_manager.get_config()
         field = get_configured_search_field(config)
         exts = get_configured_exts(config)
         exporter = DeckMediaExporter(mw.col, DeckId(did), field, exts)
@@ -83,7 +84,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
         if deck_hash is None:
             aqt.utils.tooltip("No valid deck!")
             return
-        strings_data = mw.addonManager.getConfig(__name__)
+        strings_data = config_manager.get_stored_config()
         if strings_data:
             for sub, details in strings_data.items():
                 if sub == deck_hash:
@@ -92,7 +93,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
                     ).strftime("%Y-%m-%d %H:%M:%S")
                     aqt.utils.tooltip("Deck timestamp reset")
                     break
-            mw.addonManager.writeConfig(__name__, strings_data)
+            config_manager.write_config(strings_data)
 
     def upload_missing_media():
         if did is None:
@@ -154,7 +155,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
             status, text = result
             if status == 200 and (text or "").strip() == "Success":
                 # Persist link on the subscribed deck's details
-                strings_data = mw.addonManager.getConfig(__name__) or {}
+                strings_data = config_manager.get_stored_config()
                 details = strings_data.get(subscriber_hash)
                 if not isinstance(details, dict):
                     details = {}
@@ -176,7 +177,7 @@ def on_deck_browser_will_show_options_menu(menu: QMenu, did: int) -> None:
                 if base_hash not in hashes:
                     hashes.append(base_hash)
                 details["linked_deck_hashes"] = hashes
-                mw.addonManager.writeConfig(__name__, strings_data)
+                config_manager.write_config(strings_data)
                 aqt.utils.showInfo(
                     "Deck link added. Configure notetypes before creating any note links!"
                 )
@@ -215,7 +216,7 @@ def add_browser_menu_item(browser: Browser) -> None:
         return
 
     def export_selected() -> None:
-        config = mw.addonManager.getConfig(__name__)
+        config = config_manager.get_config()
         field = get_configured_search_field(config)
         exts = get_configured_exts(config)
         selected_notes = [mw.col.get_note(nid) for nid in browser.selected_notes()]

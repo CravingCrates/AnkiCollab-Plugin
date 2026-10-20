@@ -8,12 +8,17 @@ module touches.  Also supplies lightweight stand-ins for ``anki.notes.Note``,
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
+import tempfile
 import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, PropertyMock, patch
+
+#: The fake profile every mock Anki instance is "logged into".
+TEST_PROFILE_NAME = "TestProfile"
 
 # ---------------------------------------------------------------------------
 # Lightweight Anki type stand-ins
@@ -218,9 +223,25 @@ def create_mock_mw(
     from pathlib import Path
 
     _addon_root = Path(__file__).resolve().parent.parent
+    addon_mgr.addon_from_module = MagicMock(return_value=_addon_root.name)
     addon_mgr.addonFromModule = MagicMock(return_value=_addon_root.name)
     addon_mgr.addonsFolder = MagicMock(return_value="")
     mw.addonManager = addon_mgr
+
+    # Settings, auth and the device id live in config_manager now, not in
+    # mw.addonManager.getConfig. Seed the real store so `config=` keeps its
+    # meaning: "this profile's config".
+    import config_manager
+
+    if config_manager._user_files_dir_override is None:
+        # Called outside the isolation fixture (integration tests, or a
+        # fixture built at collection time). Make our own sandbox rather than
+        # writing into the real add-on folder.
+        config_manager.reset_for_tests(
+            Path(tempfile.mkdtemp(prefix="ankicollab-test-")) / "user_files"
+        )
+    config_manager.activate_for_tests(TEST_PROFILE_NAME)
+    config_manager.write_config(copy.deepcopy(_config_store))
 
     # progress / taskman ---------------------------------------------------
     mw.progress = MagicMock()
@@ -297,3 +318,24 @@ def install_fake_aqt_module():
     aqt_mod = sys.modules["aqt"]
     if not hasattr(aqt_mod, "mw") or aqt_mod.mw is None:
         aqt_mod.mw = MagicMock()
+
+
+def spy_config_writes(monkeypatch):
+    """Record every config write while still performing it.
+
+    For the handful of tests that need to assert *that* (or how often) a write
+    happened, rather than just the resulting state.
+    """
+    import copy
+
+    import config_manager
+
+    writes = []
+    real_write = config_manager.write_config
+
+    def spy(config):
+        writes.append(copy.deepcopy(config))
+        return real_write(config)
+
+    monkeypatch.setattr(config_manager, "write_config", spy)
+    return writes

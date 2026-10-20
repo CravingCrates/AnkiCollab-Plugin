@@ -17,14 +17,23 @@ Usage (after the coverage step):
 import sys
 import xml.etree.ElementTree as ET
 
-# Per-file coverage floors (percent, XML line-rate), measured from the
-# session that introduced this check (2026-08-15, WSL coverage run after
-# closing the data-integrity gaps). Raise, don't lower.
+# Per-file coverage floors (percent, XML line-rate).
+#
+# These exist only to catch a *large* accidental loss of behavioural coverage in
+# the files whose bugs corrupt collections.  They are not a target: tests are
+# written to catch regressions, not to move this number (see MUTATION_TRIAGE.md
+# and the "Testing philosophy" section of TESTING.md).  Raise a floor when the
+# measured value rises; never lower one to make a build pass.
+#
+# Measured 2026-09-29 after the mutation-survivor triage (the tests that only
+# asserted log text, user-facing wording or Qt styling were removed on purpose,
+# so some numbers are below their earlier peak — that is the intended trade).
 PER_FILE_FLOORS = {
-    "crowd_anki/representation/deck.py": 60.0,  # measured 61.53
-    "crowd_anki/representation/note.py": 70.0,  # measured 70.97
-    "export_manager.py": 31.0,  # measured 31.58
-    "import_manager.py": 59.0,  # measured 59.16
+    "crowd_anki/representation/deck.py": 62.0,  # measured 62.31
+    "crowd_anki/representation/note.py": 87.0,  # measured 87.63
+    "crowd_anki/representation/note_model.py": 95.0,  # measured 98.54
+    "export_manager.py": 68.0,  # measured 68.44
+    "import_manager.py": 63.0,  # measured 63.20
 }
 
 

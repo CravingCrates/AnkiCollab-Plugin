@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 import sentry_sdk
 
+import config_manager
 from sentry_integration import (
     _parse_version_tuple,
     init_sentry,
@@ -65,7 +66,7 @@ class TestInitSentryPrivacy:
     @pytest.fixture
     def sentry_config(self, mw_mock):
         def _apply(config):
-            mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: config
+            config_manager.write_config(config)
             return config
 
         return _apply
@@ -106,15 +107,11 @@ class TestInitSentryPrivacy:
 
 class TestIsSentryEnabled:
     def test_false_when_config_disabled(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {
-            "settings": {"error_reporting_enabled": False}
-        }
+        config_manager.write_config({"settings": {"error_reporting_enabled": False}})
         assert is_sentry_enabled() is False
 
     def test_false_when_no_client(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {
-            "settings": {"error_reporting_enabled": True}
-        }
+        config_manager.write_config({"settings": {"error_reporting_enabled": True}})
         hub = sentry_sdk.Hub
         with patch.object(hub, "current", create=True) as mock_current:
             mock_current.client = None

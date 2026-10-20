@@ -2226,9 +2226,32 @@ class Deck(JsonSerializableAnkiDict):
             )
 
             # Check which original IDs are already taken by existing notes
-            # Process in chunks to avoid SQL variable limit (typically 999)
+            # https://bugsink.ankicollab.com/issues/issue/089fb37e-a686-4da3-be68-6617aae80594
             SQL_VARIABLE_LIMIT = 900  # Safe limit below SQLite's 999
-            original_ids = [note._original_id for note in notes_with_original_ids]
+            notes_by_original_id = defaultdict(list)
+            for note in notes_with_original_ids:
+                notes_by_original_id[note._original_id].append(note)
+
+            duplicate_original_ids = {
+                original_id
+                for original_id, matching_notes in notes_by_original_id.items()
+                if len(matching_notes) > 1
+            }
+            for original_id in duplicate_original_ids:
+                duplicate_current_ids = [
+                    note.anki_object.id for note in notes_by_original_id[original_id]
+                ]
+                logger.warning(
+                    f"Original note ID {original_id} is duplicated for current note IDs "
+                    f"{duplicate_current_ids}; skipping all restorations for this ID"
+                )
+
+            unique_notes = [
+                note
+                for note in notes_with_original_ids
+                if note._original_id not in duplicate_original_ids
+            ]
+            original_ids = [note._original_id for note in unique_notes]
             existing_ids = set()
 
             for i in range(0, len(original_ids), SQL_VARIABLE_LIMIT):
@@ -2243,7 +2266,7 @@ class Deck(JsonSerializableAnkiDict):
             safe_notes = []
             conflicted_notes = []
 
-            for note in notes_with_original_ids:
+            for note in unique_notes:
                 if note._original_id in existing_ids:
                     conflicted_notes.append(note)
                     logger.warning(

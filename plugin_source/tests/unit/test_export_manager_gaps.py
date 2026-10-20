@@ -150,6 +150,22 @@ class TestUpdateNotetypeMediaReferences:
         assert result == 1
         saved = mw_mock.col.models.save.call_args.args[0]
         assert "new.png" in saved["css"]
+        assert saved["tmpls"][0]["qfmt"] == "{{Front}}"
+        assert saved["tmpls"][0]["afmt"] == "{{Back}}"
+
+    def test_updates_each_template_format_and_saves_only_changed_object(self, mw_mock):
+        modified = self._notetype(
+            css=".card {}", qfmt="[sound:old.mp3]", afmt="{{Back}} old.mp3"
+        )
+        untouched = self._notetype(name="Keep", css=".card {}", qfmt="{{Front}}")
+        mw_mock.col.models.all.return_value = [modified, untouched]
+
+        assert update_notetype_media_references({"old.mp3": "new.mp3"}) == 1
+
+        mw_mock.col.models.save.assert_called_once_with(modified)
+        assert modified["tmpls"][0]["qfmt"] == "[sound:new.mp3]"
+        assert modified["tmpls"][0]["afmt"] == "{{Back}} new.mp3"
+        assert untouched["tmpls"][0]["qfmt"] == "{{Front}}"
 
     def test_no_matching_notetypes(self, mw_mock):
         mw_mock.col.models.all.return_value = [self._notetype(css=".card {}", qfmt="x")]

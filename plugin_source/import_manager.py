@@ -19,7 +19,10 @@ from aqt.qt import *
 from aqt.qt import QDialog, QApplication, QMessageBox
 from aqt import mw
 
+from . import config_manager
+from . import impact
 from .api_client import api_client
+from .auth_manager import auth_manager
 
 from .dialogs import (
     ChangelogDialog,
@@ -872,7 +875,7 @@ def show_changelog_popup(subscription):
 
 
 def ask_for_rating():
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_stored_config()
     if strings_data is not None and "settings" in strings_data:
         if "pull_counter" in strings_data["settings"]:
             pull_counter = strings_data["settings"]["pull_counter"]
@@ -891,7 +894,7 @@ def ask_for_rating():
                         ).strftime("%Y-%m-%d %H:%M:%S")
                         dialog = RateAddonDialog(parent=mw)
                         dialog.exec()
-            mw.addonManager.writeConfig(__name__, strings_data)
+            config_manager.write_config(strings_data)
 
 
 def import_webresult(data):
@@ -919,6 +922,7 @@ def import_webresult(data):
             aqt.utils.tooltip("Your deck is up to date.", parent=mw, period=2000)
 
         update_stats()
+        impact.maybe_show_nudge()
         return
 
     # Create backup before doing anything - this is CRITICAL
@@ -944,10 +948,11 @@ def import_webresult(data):
             show_changelog_popup(subscription)
 
     update_stats()
+    impact.maybe_show_nudge()
 
 
 def get_card_suspension_status():
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_config()
     val = False
     if strings_data is not None and strings_data["settings"] is not None:
         val = bool(strings_data["settings"]["suspend_new_cards"])
@@ -955,7 +960,7 @@ def get_card_suspension_status():
 
 
 def get_deck_movement_status():
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_config()
     val = True
     if strings_data is not None and strings_data["settings"] is not None:
         val = bool(strings_data["settings"]["auto_move_cards"])
@@ -963,7 +968,7 @@ def get_deck_movement_status():
 
 
 def get_keep_empty_subdeck_status():
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_config()
     val = False
     if strings_data is not None and strings_data.get("settings") is not None:
         val = bool(strings_data["settings"].get("keep_empty_subdecks", False))
@@ -1009,7 +1014,7 @@ def get_new_notes_home_deck(given_deck_hash):
 
 
 def remove_nonexistent_decks():
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_stored_config()
 
     if strings_data is not None and len(strings_data) > 0:
         # Create a copy of the config data
@@ -1041,14 +1046,14 @@ def remove_nonexistent_decks():
                 else:
                     webresult = json.loads(response.content)  # type: ignore
                     # we need to remove all the decks that don't exist anymore from the strings_data
-                    strings_data = mw.addonManager.getConfig(__name__)
+                    strings_data = config_manager.get_stored_config()
                     if strings_data is not None and len(strings_data) > 0:
                         for deck_hash in webresult:
                             if deck_hash in strings_data:
                                 del strings_data[deck_hash]
                             else:
                                 logger.debug("deck_hash not found in strings_data")
-                        mw.addonManager.writeConfig(__name__, strings_data)
+                        config_manager.write_config(strings_data)
                     else:
                         logger.debug("strings_data is None or empty")
         except requests.exceptions.RequestException as e:
@@ -1070,14 +1075,14 @@ def remove_nonexistent_decks():
 
 
 def _remove_subscription_from_config(deck_hash: str) -> None:
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_stored_config()
     if not isinstance(strings_data, dict):
         return
 
     details = strings_data.get(deck_hash)
     if isinstance(details, dict) and details.get("deckId", 0) == 0:
         del strings_data[deck_hash]
-        mw.addonManager.writeConfig(__name__, strings_data)
+        config_manager.write_config(strings_data)
         logger.info(
             "Removed pending subscription %s from config after cancellation", deck_hash
         )
@@ -1086,7 +1091,7 @@ def _remove_subscription_from_config(deck_hash: str) -> None:
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
 def async_start_pull(input_hash, silent=False):
     remove_nonexistent_decks()
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_config()
     if strings_data is not None and len(strings_data) > 0:
         # Create a copy of the config data
         strings_data_copy = strings_data.copy()
@@ -1109,9 +1114,11 @@ def async_start_pull(input_hash, silent=False):
                 else {}
             )
 
+        pull_auth = auth_manager.is_logged_in()
+
         try:
             response = api_client.post_json(
-                "/pullChanges", strings_data_to_send, auth=False
+                "/pullChanges", strings_data_to_send, auth=pull_auth
             )
             if response.status_code == 200:
                 compressed_data = base64.b64decode(response.content)  # type: ignore
@@ -1126,7 +1133,7 @@ def async_start_pull(input_hash, silent=False):
                         exc,
                     )
                     response = api_client.post_json(
-                        "/pullChanges", strings_data_to_send, auth=False
+                        "/pullChanges", strings_data_to_send, auth=pull_auth
                     )
                     if response.status_code == 200:
                         compressed_data = base64.b64decode(response.content)  # type: ignore

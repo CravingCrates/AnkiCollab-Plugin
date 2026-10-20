@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 from datetime import datetime
 
+import config_manager
 from utils import (
     DeckManager,
     CollectionUnavailableError,
@@ -91,7 +92,7 @@ class TestDeckManager:
 
     @pytest.fixture
     def mw_with_deck_config(self, mw_mock, deck_config):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(deck_config)
+        config_manager.write_config(deck_config)
         return mw_mock
 
     def test_filters_settings_and_auth(self, mw_with_deck_config):
@@ -114,8 +115,9 @@ class TestDeckManager:
 
     def test_context_manager_saves(self, mw_with_deck_config):
         with DeckManager() as dm:
-            pass
-        mw_with_deck_config.addonManager.writeConfig.assert_called()
+            dm.get_by_hash("hash_abc")["deckId"] = 123
+        # The write on exit is observed through the stored (on-disk) view.
+        assert config_manager.get_stored_config()["hash_abc"]["deckId"] == 123
 
     def test_iter_yields_tuples(self, mw_with_deck_config):
         dm = DeckManager()
@@ -123,8 +125,8 @@ class TestDeckManager:
         assert all(isinstance(h, str) and isinstance(d, dict) for h, d in items)
 
     def test_none_config_yields_empty(self, mw_mock):
-        """getConfig returning None should not crash DeckManager."""
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: None
+        """An empty stored config should not crash DeckManager."""
+        config_manager.write_config({})
         dm = DeckManager()
         assert list(dm) == []
         assert dm.get_by_hash("anything") is None
@@ -143,7 +145,7 @@ class TestLookupHelpers:
             "hash_a": {"deckId": 10, "timestamp": "2025-06-01 12:00:00"},
             "hash_b": {"deckId": 20, "timestamp": "2025-01-15 08:30:00"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
 
     def test_get_timestamp_returns_float(self, mw_mock):
         ts = get_timestamp("hash_a")
@@ -159,7 +161,7 @@ class TestLookupHelpers:
             "settings": {},
             "hash_bad": {"deckId": 99, "timestamp": "not-a-date"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         with pytest.raises(ValueError):
             get_timestamp("hash_bad")
 
@@ -190,7 +192,7 @@ class TestGetDeckHashFromDid:
             "settings": {},
             "hash_parent": {"deckId": 1, "timestamp": "2025-01-01 00:00:00"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         mw_mock.col.decks.parents.return_value = []
 
     def test_direct_match(self, mw_mock):
@@ -211,7 +213,7 @@ class TestGetDeckHashFromCard:
             "settings": {},
             "hash_deck": {"deckId": 5, "timestamp": "2025-01-01 00:00:00"},
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: dict(config)
+        config_manager.write_config(config)
         mw_mock.col.decks.parents.return_value = []
         mw_mock.col.decks.get.return_value = {"dyn": False}
 
@@ -338,3 +340,27 @@ class TestNoteIdLookups:
         mw_mock.col.db.list.return_value = ["g1", "g2"]
         result = get_guids_from_noteids(None, [100, 101])
         assert result == ["g1", "g2"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Read-modify-write: must not materialise shipped defaults into the file
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestReadModifyWriteDoesNotMaterialiseDefaults:
+    def test_get_personal_tags_keeps_defaults_out_of_the_file(
+        self, tmp_path, monkeypatch
+    ):
+        import config_manager
+        import utils
+
+        config_manager.reset_for_tests(tmp_path / "user_files")
+        config_manager.activate_for_tests("Medicine")
+        config_manager.write_config({"abc123": {"deckId": 1}})
+        monkeypatch.setattr(config_manager, "_shipped_defaults", lambda: {"shipped": 1})
+
+        utils.get_personal_tags("abc123")
+
+        stored = config_manager.get_stored_config()
+        assert "shipped" not in stored
+        assert stored["abc123"]["personal_tags"]

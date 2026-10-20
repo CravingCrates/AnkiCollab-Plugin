@@ -1,5 +1,3 @@
-import os
-import json
 import time
 import logging
 import threading
@@ -10,9 +8,8 @@ from aqt import mw
 import aqt.utils
 from aqt.qt import *
 
+from . import config_manager
 from .var_defs import API_BASE_URL
-
-_SECRET_KEYS = ("token", "refresh_token", "expires_timestamp")
 
 
 class AuthManager:
@@ -21,7 +18,6 @@ class AuthManager:
     """
 
     def __init__(self):
-        self.config_key = __name__
         self.auth_data = {}
         self._lock = threading.Lock()
         self._loaded = False
@@ -29,82 +25,64 @@ class AuthManager:
         from aqt import gui_hooks
 
         gui_hooks.main_window_did_init.append(self._load_auth_data)
+        # A profile switch happens inside one process, so the data loaded at
+        # main-window init belongs to whichever profile was open then. Reload
+        # whenever config_manager activates a different profile.
+        config_manager.add_profile_changed_listener(self._on_profile_changed)
 
-    def _user_files_dir(self):
-        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_files")
-        os.makedirs(d, exist_ok=True)
-        return d
+    def _on_profile_changed(self, _profile_name):
+        """Reload the active profile's auth data after a profile switch.
 
-    def _auth_file_path(self):
-        return os.path.join(self._user_files_dir(), "auth.json")
-
-    def _read_settings(self):
-        strings_data = mw.addonManager.getConfig(self.config_key) or {}
-        return strings_data.get("auth", {})
-
-    def _write_settings(self, settings_payload):
-        strings_data = mw.addonManager.getConfig(self.config_key) or {}
-        strings_data["auth"] = settings_payload
-        mw.addonManager.writeConfig(self.config_key, strings_data)
-
-    def _read_secrets(self):
-        try:
-            path = self._auth_file_path()
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                "Failed to read stored credentials: %s", e
-            )
-            return {}
-
-    def _write_secrets(self, secrets_payload):
-        path = self._auth_file_path()
-        tmp_path = path + ".tmp"
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(secrets_payload, f)
-            os.replace(tmp_path, path)  # atomic on the same filesystem
-        except Exception as e:
-            logging.getLogger(__name__).warning("Failed to save credentials: %s", e)
-            aqt.utils.showInfo(
-                "AnkiCollab could not save your login locally. "
-                "You may need to log in again next time you start Anki."
-            )
-        finally:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
+        Called on the main thread by config_manager, after the new profile's
+        migration has run, so the new profile's auth data is already in place.
+        """
+        with self._lock:
+            self.auth_data = config_manager.get_auth()
+            self._loaded = True
 
     def _load_auth_data(self):
-        """Load settings + credentials"""
+        """Load the active profile's auth data."""
         with self._lock:
-            settings = self._read_settings()
-            secrets = self._read_secrets()
-
-            if not secrets and any(k in settings for k in _SECRET_KEYS):
-                secrets = {k: settings.pop(k) for k in _SECRET_KEYS if k in settings}
-                self._write_secrets(secrets)
-                self._write_settings(settings)
-
-            self.auth_data = {**settings, **secrets}
+            self.auth_data = config_manager.get_auth()
             self._loaded = True
 
     def _save_auth_data(self):
-        """Persist settings and credentials to their respective stores."""
+        """Persist the active profile's auth data.
+
+        Never raises: a read-only or full ``user_files`` must not take down a
+        login, or a 401 handler running on a background thread.
+        """
+        failure = None
         with self._lock:
-            secrets = {
-                k: self.auth_data[k] for k in _SECRET_KEYS if k in self.auth_data
-            }
-            settings = {
-                k: v for k, v in self.auth_data.items() if k not in _SECRET_KEYS
-            }
-            self._write_secrets(secrets)
-            self._write_settings(settings)
+            try:
+                config_manager.write_auth(self.auth_data)
+            except config_manager.NoActiveProfileError:
+                # A 401 or a logout can arrive while no profile is open
+                # (shutdown, profile switch). Warning beats crashing the caller.
+                logging.getLogger(__name__).warning(
+                    "AnkiCollab: no profile is open; auth data was not saved"
+                )
+            except OSError as exc:
+                failure = exc
+                logging.getLogger(__name__).warning(
+                    "AnkiCollab: could not save the login locally: %s", exc
+                )
+        # Outside the lock: showInfo is modal and runs on the main thread.
+        if failure is not None:
+            self._warn_save_failed()
+
+    def _warn_save_failed(self):
+        """Tell the user, on the main thread, that the login could not be saved."""
+        try:
+            if mw and mw.taskman:
+                mw.taskman.run_on_main(
+                    lambda: aqt.utils.showInfo(
+                        "AnkiCollab could not save your login locally. "
+                        "You may need to log in again next time you start Anki."
+                    )
+                )
+        except Exception:
+            pass
 
     def store_login_result(self, auth_response):
         if not auth_response:
@@ -183,17 +161,6 @@ class AuthManager:
     def is_logged_in(self):
         """Check if user has a valid token"""
         return self.get_token() != ""
-
-    def get_auto_approve(self):
-        """Get auto-approve setting"""
-        if not self._loaded:
-            self._load_auth_data()
-        return self.auth_data.get("auto_approve", False)
-
-    def set_auto_approve(self, value):
-        """Set auto-approve setting"""
-        self.auth_data["auto_approve"] = bool(value)
-        self._save_auth_data()
 
     def handle_auth_failure(self):
         """Handle a 401 response by clearing credentials locally and warning the user.

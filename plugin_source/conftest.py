@@ -532,6 +532,7 @@ def _import_addon_module(name: str):
 
 
 _ADDON_MODULES_ORDERED = [
+    "config_manager",
     "var_defs",
     "utils",
     "sentry_integration",
@@ -591,6 +592,7 @@ _ADDON_MODULES_ORDERED = [
     "crowd_anki.importer.__init__",
     "crowd_anki.importer.import_dialog",
     "export_manager",
+    "impact",
     "import_manager",
     "menu",
     "hooks",

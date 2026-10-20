@@ -313,7 +313,6 @@ class TestBackupBeforeImport:
 
         mock_backup.return_value = True
         mock_mw.col = MagicMock()
-        mock_mw.addonManager.getConfig.return_value = {}
 
         webresult = [{"deck_hash": "testhash", "deck": {}}]
 

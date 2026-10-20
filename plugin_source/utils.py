@@ -11,6 +11,7 @@ import aqt.utils
 from contextlib import AbstractContextManager
 import logging
 
+from . import config_manager
 from .var_defs import (
     DEFAULT_PROTECTED_TAGS,
     PREFIX_PROTECTED_FIELDS,
@@ -133,7 +134,7 @@ def get_personal_tags(deck_hash):
     Get personal tags that should be stripped during exports and protected during imports.
     Returns DEFAULT_PROTECTED_TAGS + PREFIX_PROTECTED_FIELDS + PREFIX_PROTECTED_TAGS if no deck-specific config exists.
     """
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_stored_config()
     combined_tags = set()
 
     if strings_data and deck_hash:
@@ -142,7 +143,7 @@ def get_personal_tags(deck_hash):
                 personal_tags = details.get("personal_tags", DEFAULT_PROTECTED_TAGS)
                 if "personal_tags" not in details:
                     details["personal_tags"] = personal_tags
-                    mw.addonManager.writeConfig(__name__, strings_data)
+                    config_manager.write_config(strings_data)
                 combined_tags.update(personal_tags)
                 combined_tags.add(PREFIX_PROTECTED_FIELDS)
                 combined_tags.add(PREFIX_PROTECTED_TAGS)
@@ -167,6 +168,12 @@ def get_logger(name: str = "ankicollab") -> logging.Logger:
     logger.propagate = False
     logger.setLevel(logging.INFO)
     return logger
+
+
+# Deliberately a plain propagating logger rather than ``get_logger`` (which
+# sets ``propagate = False``): ``DeckManager.save`` logs a dropped write here,
+# and that must reach the log, not only Sentry breadcrumbs.
+logger = logging.getLogger("ankicollab")
 
 
 from typing import Dict, Iterator, Optional, Tuple
@@ -350,13 +357,28 @@ def create_backup(background: bool = False, critical: bool = False) -> bool:
 
 
 class DeckManager(AbstractContextManager):
+    """Read/modify/write access to the active profile's per-deck config entries.
+
+    Deck entries are the config's top-level keys other than the reserved
+    "settings" and "auth" blocks. The manager writes only those keys, only
+    through :mod:`config_manager`, and only back to the profile it was opened
+    for.
+    """
+
+    _RESERVED_KEYS = ("settings", "auth")
+
     def __init__(self):
-        self._raw_data = mw.addonManager.getConfig(__name__) or {}
+        # The *stored* config, not the merged view: writing a merged view back
+        # would materialise every shipped default into the user's file. This
+        # snapshot is only for reading; the write path re-reads, so a
+        # long-lived manager cannot clobber concurrent writes.
+        self._profile_name = config_manager.current_profile_name()
+        self._raw_data = config_manager.get_stored_config()
 
         self._filtered_items = {
             deck_hash: details
             for deck_hash, details in self._raw_data.items()
-            if deck_hash not in ["settings", "auth"]
+            if deck_hash not in self._RESERVED_KEYS
         }
 
     def __enter__(self) -> DeckManager:
@@ -365,8 +387,28 @@ class DeckManager(AbstractContextManager):
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.save()
 
-    def save(self):
-        mw.addonManager.writeConfig(__name__, self._raw_data)
+    def save(self) -> None:
+        """Write this manager's deck entries to the profile it was opened for.
+
+        Does nothing when no profile is open, or when the active profile is no
+        longer the one this manager was built for: in both cases the entries
+        belong to a profile that is not the current target, and writing them
+        would corrupt an unrelated profile's settings.
+        """
+        if not self._filtered_items:
+            return
+
+        current = config_manager.current_profile_name()
+        if current is None or current != self._profile_name:
+            logger.warning(
+                "AnkiCollab: not saving deck config for profile %r while %r is "
+                "active; the operation belonged to a profile that is no longer open",
+                self._profile_name,
+                current,
+            )
+            return
+
+        config_manager.update_values(dict(self._filtered_items))
 
     def get_by_hash(self, deck_hash: str) -> Optional[Dict]:
         return self._filtered_items.get(deck_hash)

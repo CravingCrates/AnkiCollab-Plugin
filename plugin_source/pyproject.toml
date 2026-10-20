@@ -41,6 +41,8 @@ source_paths = [
     "gear_menu_setup.py",
     "notifications_center.py",
     "shortcut_validator.py",
+    "config_manager.py",
+    "impact.py",
     "ui/",
     "crowd_anki/",
 ]

@@ -9,13 +9,10 @@ These verify the core logic that ensures:
 """
 
 import copy
-import pytest
-from unittest.mock import MagicMock, patch
 
-from tests.conftest import make_notetype, create_mock_collection, MockAnkiNote
+from tests.conftest import make_notetype
 
 from crowd_anki.representation.note_model import NoteModel
-from crowd_anki.utils.constants import UUID_FIELD_NAME
 
 # ──────────────────────────────────────────────────────────────────────
 # NoteModel construction
@@ -360,54 +357,7 @@ class TestChangeDetection:
         assert nm._detect_changes_needed(basic_notetype, False) is True
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Notetype save to collection
-# ──────────────────────────────────────────────────────────────────────
-
-
-class TestSaveToCollection:
-    def test_create_new_notetype(self, basic_notetype):
-        col = create_mock_collection()
-        nm = NoteModel(copy.deepcopy(basic_notetype))
-        result, field_map = nm.save_to_collection(col)
-        # New notetype was added
-        assert col.models.add.called or col.models.update_dict.called
-
-    def test_update_existing_notetype_keeps_id(self, basic_notetype):
-        col = create_mock_collection()
-        # Pre-populate existing model
-        existing = copy.deepcopy(basic_notetype)
-        col.models._store[existing["id"]] = existing
-
-        # Modify and save
-        updated = copy.deepcopy(basic_notetype)
-        updated["css"] = ".card { background: blue; }"
-        nm = NoteModel(updated)
-        result, field_map = nm.save_to_collection(col)
-        # ID should be preserved
-        if result:
-            assert result["id"] == existing["id"]
-
-    def test_update_returns_field_mapping(self, basic_notetype):
-        col = create_mock_collection()
-        existing = copy.deepcopy(basic_notetype)
-        col.models._store[existing["id"]] = existing
-
-        # Add a field
-        updated = copy.deepcopy(basic_notetype)
-        updated["flds"].append(
-            {
-                "name": "Hint",
-                "ord": 2,
-                "sticky": False,
-                "rtl": False,
-                "font": "Arial",
-                "size": 20,
-            }
-        )
-        nm = NoteModel(updated)
-        result, field_map = nm.save_to_collection(col)
-        assert field_map is not None
+# Saving a notetype into the collection is covered by test_note_model_save.py.
 
 
 # ──────────────────────────────────────────────────────────────────────

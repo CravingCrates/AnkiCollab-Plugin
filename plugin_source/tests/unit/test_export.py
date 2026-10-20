@@ -15,6 +15,8 @@ import copy
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
+import config_manager
+
 from tests.conftest import (
     make_notetype,
     make_note_dict,
@@ -251,7 +253,7 @@ class TestFilterValidFilenameMapping:
 class TestGetPersonalTags:
     def test_default_protected_tags_when_deck_not_found(self, mw_mock):
         """When deck hash is not in config, return defaults."""
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: {"settings": {}}
+        config_manager.write_config({"settings": {}})
         tags = get_personal_tags("nonexistent_hash")
         assert "leech" in tags
         assert "marked" in tags
@@ -266,7 +268,7 @@ class TestGetPersonalTags:
                 "personal_tags": ["custom_tag_1", "custom_tag_2"],
             },
         }
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: cfg
+        config_manager.write_config(cfg)
         tags = get_personal_tags("my_hash")
         assert "custom_tag_1" in tags
         assert "custom_tag_2" in tags
@@ -276,13 +278,13 @@ class TestGetPersonalTags:
     def test_deck_without_personal_tags_key_gets_defaults(self, mw_mock):
         """When a deck entry exists but no personal_tags key, defaults are set."""
         config = {"hash_abc": {"deckId": 1}}
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: config
+        config_manager.write_config(config)
         tags = get_personal_tags("hash_abc")
         assert "leech" in tags
         assert "marked" in tags
 
     def test_none_config(self, mw_mock):
-        mw_mock.addonManager.getConfig.side_effect = lambda *a, **kw: None
+        config_manager.write_config({})
         tags = get_personal_tags("any_hash")
         assert "leech" in tags
         assert "AnkiCollab_Protect" in tags

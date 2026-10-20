@@ -40,6 +40,7 @@ import subprocess
 from typing import Callable, Tuple, Dict, List, Any, Optional, Set
 import os
 
+from . import config_manager
 from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style
 
 from .utils import get_personal_tags
@@ -207,7 +208,7 @@ def _handle_operation_aborted(e: Exception, operation_name: str = "Operation"):
 
 
 def ask_for_rating():
-    strings_data = mw.addonManager.getConfig(__name__)
+    strings_data = config_manager.get_stored_config()
     if strings_data is not None and "settings" in strings_data:
         if "push_counter" in strings_data["settings"]:
             push_counter = strings_data["settings"]["push_counter"]
@@ -230,14 +231,14 @@ def ask_for_rating():
                             parent=mw
                         )  # UI Element - Main thread OK
                         dialog.exec()
-            mw.addonManager.writeConfig(__name__, strings_data)
+            config_manager.write_config(strings_data)
 
 
 def get_maintainer_data(deckHash):
     from .api_client import api_client
 
     token = auth_manager.get_token()
-    auto_approve = auth_manager.get_auto_approve()
+    auto_approve = config_manager.get_auto_approve()
 
     if token:
         try:
@@ -2187,7 +2188,7 @@ def _on_export_deck_created(
 
         # Store it in the config
         if deckHash:
-            strings_data = mw.addonManager.getConfig(__name__)
+            strings_data = config_manager.get_stored_config()
             if strings_data is None:
                 strings_data = {}  # Initialize if None
 
@@ -2197,7 +2198,7 @@ def _on_export_deck_created(
                 "optional_tags": {},
                 "personal_tags": DEFAULT_PROTECTED_TAGS,
             }
-            mw.addonManager.writeConfig(__name__, strings_data)
+            config_manager.write_config(strings_data)
 
         if files_info and aqt.utils.askUser(
             "Deck published successfully!\n\nDo you want to upload associated media files now? "

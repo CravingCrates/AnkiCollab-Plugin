@@ -438,3 +438,27 @@ def mock_import_config():
     cfg.new_notes_home_deck = None
     cfg.is_personal_field = MagicMock(return_value=False)
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Config-manager isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config_manager(tmp_path_factory):
+    """Never let a test read or write the real add-on's user_files folder.
+
+    The sandbox deliberately lives outside ``tmp_path``. ``create_mock_mw``
+    seeds a profile into it for every unit test, and config_manager's own
+    tests assert on the contents of ``tmp_path`` -- for example that a
+    directory holds exactly one file -- so sharing one directory made those
+    assertions fail for reasons unrelated to what they test.
+    """
+    import config_manager
+
+    sandbox_root = tmp_path_factory.mktemp("ankicollab")
+    config_manager.reset_for_tests(sandbox_root / "user_files")
+
+    yield sandbox_root / "user_files"
+    config_manager.reset_for_tests(None)
