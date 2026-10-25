@@ -4,7 +4,7 @@ import logging
 from typing import Optional, List, Dict, Any, Set, Tuple
 
 from anki.collection import Collection
-from anki.models import NotetypeDict, NotetypeId
+from anki.models import ChangeNotetypeRequest, NotetypeDict, NotetypeId
 from .json_serializable import JsonSerializableAnkiDict
 from ..utils import utils
 from ..utils.uuid import UuidFetcher
@@ -12,16 +12,37 @@ from ...utils import get_logger
 
 logger = get_logger("ankicollab.note_model")
 
+NOTE_REMAP_CHUNK_SIZE = 1000
+
+
+class NotetypeSaveError(RuntimeError):
+    """A notetype could not be persisted safely.
+
+    Continuing the import without a field mapping would silently move note
+    content into the wrong fields, so this is always fatal.
+    """
+
 
 class NoteModel(JsonSerializableAnkiDict):
     ModelMap = namedtuple("ModelMap", ["field_map", "template_map"])
-    export_filter_set = JsonSerializableAnkiDict.export_filter_set | {"did"}  # uuid
+
+    export_filter_set = JsonSerializableAnkiDict.export_filter_set | {
+        "did",  # uuid
+        "local_only_field_names",
+        "local_field_names_before_merge",
+    }
+    import_filter_set = JsonSerializableAnkiDict.import_filter_set | {
+        "local_only_field_names",
+        "local_field_names_before_merge",
+    }
 
     def __init__(self, anki_model=None):
         super(NoteModel, self).__init__(anki_model)
         # Ensure anki_dict is properly initialized
         if self.anki_dict is None:
             self.anki_dict = {}
+        self.local_only_field_names: List[str] = []
+        self.local_field_names_before_merge: Optional[Set[str]] = None
 
     @classmethod
     def from_collection(cls, collection, entity_id):
@@ -51,6 +72,11 @@ class NoteModel(JsonSerializableAnkiDict):
             - note_type: The updated notetype dictionary if changes were made, None otherwise
             - field_mapping: List mapping new field indices to old field indices
                            (only returned if notetype was updated, None otherwise)
+
+        Raises:
+            NotetypeSaveError: if the notetype could not be saved. Callers must
+                abort the import: without a mapping, note content would land in
+                the wrong fields.
         """
         try:
             existing_model_dict = UuidFetcher(collection).get_model(self.get_uuid())
@@ -58,16 +84,26 @@ class NoteModel(JsonSerializableAnkiDict):
                 f"Saving notetype {self.anki_dict.get('name', 'unknown')} with UUID {self.get_uuid()}, existing model: {existing_model_dict is not None}"
             )
             if existing_model_dict:
-                return self._update_existing_notetype(collection, existing_model_dict)
+                result = self._update_existing_notetype(collection, existing_model_dict)
             else:
-                new_notetype = self._create_new_notetype(collection)
-                return new_notetype, None
+                result = self._create_new_notetype(collection), None
 
+            if result[0] is None and result[1] is None:
+                raise NotetypeSaveError(
+                    f"Failed to save notetype '{self.anki_dict.get('name', 'unknown')}': no field mapping was captured"
+                )
+            return result
+
+        except NotetypeSaveError:
+            raise
         except Exception as e:
             logger.error(
-                f"Failed to save notetype {self.anki_dict.get('name', 'unknown')}: {e}"
+                f"Failed to save notetype {self.anki_dict.get('name', 'unknown')}: {e}",
+                exc_info=True,
             )
-            return None, None
+            raise NotetypeSaveError(
+                f"Failed to save notetype '{self.anki_dict.get('name', 'unknown')}': {e}"
+            ) from e
 
     def _update_existing_notetype(
         self, collection: Collection, existing_model_dict: NotetypeDict
@@ -83,6 +119,10 @@ class NoteModel(JsonSerializableAnkiDict):
         try:
             note_type_name = self.anki_dict.get("name", "").lower()
             should_preserve_templates = "projektanki" in note_type_name
+            self.local_only_field_names = []
+            self.local_field_names_before_merge = {
+                field["name"].lower() for field in existing_model_dict.get("flds", [])
+            }
 
             # Check if any changes are actually needed
             changes_needed = self._detect_changes_needed(
@@ -90,6 +130,11 @@ class NoteModel(JsonSerializableAnkiDict):
             )
 
             if not changes_needed:
+                # The UUID is the only authoritative local reference. The
+                # payload's ``id`` belongs to the sender's collection and must
+                # never be used to look up (or write to) our notetypes/notes.
+                self.anki_dict["id"] = existing_model_dict["id"]
+                self.anki_dict["flds"] = existing_model_dict["flds"]
                 return None, list(range(len(existing_model_dict["flds"])))
 
             # Capture field mapping BEFORE updating the notetype
@@ -102,6 +147,14 @@ class NoteModel(JsonSerializableAnkiDict):
                 field_mapping = self._build_intelligent_field_map(
                     existing_model_dict, self.anki_dict
                 )
+                remote_names = {
+                    field["name"].lower() for field in self.anki_dict["flds"]
+                }
+                self.local_only_field_names = [
+                    field["name"]
+                    for field in existing_model_dict["flds"]
+                    if field["name"].lower() not in remote_names
+                ]
                 logger.info(
                     f"Generated field mapping for {existing_model_dict['name']}: {field_mapping}"
                 )
@@ -146,10 +199,26 @@ class NoteModel(JsonSerializableAnkiDict):
                 if key not in ["id", "flds", "tmpls", "css"]:
                     updated_notetype[key] = value
 
-            # Apply the update using modern API
             collection.models.update_dict(updated_notetype)
 
             self.anki_dict["id"] = updated_notetype["id"]
+            self.anki_dict["flds"] = updated_notetype["flds"]
+
+            # Anki appends a suffix when the new name is already taken. Keep the
+            # server name for config lookups, but remember the real local name so
+            # the next import does not try to rename the notetype again.
+            actual_name = updated_notetype.get("name")
+            if actual_name and actual_name != self.anki_dict.get("name"):
+                self.anki_dict.setdefault("original_name", self.anki_dict.get("name"))
+                self.anki_dict["name"] = actual_name
+
+            if field_mapping is not None:
+                self._remap_notes_after_field_change(
+                    collection,
+                    updated_notetype["id"],
+                    existing_model_dict["flds"],
+                    updated_notetype["flds"],
+                )
 
             if trivial_mapping and not field_mapping:
                 field_mapping = list(range(len(updated_notetype["flds"])))
@@ -159,9 +228,51 @@ class NoteModel(JsonSerializableAnkiDict):
             )
             return updated_notetype, field_mapping
 
+        except NotetypeSaveError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to update existing notetype: {e}")
-            return None, None
+            logger.error(f"Failed to update existing notetype: {e}", exc_info=True)
+            raise NotetypeSaveError(
+                f"Failed to update notetype '{existing_model_dict.get('name', 'unknown')}': {e}"
+            ) from e
+
+    @staticmethod
+    def _remap_notes_after_field_change(
+        collection: Collection,
+        notetype_id: int,
+        old_fields: List[Dict],
+        new_fields: List[Dict],
+    ) -> None:
+        """Move existing note values when the notetype's field order changed.
+
+        Anki stores note field values positionally; ``models.update_dict()``
+        rewrites the notetype but does not move the data, so a reorder/insert
+        would silently reinterpret every note of that notetype. Remap by field
+        name through Anki's own notetype-change machinery.
+        """
+        old_names = [field["name"].lower() for field in old_fields]
+        if [f["name"].lower() for f in new_fields[: len(old_names)]] == old_names:
+            return  # fields were only appended - existing positions did not move
+
+        old_index = {name: index for index, name in enumerate(old_names)}
+        field_map = [old_index.get(field["name"].lower(), -1) for field in new_fields]
+        if field_map == list(range(len(old_names))):
+            return
+
+        logger.info(
+            f"Field order changed for notetype {notetype_id}, remapping note values: {field_map}"
+        )
+        note_ids = collection.db.list("select id from notes where mid = ?", notetype_id)
+
+        for start in range(0, len(note_ids), NOTE_REMAP_CHUNK_SIZE):
+            request = ChangeNotetypeRequest(
+                note_ids=note_ids[start : start + NOTE_REMAP_CHUNK_SIZE],
+                old_notetype_id=notetype_id,
+                new_notetype_id=notetype_id,
+                current_schema=collection.db.scalar("select scm from col"),
+                new_fields=field_map,
+            )
+            collection.models.change_notetype_of_notes(request)
 
     def _create_new_notetype(self, collection: Collection) -> Optional[NotetypeDict]:
         """
@@ -181,6 +292,8 @@ class NoteModel(JsonSerializableAnkiDict):
             new_model = note_model_dict["id"] == 0
 
             if new_model:
+                self.local_only_field_names = []
+                self.local_field_names_before_merge = set()
                 self.anki_dict = utils.merge_dicts(note_model_dict, self.anki_dict)
                 self.anki_dict["id"] = 0  # Force ID to 0 for new models
                 collection.models.add(self.anki_dict)
@@ -198,6 +311,10 @@ class NoteModel(JsonSerializableAnkiDict):
                 return self.anki_dict
             else:
                 # Model already exists, just update our dict and return it
+                self.local_only_field_names = []
+                self.local_field_names_before_merge = {
+                    field["name"].lower() for field in note_model_dict.get("flds", [])
+                }
                 self.anki_dict = note_model_dict
                 return self.anki_dict
 
@@ -309,7 +426,6 @@ class NoteModel(JsonSerializableAnkiDict):
             else:
                 logger.info(f"Added new remote field '{field['name']}' at position {i}")
 
-        # Phase 2: Add local-only fields at the END (critical constraint)
         new_field_names = {field["name"].lower() for field in merged_fields}
         local_only_fields = [
             field
@@ -403,9 +519,10 @@ class NoteModel(JsonSerializableAnkiDict):
     def __str__(self) -> str:
         return f"NoteModel(name='{self.anki_dict.get('name', 'unknown')}', uuid='{self.get_uuid()}', fields={len(self.anki_dict.get('flds', []))})"
 
+    @staticmethod
     def _build_intelligent_field_map(
-        self, old_notetype: NotetypeDict, new_notetype: NotetypeDict
-    ) -> List[int]:
+        old_notetype: NotetypeDict, new_notetype: NotetypeDict
+    ) -> List[Optional[int]]:
         """
         Builds an intelligent field mapping that preserves content by matching field names.
         Falls back to positional mapping for unmatched fields.
@@ -438,8 +555,7 @@ class NoteModel(JsonSerializableAnkiDict):
                 # New field coming in from remote
                 field_map.append(None)
 
-        # Phase 2: Handle orphaned old fields (data would be lost)
-        remaining_unmatched = unmatched_old_indices - set(field_map)
+        remaining_unmatched = sorted(unmatched_old_indices - set(field_map))
         if remaining_unmatched:
             old_field_names = [old_fields[i]["name"] for i in remaining_unmatched]
             logger.info(

@@ -569,6 +569,7 @@ _ADDON_MODULES_ORDERED = [
     "crowd_anki.representation.json_serializable",
     "crowd_anki.representation.note_model",
     "crowd_anki.representation.note",
+    "crowd_anki.representation.note_dedup",
     "crowd_anki.representation.deck_config",
     "crowd_anki.representation.deck",
     "crowd_anki.representation.deck_initializer",

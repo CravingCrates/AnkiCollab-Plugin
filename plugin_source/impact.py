@@ -243,8 +243,8 @@ def nudge_line(stats: Optional[Dict[str, Any]]) -> Optional[str]:
     if reach <= 0:
         return None
     decks = _as_int(((stats or {}).get("totals") or {}).get("decks_contributed_to"))
-    across = f" across {decks} decks" if decks > 1 else ""
-    return f"Your suggestions now reach {reach:,} learners{across}."
+    suffix = f" across {decks} decks" if decks > 1 else ""
+    return f"Your suggestions now reach {reach:,} learners{suffix}."
 
 
 def should_show_nudge(enabled: bool, now: datetime, last_shown: Optional[str]) -> bool:
@@ -565,11 +565,16 @@ def _show_nudge_line(line: str) -> None:
 
 
 def _fetch_in_background(on_done) -> None:
-    """Fetch impact statistics without blocking the sync completion callback."""
-    from anki.utils import point_version
     from aqt.operations import QueryOp
+    from anki.utils import point_version
 
-    op = QueryOp(parent=mw, op=lambda _col: fetch_impact(), success=on_done)
+    def on_failure(err):
+        # A nudge must never surface an error dialog after a *successful* sync.
+        logger.warning("Could not fetch impact stats: %s", err)
+
+    op = QueryOp(parent=mw, op=lambda _col: fetch_impact(), success=on_done).failure(
+        on_failure
+    )
     if point_version() >= 231000:
         op = op.without_collection()
     op.run_in_background()
@@ -594,9 +599,6 @@ def maybe_show_nudge() -> None:
         ):
             return
 
-        # Record before showing: if anything below fails, the user is not shown it twice.
-        # `set_value` writes the *stored* settings, not the merged view, so reading the config
-        # never bakes shipped defaults into the user's file.
         stored_settings = config_manager.get_stored_config().get("settings", {})
         if not isinstance(stored_settings, dict):
             stored_settings = {}
@@ -605,14 +607,14 @@ def maybe_show_nudge() -> None:
             {**stored_settings, NUDGE_TIMESTAMP_KEY: now.strftime(_TIMESTAMP_FORMAT)},
         )
 
-        def on_done(stats: Optional[Dict[str, Any]]) -> None:
+        def on_fetched(stats):
             line = nudge_line(stats)
             if line is None:
                 return
-            # Deferred so this does not overwrite the sync's own "All synced." tooltip.
+
             QTimer.singleShot(NUDGE_DELAY_MS, lambda: _show_nudge_line(line))
 
-        _fetch_in_background(on_done)
+        _fetch_in_background(on_fetched)
     except Exception as err:  # noqa: BLE001 - a nudge must never break a finished sync
         logger.warning("Could not show the impact nudge: %s", err)
 

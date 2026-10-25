@@ -50,6 +50,37 @@ class TestNoteModelConstruction:
         nm._update_fields()
         assert nm.get_uuid()  # should have been auto-generated
 
+    def test_an_empty_uuid_is_replaced(self):
+        """An empty UUID must not make every notetype match every lookup."""
+        nt = make_notetype(name="EmptyUUID", model_uuid="")
+        nm = NoteModel(nt)
+        nm._update_fields()
+        assert nm.get_uuid()
+        assert nm.anki_dict["crowdanki_uuid"] != ""
+
+    def test_local_only_field_names_are_not_serialized(self, basic_notetype):
+        nm = NoteModel(copy.deepcopy(basic_notetype))
+        nm.local_only_field_names = ["My Local Field"]
+        nm.local_field_names_before_merge = {"front", "back"}
+
+        flat = nm.flatten()
+
+        assert flat["name"] == "Basic"
+        assert "local_only_field_names" not in flat
+        assert "local_field_names_before_merge" not in flat
+
+    def test_local_only_field_names_are_stripped_from_json(self, basic_notetype):
+        payload = copy.deepcopy(basic_notetype)
+        payload["local_only_field_names"] = ["leaked"]
+        payload["local_field_names_before_merge"] = ["leaked"]
+
+        nm = NoteModel.from_json(payload)
+
+        assert "local_only_field_names" not in nm.anki_dict
+        assert "local_field_names_before_merge" not in nm.anki_dict
+        assert nm.local_only_field_names == []
+        assert nm.local_field_names_before_merge is None
+
     def test_get_field_names(self, basic_notetype):
         nm = NoteModel(basic_notetype)
         assert nm.get_field_names() == ["Front", "Back"]
@@ -111,6 +142,46 @@ class TestFieldChangeDetection:
         new_flds = copy.deepcopy(basic_notetype["flds"])
         new_flds[0]["font"] = "Times New Roman"
         assert nm._fields_need_update(basic_notetype["flds"], new_flds) is True
+
+
+class TestNotetypeChangeDetection:
+    def test_name_change_needs_update(self, basic_notetype):
+        nm = NoteModel({**basic_notetype, "name": "Remote Basic"})
+        assert nm._detect_changes_needed(basic_notetype, preserve_templates=False)
+
+    def test_css_change_needs_update(self, basic_notetype):
+        remote = copy.deepcopy(basic_notetype)
+        remote["css"] = ".card { color: red; }"
+        nm = NoteModel(remote)
+        assert nm._detect_changes_needed(basic_notetype, preserve_templates=False)
+
+    def test_template_count_change_needs_update(self, basic_notetype):
+        remote = copy.deepcopy(basic_notetype)
+        remote["tmpls"].append(copy.deepcopy(remote["tmpls"][0]))
+        nm = NoteModel(remote)
+        assert nm._detect_changes_needed(basic_notetype, preserve_templates=False)
+
+    def test_template_format_change_needs_update(self, basic_notetype):
+        remote = copy.deepcopy(basic_notetype)
+        remote["tmpls"][0]["qfmt"] = "{{Back}}"
+        nm = NoteModel(remote)
+        assert nm._detect_changes_needed(basic_notetype, preserve_templates=False)
+
+    def test_protected_templates_ignore_css_changes(self, basic_notetype):
+        remote = copy.deepcopy(basic_notetype)
+        remote["css"] = ".card { color: red; }"
+        nm = NoteModel(remote)
+        assert (
+            nm._detect_changes_needed(basic_notetype, preserve_templates=True) is False
+        )
+
+    def test_protected_templates_ignore_template_changes(self, basic_notetype):
+        remote = copy.deepcopy(basic_notetype)
+        remote["tmpls"][0]["qfmt"] = "{{Back}}"
+        nm = NoteModel(remote)
+        assert (
+            nm._detect_changes_needed(basic_notetype, preserve_templates=True) is False
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────

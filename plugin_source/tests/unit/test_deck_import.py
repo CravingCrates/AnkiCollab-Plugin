@@ -128,6 +128,32 @@ class TestDeckFromJson:
 # ──────────────────────────────────────────────────────────────────────
 
 
+class TestCollectAllNotesDeduplication:
+    def test_same_note_in_two_decks_is_collected_once(self):
+        """A card-level deck split must not turn into two imported notes."""
+        root = Deck(
+            MagicMock(),
+            {"name": "Root", "crowdanki_uuid": "root", "id": 1},
+        )
+        child = Deck(
+            MagicMock(),
+            {"name": "Root::Child", "crowdanki_uuid": "child", "id": 2},
+            is_child=True,
+        )
+        shared = MagicMock()
+        shared.get_uuid.return_value = "shared-guid"
+        root.notes = [shared]
+        child.notes = [shared]
+        root.children = [child]
+
+        all_notes = []
+        mapping = {}
+        root._collect_all_notes(all_notes, mapping, "", None)
+
+        assert all_notes == [shared]
+        assert mapping == {"shared-guid": "Root"}
+
+
 class TestDeckNameHierarchy:
     def _make_deck(self, name, home_deck=None, is_child=False):
         deck = Deck(

@@ -116,6 +116,41 @@ class TestComputeMediaReferenceUpdates:
             )
         assert result == {"updates": [], "count": 0}
 
+    def test_duplicate_file_note_pairs_are_applied_once(self):
+        note = MagicMock()
+        note.id = 10
+        note.fields = ["[sound:old.mp3]"]
+        note.mod = 5
+        col = self._col(note)
+        with patch(
+            "export_manager._filter_valid_filename_mapping",
+            return_value={"old.mp3": "new.mp3"},
+        ):
+            result = _compute_media_reference_updates(
+                col,
+                {"old.mp3": "new.mp3"},
+                [("old.mp3", "g1"), ("old.mp3", "g1")],
+            )
+        assert result["count"] == 1
+        assert result["updates"][0]["old_filenames"] == ["old.mp3"]
+
+    def test_unmapped_file_note_pair_is_ignored(self):
+        note = MagicMock()
+        note.id = 10
+        note.fields = ["[sound:old.mp3]"]
+        note.mod = 5
+        col = self._col(note)
+        with patch(
+            "export_manager._filter_valid_filename_mapping",
+            return_value={"other.mp3": "new.mp3"},
+        ):
+            result = _compute_media_reference_updates(
+                col,
+                {"other.mp3": "new.mp3"},
+                [("old.mp3", "g1")],
+            )
+        assert result == {"updates": [], "count": 0}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # update_notetype_media_references

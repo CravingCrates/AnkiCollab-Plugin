@@ -35,6 +35,7 @@ from import_manager import (
     _on_deck_installed,
 )
 from crowd_anki.representation.deck import Deck
+from crowd_anki.representation.note_model import NotetypeSaveError
 
 # ──────────────────────────────────────────────────────────────────────
 # CacheBootstrapError
@@ -309,6 +310,38 @@ class TestCollectionMutatingImportOperations:
             "deck_installation_start",
             "after_metadata_save",
         ]
+
+    def test_install_deck_op_aborts_before_bulk_save_when_collection_closes(
+        self, mw_mock
+    ):
+        col = mw_mock.col
+        deck = MagicMock(spec=Deck)
+        config = MagicMock(home_deck="Home")
+        closed = OperationAbortedError("collection closed", phase="after_metadata_save")
+
+        with patch(
+            "import_manager.check_collection_or_abort",
+            side_effect=[col, closed],
+        ):
+            with pytest.raises(OperationAbortedError):
+                _install_deck_op(deck, config)
+
+        deck.save_metadata.assert_called_once_with(col, "Home")
+        deck.save_decks_and_notes_bulk.assert_not_called()
+
+    def test_install_deck_op_does_not_import_notes_when_notetype_save_fails(
+        self, mw_mock
+    ):
+        col = mw_mock.col
+        deck = MagicMock(spec=Deck)
+        deck.save_metadata.side_effect = NotetypeSaveError("mapping lost")
+        config = MagicMock(home_deck="Home")
+
+        with patch("import_manager.check_collection_or_abort", return_value=col):
+            with pytest.raises(NotetypeSaveError):
+                _install_deck_op(deck, config)
+
+        deck.save_decks_and_notes_bulk.assert_not_called()
 
     def test_on_deck_installed_registers_new_subscription_and_updates_timestamp(
         self, mw_mock

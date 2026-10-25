@@ -2,6 +2,7 @@ from typing import Optional
 
 from .deck import Deck
 from .note import Note
+from .note_dedup import deduplicate_notes
 from ..anki.adapters.anki_deck import AnkiDeck
 from ..anki.adapters.note_model_file_provider import NoteModelFileProvider
 
@@ -93,6 +94,9 @@ def from_collection(
         key=lambda child: child.anki_dict["name"],
     )
 
+    if not is_child:
+        deduplicate_notes(deck)
+
     return deck
 
 
@@ -161,5 +165,8 @@ def from_json(json_dict, deck_metadata=None) -> Deck:
     ]
 
     deck.post_import_filter()
+
+    if deck_metadata is None:
+        deduplicate_notes(deck)
 
     return deck

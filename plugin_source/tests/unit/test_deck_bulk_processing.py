@@ -19,7 +19,7 @@ from contextlib import ExitStack
 from tests.conftest import create_mock_collection, make_notetype
 
 from crowd_anki.representation import deck as deck_module
-from crowd_anki.representation.deck import CHUNK_SIZE, Deck
+from crowd_anki.representation.deck import CHUNK_SIZE, Deck, DeckImportCancelled
 from crowd_anki.representation.note import Note
 from crowd_anki.representation.note_model import NoteModel
 from utils import OperationAbortedError
@@ -130,6 +130,29 @@ class TestBulkProcessAllNotes:
         added = m_add.call_args.args[1]
         assert {n.get_uuid() for n in added} == {"n1", "n2"}
 
+    def test_new_notes_mapping_requires_a_deck_boundary(self):
+        col = create_mock_collection()
+        col.db.all.return_value = []
+        notes = [_Note("n1")]
+        deck = _make_deck(notes)
+        cfg = _cfg(new_notes_home_deck="NewDeck", home_deck="Home")
+        note_to_deck_map = {"n1": "HomeOther"}
+
+        self._run(deck, notes, col, cfg, note_to_deck_map)
+
+        assert note_to_deck_map["n1"] == "NewDeck"
+
+    def test_missing_metadata_returns_empty_processing_result(self):
+        col = create_mock_collection()
+        deck = _make_deck([_Note("n1")])
+        deck.metadata = None
+
+        result = deck._bulk_process_all_notes(
+            col, deck.notes, _cfg(), MagicMock(), {"n1": "Home"}
+        )
+
+        assert result == (0, None, None)
+
     def test_missing_model_notes_skipped(self):
         col = create_mock_collection()
         col.db.all.return_value = []
@@ -157,7 +180,23 @@ class TestBulkProcessAllNotes:
         ]
         assert len(temp_name) == 1
 
-    def test_cancel_mid_processing_returns_partial(self):
+    def test_stale_empty_temp_decks_are_removed_but_filled_ones_are_kept(self):
+        col = create_mock_collection()
+        col.decks._store[10] = {"id": 10, "name": "_ankicollab_import_empty"}
+        col.decks._store[11] = {"id": 11, "name": "_ankicollab_import_has_cards"}
+        col.decks._store[12] = {"id": 12, "name": "Normal"}
+        col.decks.card_count.side_effect = lambda did, include_subdecks=False: (
+            1 if did == 11 else 0
+        )
+        deck = _make_deck([])
+
+        deck._remove_stale_empty_temp_decks(col)
+
+        assert 10 not in col.decks._store
+        assert 11 in col.decks._store
+        assert 12 in col.decks._store
+
+    def test_cancel_mid_processing_aborts_before_writing_anything(self):
         col = create_mock_collection()
         col.db.all.return_value = []
         notes = [_Note(f"n{i}") for i in range(50)]
@@ -165,27 +204,46 @@ class TestBulkProcessAllNotes:
         progress = MagicMock()
 
         mw_patcher, mw = self._patch_mw()
-        # Simulate a cancel on the second progress update: want_cancel returns
-        # False for the first updates, then True.
-        calls = {"n": 0}
-
-        def fake_want_cancel():
-            calls["n"] += 1
-            return calls["n"] >= 2
-
-        mw.progress.want_cancel.side_effect = fake_want_cancel
+        mw.progress.want_cancel.return_value = True
 
         with (
             mw_patcher,
             patch.object(Note, "bulk_add_notes") as m_add,
-            patch.object(Note, "_bulk_update_notes_preserving_placement"),
-            patch.object(Deck, "_restore_original_note_ids"),
+            patch.object(Note, "_bulk_update_notes_preserving_placement") as m_upd,
+            patch.object(Deck, "_restore_original_note_ids") as m_restore,
+            patch.object(Deck, "_cleanup_temp_deck") as m_cleanup,
         ):
-            result = deck._bulk_process_all_notes(col, notes, _cfg(), progress, {})
-        # Returns a triple: (processed_count, temp_deck_id, temp_deck_name)
-        assert result[0] > 0
-        assert result[1] is not None
-        assert result[2].startswith("_ankicollab_import_")
+            with pytest.raises(DeckImportCancelled):
+                deck._bulk_process_all_notes(col, notes, _cfg(), progress, {})
+
+        # A cancelled import must not write notes, cards or IDs.
+        m_add.assert_not_called()
+        m_upd.assert_not_called()
+        m_restore.assert_not_called()
+        # The empty temp deck is removed instead of being left behind.
+        m_cleanup.assert_called_once()
+        assert m_cleanup.call_args.args[1] == deck.root_deck_id
+
+    def test_bulk_write_failure_cleans_up_the_temp_deck(self):
+        col = create_mock_collection()
+        col.db.all.return_value = []
+        notes = [_Note("n1")]
+        deck = _make_deck(notes)
+        progress = MagicMock()
+
+        mw_patcher, _ = self._patch_mw()
+        with (
+            mw_patcher,
+            patch.object(Note, "bulk_add_notes", side_effect=RuntimeError("disk full")),
+            patch.object(Deck, "_restore_original_note_ids"),
+            patch.object(Deck, "_cleanup_temp_deck") as m_cleanup,
+        ):
+            with pytest.raises(RuntimeError, match="disk full"):
+                deck._bulk_process_all_notes(col, notes, _cfg(), progress, {})
+
+        m_cleanup.assert_called_once()
+        assert m_cleanup.call_args.args[1] == deck.root_deck_id
+        assert m_cleanup.call_args.args[3] == "bulk_write_failure"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -249,6 +307,23 @@ class TestRestoreOriginalNoteIds:
         assert notes[0].anki_object.id == 1000  # kept the new id
         assert mock_warn.called
 
+    def test_duplicate_original_ids_are_not_restored(self):
+        col = create_mock_collection()
+        col.db.all.return_value = []
+        deck = _make_deck([])
+        notes = [
+            self._note_with_id("n1", 111, current_id=1000),
+            self._note_with_id("n2", 111, current_id=1001),
+        ]
+
+        with _patch_logger("warning") as mock_warn:
+            deck._restore_original_note_ids(col, notes)
+
+        col.db.execute.assert_not_called()
+        assert [note.anki_object.id for note in notes] == [1000, 1001]
+        assert not any(hasattr(note, "_original_id") for note in notes)
+        mock_warn.assert_called_once()
+
     def test_sql_variable_limit_chunking(self):
         col = create_mock_collection()
         col.db.all.return_value = []  # none taken
@@ -280,7 +355,7 @@ class TestBatchProcessNotes:
         # model id present in anki_dict -> no UUID fetch needed.
         note_model.anki_dict["id"] = 5
         with patch.object(deck_module, "AnkiNote") as mock_anki_note:
-            deck._batch_process_new_notes([note], col, note_model, None, _cfg(), 100)
+            deck._batch_process_new_notes([note], col, note_model, _cfg(), 100)
         # AnkiNote constructed for a new note (no id kwarg) and model id set.
         kwargs = mock_anki_note.call_args.kwargs
         assert "id" not in kwargs
@@ -295,24 +370,64 @@ class TestBatchProcessNotes:
 
         deck = _make_deck([note])
         with patch.object(deck_module, "AnkiNote") as mock_anki_note:
-            deck._batch_process_new_notes([note], col, note_model, None, _cfg(), 100)
+            deck._batch_process_new_notes([note], col, note_model, _cfg(), 100)
         # Model id must have been resolved from the collection.
         assert note_model.anki_dict["id"] == 5
 
-    def test_missing_model_id_raises(self):
+    def test_missing_model_id_drops_the_note(self):
         col = create_mock_collection()  # empty model store
         note_model = NoteModel(
             make_notetype(name="Basic", fields=["A", "B"], model_id=99)
         )
         note_model.anki_dict["id"] = None
         note = _Note("n1")
+        batch = [note]
         deck = _make_deck([note])
         with patch.object(deck_module, "AnkiNote"):
             with _patch_logger("warning") as mock_warn:
-                deck._batch_process_new_notes(
-                    [note], col, note_model, None, _cfg(), 100
-                )
+                deck._batch_process_new_notes(batch, col, note_model, _cfg(), 100)
         assert mock_warn.called
+        # A note that could not be prepared must never be added.
+        assert batch == []
+
+    def test_a_failing_note_is_dropped_while_others_survive(self):
+        col = create_mock_collection()
+        model = make_notetype(name="Basic", fields=["A", "B"], model_id=5)
+        col.models.add(model)
+        note_model = NoteModel(model)
+        note_model.anki_dict["id"] = 5
+        good_a, bad, good_b = _Note("a"), _Note("bad"), _Note("b")
+        bad.handle_import_config_changes = MagicMock(side_effect=ValueError("boom"))
+        batch = [good_a, bad, good_b]
+        deck = _make_deck(batch)
+
+        with patch.object(deck_module, "AnkiNote"):
+            with _patch_logger("warning"):
+                deck._batch_process_new_notes(batch, col, note_model, _cfg(), 100)
+
+        assert [note.get_uuid() for note in batch] == ["a", "b"]
+
+
+class TestOptimizedNotetypeChanges:
+    def test_large_batch_failure_falls_back_to_chunked_changes(self):
+        deck = _make_deck([])
+        collection = create_mock_collection()
+        note_ids = list(range(5001))
+
+        def apply_change(_collection, _old_mid, _new_mid, batch):
+            return len(batch) <= 1000
+
+        with patch.object(
+            deck, "_apply_notetype_change", side_effect=apply_change
+        ) as apply:
+            assert (
+                deck._apply_notetype_change_optimized(collection, 1, 2, note_ids)
+                is True
+            )
+
+        assert apply.call_count == 7
+        assert len(apply.call_args_list[1].args[3]) == 1000
+        assert len(apply.call_args_list[-1].args[3]) == 1
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -56,7 +56,7 @@ class TestMaintainerProtectedFields:
     """Test that fields marked as personal by the maintainer are preserved."""
 
     def _setup_note_for_import(
-        self, old_fields, new_fields, notetype, personal_fields=None, field_mapping=None
+        self, old_fields, new_fields, notetype, personal_fields=None
     ):
         """Helper to set up a note for import testing.
 
@@ -65,7 +65,6 @@ class TestMaintainerProtectedFields:
             new_fields: The new fields coming from remote
             notetype: The notetype dict
             personal_fields: List of (model_name, field_name) pairs
-            field_mapping: Field index mapping (new→old)
         """
         note_dict = make_note_dict(fields=new_fields)
         note = Note.from_json(note_dict)
@@ -84,7 +83,7 @@ class TestMaintainerProtectedFields:
         note.config = config
 
         # Set up existing anki_object (simulating the user's local note)
-        mock_note = MockAnkiNote()
+        mock_note = MockAnkiNote(model=notetype)
         mock_note.fields = list(old_fields)
         mock_note.tags = []
         mock_note.guid = note_dict["guid"]
@@ -92,62 +91,59 @@ class TestMaintainerProtectedFields:
 
         nm = NoteModel(notetype)
 
-        if field_mapping is None:
-            field_mapping = list(range(len(notetype["flds"])))
-
-        return note, nm, config, field_mapping
+        return note, nm, config
 
     def test_no_protected_fields(self):
         """Without protected fields, all fields should be updated."""
         nt = make_notetype(fields=["Front", "Back"])
-        note, nm, config, fm = self._setup_note_for_import(
+        note, nm, config = self._setup_note_for_import(
             old_fields=["old front", "old back"],
             new_fields=["new front", "new back"],
             notetype=nt,
         )
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert note.anki_object_dict["fields"] == ["new front", "new back"]
 
     def test_protected_field_preserves_old_content(self):
         """A protected field should retain the user's local value."""
         nt = make_notetype(fields=["Front", "Back"])
-        note, nm, config, fm = self._setup_note_for_import(
+        note, nm, config = self._setup_note_for_import(
             old_fields=["my personal front", "old back"],
             new_fields=["new front from remote", "new back"],
             notetype=nt,
             personal_fields=[("Basic", "Front")],
         )
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         # Front should be preserved (protected), Back should be updated
         assert note.anki_object_dict["fields"][0] == "my personal front"
         assert note.anki_object_dict["fields"][1] == "new back"
 
     def test_multiple_protected_fields(self):
         nt = make_notetype(fields=["Term", "Definition", "Notes", "Source"])
-        note, nm, config, fm = self._setup_note_for_import(
+        note, nm, config = self._setup_note_for_import(
             old_fields=["my term", "my def", "my notes", "my source"],
             new_fields=["new term", "new def", "new notes", "new source"],
             notetype=nt,
             personal_fields=[("Basic", "Notes"), ("Basic", "Source")],
         )
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert note.anki_object_dict["fields"][0] == "new term"
         assert note.anki_object_dict["fields"][1] == "new def"
         assert note.anki_object_dict["fields"][2] == "my notes"  # protected
         assert note.anki_object_dict["fields"][3] == "my source"  # protected
 
-    def test_protected_field_with_field_mapping(self):
-        """Protected fields should work correctly even when fields are reordered."""
-        nt = make_notetype(fields=["Back", "Front"])  # swapped order
-        note, nm, config, fm = self._setup_note_for_import(
-            old_fields=["old front", "old back"],
+    def test_protected_field_works_with_reordered_notetype(self):
+        """Local values are looked up by name in the note's own notetype, so a
+        reordered remote notetype still preserves the right field."""
+        nt = make_notetype(fields=["Back", "Front"])  # remote/merged order
+        note, nm, config = self._setup_note_for_import(
+            old_fields=["old back", "old front"],  # note already in merged order
             new_fields=["new back", "new front"],
             notetype=nt,
             personal_fields=[("Basic", "Front")],
-            field_mapping=[1, 0],  # new[0]=Back was old[1], new[1]=Front was old[0]
         )
-        note.handle_import_config_changes(config, nm, fm)
-        # Front (now at position 1) should be preserved
+        note.handle_import_config_changes(config, nm)
+        # Front is at position 1 and must keep its own value
         assert note.anki_object_dict["fields"][1] == "old front"
         assert note.anki_object_dict["fields"][0] == "new back"
 
@@ -160,9 +156,7 @@ class TestMaintainerProtectedFields:
 class TestUserProtectedFields:
     """Test that fields users protect via AnkiCollab_Protect tags are preserved."""
 
-    def _setup_protected_note(
-        self, old_fields, new_fields, notetype, protect_tags, field_mapping=None
-    ):
+    def _setup_protected_note(self, old_fields, new_fields, notetype, protect_tags):
         note_dict = make_note_dict(fields=new_fields, tags=["some_tag"])
         note = Note.from_json(note_dict)
 
@@ -171,66 +165,64 @@ class TestUserProtectedFields:
         config.has_optional_tags = False
         note.config = config
 
-        mock_note = MockAnkiNote()
+        mock_note = MockAnkiNote(model=notetype)
         mock_note.fields = list(old_fields)
         mock_note.tags = list(protect_tags)
         mock_note.guid = note_dict["guid"]
         note.anki_object = mock_note
 
         nm = NoteModel(notetype)
-        if field_mapping is None:
-            field_mapping = list(range(len(notetype["flds"])))
-        return note, nm, config, field_mapping
+        return note, nm, config
 
     def test_user_protect_single_field(self):
         nt = make_notetype(fields=["Front", "Back"])
-        note, nm, config, fm = self._setup_protected_note(
+        note, nm, config = self._setup_protected_note(
             old_fields=["my front", "my back"],
             new_fields=["new front", "new back"],
             notetype=nt,
             protect_tags=["AnkiCollab_Protect::Front"],
         )
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert note.anki_object_dict["fields"][0] == "my front"
         assert note.anki_object_dict["fields"][1] == "new back"
 
     def test_user_protect_all_fields(self):
         nt = make_notetype(fields=["Front", "Back"])
-        note, nm, config, fm = self._setup_protected_note(
+        note, nm, config = self._setup_protected_note(
             old_fields=["my front", "my back"],
             new_fields=["new front", "new back"],
             notetype=nt,
             protect_tags=["AnkiCollab_Protect::All"],
         )
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert note.anki_object_dict["fields"][0] == "my front"
         assert note.anki_object_dict["fields"][1] == "my back"
 
     def test_user_protect_tags_field(self):
         nt = make_notetype(fields=["Front", "Back"])
-        note, nm, config, fm = self._setup_protected_note(
+        note, nm, config = self._setup_protected_note(
             old_fields=["front", "back"],
             new_fields=["new front", "new back"],
             notetype=nt,
             protect_tags=["AnkiCollab_Protect::Tags"],
         )
         # Tags should be preserved from local note
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert "AnkiCollab_Protect::Tags" in note.anki_object_dict["tags"]
 
-    def test_user_protect_with_field_mapping(self):
-        """User protect tags work correctly with field remapping."""
-        nt = make_notetype(fields=["Back", "Front"])  # swapped
-        note, nm, config, fm = self._setup_protected_note(
-            old_fields=["old front", "old back"],
+    def test_user_protect_works_with_reordered_notetype(self):
+        """The protected field is found by name in the note's own notetype."""
+        nt = make_notetype(fields=["Back", "Front"])  # remote/merged order
+        note, nm, config = self._setup_protected_note(
+            old_fields=["old back", "old front"],  # note already in merged order
             new_fields=["new back", "new front"],
             notetype=nt,
             protect_tags=["AnkiCollab_Protect::Front"],
-            field_mapping=[1, 0],
         )
-        note.handle_import_config_changes(config, nm, fm)
-        # Front is now at index 1 in new structure, should be preserved
+        note.handle_import_config_changes(config, nm)
+        # Front is at index 1 and keeps its own value
         assert note.anki_object_dict["fields"][1] == "old front"
+        assert note.anki_object_dict["fields"][0] == "new back"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -255,8 +247,7 @@ class TestDefaultProtectedTags:
         note.anki_object = mock_note
 
         nm = NoteModel(nt)
-        fm = [0, 1]
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert "leech" in note.anki_object_dict["tags"]
 
     def test_marked_tag_preserved(self):
@@ -275,8 +266,7 @@ class TestDefaultProtectedTags:
         note.anki_object = mock_note
 
         nm = NoteModel(nt)
-        fm = [0, 1]
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert "marked" in note.anki_object_dict["tags"]
 
     def test_personal_tag_preserved(self):
@@ -295,8 +285,7 @@ class TestDefaultProtectedTags:
         note.anki_object = mock_note
 
         nm = NoteModel(nt)
-        fm = [0, 1]
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert "AnkiCollab_Personal::MyTag" in note.anki_object_dict["tags"]
 
 
@@ -329,8 +318,7 @@ class TestOptionalTags:
         note.anki_object = mock_note
 
         nm = NoteModel(nt)
-        fm = [0, 1]
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert "AnkiCollab_Optional::Pathology" in note.anki_object_dict["tags"]
         assert "AnkiCollab_Optional::Cardiology" not in note.anki_object_dict["tags"]
         assert "regular_tag" in note.anki_object_dict["tags"]
@@ -358,8 +346,7 @@ class TestFieldCountMismatch:
         note.anki_object = mock_note
 
         nm = NoteModel(nt)
-        fm = [0, 1]
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert len(note.anki_object_dict["fields"]) == 2
 
     def test_missing_fields_padded(self):
@@ -378,8 +365,7 @@ class TestFieldCountMismatch:
         note.anki_object = mock_note
 
         nm = NoteModel(nt)
-        fm = [0, 1, 2]
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         assert len(note.anki_object_dict["fields"]) == 3
 
     def test_local_only_fields_appended(self):
@@ -399,8 +385,7 @@ class TestFieldCountMismatch:
 
         nm = NoteModel(nt)
         # field_mapping: 0→0, 1→1, 2→2 (local field mapped to itself)
-        fm = [0, 1, 2]
-        note.handle_import_config_changes(config, nm, fm)
+        note.handle_import_config_changes(config, nm)
         # Should have 3 fields after padding
         assert len(note.anki_object_dict["fields"]) == 3
 

@@ -23,7 +23,7 @@ class UuidFetcher:
         return get_value_by_uuid(self.collection.decks.all(), uuid)
 
     def get_model(self, uuid: str):
-        if self.collection is None:
+        if self.collection is None or not uuid:
             return None
         return get_value_by_uuid(self.collection.models.all(), uuid)
 

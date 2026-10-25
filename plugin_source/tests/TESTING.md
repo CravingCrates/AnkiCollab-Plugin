@@ -4,14 +4,26 @@
 
 ```bash
 # From the addon root (1957538407/)
-python -m pytest tests/            # run all tests
-python -m pytest tests/ -x         # stop on first failure
-python -m pytest tests/ -k utils   # run only tests matching "utils"
-python -m pytest tests/integration -m integration   # run only workflow-level tests
+# SKIP_INIT must be in the *shell* environment: pytest imports the addon package
+# (whose __init__.py would start Anki) before conftest.py can set it.
+SKIP_INIT=1 python -m pytest tests/            # run everything, including real-Anki scenarios
+SKIP_INIT=1 python -m pytest tests/ -x         # stop on first failure
+SKIP_INIT=1 python -m pytest tests/ -k utils   # run only tests matching "utils"
+SKIP_INIT=1 python -m pytest tests/ -m real_anki          # only the real-Anki runner
+SKIP_INIT=1 python -m pytest tests/integration -m integration   # workflow-level tests
+
+# PowerShell
+$env:SKIP_INIT="1"; python -m pytest tests/
+
+# Focused real-Anki debugging (same files, same isolated rootdir, no runner):
+python -m pytest tests/real_anki -c tests/real_anki/pytest.ini
 ```
 
-**Current test count: 1343** (CI verifies this against `pytest --collect-only`; if you
-add or remove tests, update this number in the same change).
+**Current test count: 1443.** This includes `tests/test_real_anki.py` (6
+per-file subprocess runners plus a discovery guard). The 44 real-Anki scenarios
+run inside those runners when a real Anki installation is importable; otherwise
+the runners skip with a clear reason. CI verifies the collected count against
+this number; if you add or remove tests, update it in the same change.
 
 Tests exist to catch regressions that would reach a user's collection. They do
 not assert log text, Sentry payloads, Qt styling, layout constants or other
@@ -28,7 +40,9 @@ are also protected by per-file coverage floors enforced by
 an explicit justification in the commit message.
 
 Requires: `pytest`, `pytest-asyncio`, `requests-mock`, `factory-boy`, `pytest-cov`,
-`keyring`, `pygtrie` (all installable via pip).
+`keyring`, `pygtrie` (all installable via pip). The merged real-Anki scenarios
+additionally need an importable `anki`/`aqt` install in the same interpreter;
+without one they skip, so CI needs no extra dependency.
 
 ---
 
@@ -98,6 +112,16 @@ Provides the autouse `mw_mock` fixture that runs before every test:
 │   ├── TESTING.md              # This file
 │   ├── test_bootstrap.py       # Bootstrap integrity: broken imports fail collection loudly
 │   ├── test_core_module_coverage.py  # Core-module inventory: no core file with zero test refs
+│   ├── test_real_anki.py       # Runner: executes tests/real_anki/* in clean subprocesses
+│   ├── real_anki/              # Real anki.Collection scenarios (own rootdir)
+│   │   ├── pytest.ini
+│   │   ├── support.py
+│   │   ├── test_end_to_end_fuzz.py     # Random schema + protection, real import
+│   │   ├── test_end_to_end_import.py   # Export -> JSON -> real import orchestration
+│   │   ├── test_field_preservation.py
+│   │   ├── test_merge_fuzz.py
+│   │   ├── test_note_dedup.py
+│   │   └── test_notetype_identity.py
 │   ├── integration/            # Workflow-level tests (marked `integration`)
 │   │   ├── test_export_workflow.py
 │   │   ├── test_import_workflow.py
@@ -132,6 +156,7 @@ Provides the autouse `mw_mock` fixture that runs before every test:
 │       ├── test_media_manager.py
 │       ├── test_media_optimizer.py
 │       ├── test_menu_logic.py
+│       ├── test_note_dedup.py            # Export/import note dedupe (card-level decks)
 │       ├── test_note_import.py
 │       ├── test_note_import_config.py    # Note.handle_import_config_changes
 │       ├── test_note_model.py
@@ -287,6 +312,71 @@ checks output/behavior. The mock layer only replaces Anki's runtime
   `tests/integration/conftest.py`).  The core collection interfaces
   (`decks`, `models`, `db`, `tags`, `media`) are strict — a typo'd/renamed
   Anki API call raises `AttributeError` instead of silently passing.
+  **Backend semantics are not observable this way** — see
+  `tests/real_anki/` below.
+
+## Real-Anki suite (`tests/real_anki/`)
+
+The faked `anki` package cannot observe how Anki actually persists data. A
+regression shipped because of that: `col.models.update_dict()` rewrites a
+notetype's field list but **does not move note values**, so a merge that
+reorders fields silently moves content between field *names*. Every mocked test
+passed; the real backend disagreed.
+
+These scenarios run against a real, temporary `anki.Collection`. They are part
+of `pytest tests`; `tests/test_real_anki.py` executes each scenario file in a
+clean interpreter because the main suite's root `conftest.py` installs fake
+`anki` modules in `sys.modules` for the whole process.
+
+```bash
+# Normal: everything, real backend included
+SKIP_INIT=1 python -m pytest tests/
+
+# Focused debugging of the real scenarios (no subprocess wrapper)
+python -m pytest tests/real_anki -c tests/real_anki/pytest.ini
+```
+
+- The subprocess runner passes `-c tests/real_anki/pytest.ini`, giving those
+  files their own rootdir, so the addon's root `conftest.py` is never loaded.
+  `support.assert_real_backend()` (called by the `col` fixture) raises if that
+  isolation ever breaks, instead of silently testing mocks.
+- `tests/real_anki/` is in the root `norecursedirs`; only the runner collects it.
+- If a real Anki backend is not installed (e.g. CI), the runner skips with the
+  import error; it never silently falls back to the mocks. Set
+  `ANKICOLLAB_REAL_ANKI=0` to skip without probing (CI does this), or `=1` to
+  make a missing backend a failure.
+- Import path: scenario modules start with a `sys.path` preamble, then
+  `from support import ...`, including the `col` fixture. There is deliberately
+  no `conftest.py` here: fixtures live in `support.py`, so the files can be
+  executed directly with their own rootdir without touching the root conftest
+  module that `tests/test_bootstrap.py` relies on.
+- `support.py` mirrors `main.py` by adding the vendored `dist/` to `sys.path`,
+  so the suite runs with the same dependencies the add-on ships.
+- Assertions are always **field name → value**, never list positions.
+  Positions are exactly what breaks when field order changes.
+- Covers: local-only fields (interleaved and trailing), notes in unrelated
+  decks, reorder / insert / remove / rename, sender-supplied extra fields,
+  maintainer- and tag-based protection after a merge, protection of fields the
+  note never had before the merge, brand-new notes, card stability, scheduling
+  preservation, repeat-import idempotency, related-notetype migration without
+  dropping local fields, multi-deck notes being exported/imported once, and the
+  sender's notetype id never leaking into note processing.
+- `test_merge_fuzz.py` generates deterministic random merge shapes (40 +
+  25 cases) and asserts name → value preservation for imported and untouched
+  notes; a failure prints the case seed so it is reproducible.
+- `test_end_to_end_import.py` runs the **real export pipeline** into a **real
+  import orchestration** against a second collection: fresh import, repeat
+  import, schema reorder/insert/remove/rename, untouched notes, local custom
+  fields, maintainer/tag/All/Tags/underscore protection, new-note protection,
+  related-twin migration, cancel-before-write, bulk-write failure cleanup,
+  scheduling preservation, duplicate payloads, and the reported **118 notes /
+  708 cards** shape.
+- `test_end_to_end_fuzz.py` runs randomized source→target schema evolutions with
+  random protected fields (8 deterministic cases), including idempotent re-import.
+
+Add a scenario here whenever a change touches notetype merging, note field
+mapping, or `NoteModel.save_to_collection`. The runner discovers
+`tests/real_anki/test_*.py` automatically.
 
 ## Harness Integrity (added in the hardening pass)
 

@@ -120,6 +120,50 @@ class TestExportWorkflow:
         note_a = next(n for n in deck.notes if n.get_uuid() == "note-a")
         assert "tag1" in note_a.anki_object.tags
 
+    def test_note_with_cards_in_two_decks_is_exported_once(
+        self, realistic_collection, fake_anki_note_class
+    ):
+        """Anki decks are card-level; AnkiCollab notes are note-level.
+
+        A note with a card in the parent and a card in the child is returned by
+        the per-deck note query for both decks. The exported tree must collapse
+        that to one occurrence, or upload/import duplicates the note and all of
+        its cards once per deck.
+        """
+        col = realistic_collection
+        root_did = col.add_deck("Root", deck_uuid="deck-root")
+        child_did = col.add_deck("Root::Child", deck_uuid="deck-child")
+        col.add_model(
+            make_notetype(
+                name="Basic", fields=["Front", "Back"], model_id=100, model_uuid="m-1"
+            )
+        )
+        shared_nid = col.add_note_record(
+            guid="shared-note",
+            mid=100,
+            fields=["front", "back"],
+            tags=[],
+            did=root_did,
+        )
+
+        def note_ids_for_deck(did, include_from_dynamic=False):
+            return [shared_nid] if did in (root_did, child_did) else []
+
+        col.decks.get_note_ids.side_effect = note_ids_for_deck
+
+        deck = deck_initializer.from_collection(col, "Root")
+
+        all_guids = []
+
+        def collect(current):
+            all_guids.extend(n.get_uuid() for n in current.notes)
+            for child in current.children:
+                collect(child)
+
+        collect(deck)
+        assert all_guids == ["shared-note"]
+        assert deck.get_note_count() == 1
+
     def test_serialization_is_json_serializable(
         self, realistic_collection, fake_anki_note_class
     ):

@@ -67,7 +67,6 @@ class TestDeckInit:
         assert deck.metadata is None
         assert deck.root_deck_id is None
         assert deck.keep_empty_subdecks is False
-        assert deck._field_mappings == {}
 
     def test_child_flag(self):
         deck = _deck(is_child=True)

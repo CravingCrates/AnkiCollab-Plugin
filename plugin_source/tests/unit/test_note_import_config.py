@@ -9,13 +9,32 @@ the optional-tag filter.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
+
+import pytest
 
 from tests.conftest import make_note_dict, make_notetype, MockAnkiNote
 
 from crowd_anki.representation.note import Note
 from crowd_anki.representation.note_model import NoteModel
 from var_defs import PREFIX_OPTIONAL_TAGS, PREFIX_PROTECTED_FIELDS
+
+
+@pytest.fixture
+def note_log(caplog):
+    """Capture ``ankicollab.note`` warnings without changing production logging.
+
+    The add-on deliberately keeps ``propagate = False`` so records do not get
+    duplicated into Sentry's root logging integration. Only tests opt in.
+    """
+    logger = logging.getLogger("ankicollab.note")
+    previous = logger.propagate
+    logger.propagate = True
+    try:
+        yield caplog
+    finally:
+        logger.propagate = previous
 
 
 def _config(
@@ -69,13 +88,13 @@ class TestBailOutGuards:
         del note.anki_object_dict
         note.anki_object = MockAnkiNote()
         # Must not raise.
-        note.handle_import_config_changes(_config(), _nm(make_notetype()), [0, 1])
+        note.handle_import_config_changes(_config(), _nm(make_notetype()))
 
     def test_empty_anki_object_dict_returns_immediately(self):
         note = Note.from_json(make_note_dict())
         note.anki_object_dict = {}
         note.anki_object = MockAnkiNote()
-        note.handle_import_config_changes(_config(), _nm(make_notetype()), [0, 1])
+        note.handle_import_config_changes(_config(), _nm(make_notetype()))
         assert note.anki_object_dict == {}
 
     def test_local_note_without_fields_returns_immediately(self):
@@ -83,7 +102,7 @@ class TestBailOutGuards:
         local = MockAnkiNote()
         del local.fields
         note.anki_object = local
-        note.handle_import_config_changes(_config(), _nm(make_notetype()), [0, 1])
+        note.handle_import_config_changes(_config(), _nm(make_notetype()))
         # Untouched: the guard fires before any field work.
         assert note.anki_object_dict["fields"] == ["new a", "new b"]
 
@@ -113,7 +132,7 @@ class TestOldModelLookup:
         )
         cfg = _config(personal=[("Basic", "Front")])
 
-        note.handle_import_config_changes(cfg, _nm(nt), None)
+        note.handle_import_config_changes(cfg, _nm(nt))
 
         # Name-based lookup found "Front" in the old model and restored it.
         assert note.anki_object_dict["fields"][0] == "old front"
@@ -125,7 +144,7 @@ class TestOldModelLookup:
         note.anki_object = _LegacyNote(["old front", "old back"], model=old_nt)
         cfg = _config(personal=[("Basic", "Front")])
 
-        note.handle_import_config_changes(cfg, _nm(nt), None)
+        note.handle_import_config_changes(cfg, _nm(nt))
 
         assert note.anki_object_dict["fields"][0] == "old front"
 
@@ -139,7 +158,7 @@ class TestOldModelLookup:
         note.anki_object.note_type = MagicMock(side_effect=RuntimeError("no model"))
         cfg = _config(personal=[("Basic", "Front")])
 
-        note.handle_import_config_changes(cfg, _nm(nt), None)
+        note.handle_import_config_changes(cfg, _nm(nt))
 
         # Without a usable old model the protected field keeps the remote value.
         assert note.anki_object_dict["fields"][0] == "new front"
@@ -153,7 +172,7 @@ class TestOldModelLookup:
             old_notetype={"name": "NoFields"},
         )
         note.handle_import_config_changes(
-            _config(personal=[("Basic", "Front")]), _nm(nt), None
+            _config(personal=[("Basic", "Front")]), _nm(nt)
         )
         assert note.anki_object_dict["fields"][0] == "new front"
 
@@ -169,7 +188,7 @@ class TestProtectedFieldNameResolution:
         )
         cfg = _config(personal=[("Original", "Front")])
 
-        note.handle_import_config_changes(cfg, _nm(nt), None)
+        note.handle_import_config_changes(cfg, _nm(nt))
 
         assert note.anki_object_dict["fields"][0] == "old front"
 
@@ -183,7 +202,7 @@ class TestProtectedFieldNameResolution:
         )
         cfg = _config(personal=[("Basic", "A"), ("Basic", "C")])
 
-        note.handle_import_config_changes(cfg, _nm(nt), None)
+        note.handle_import_config_changes(cfg, _nm(nt))
 
         # A is protected; C is beyond max_fields so it is never consulted.
         called_fields = [c.args[1] for c in cfg.is_personal_field.call_args_list]
@@ -207,7 +226,7 @@ class TestFieldCountReconciliation:
         # Skip the "append local extras" path by using a local note with the
         # same number of fields as the remote payload.
         note.anki_object.fields = ["old a", "old b", "old c"]
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         # Anki rejects a note whose field count does not match its notetype.
         assert note.anki_object_dict["fields"] == ["new a", "new b"]
@@ -216,11 +235,11 @@ class TestFieldCountReconciliation:
         nt = make_notetype(fields=["A", "B", "C"])
         note = _note(["new a"], old_fields=["old a"], notetype=nt)
 
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert note.anki_object_dict["fields"] == ["new a", "", ""]
 
-    def test_local_only_fields_are_appended_in_order(self):
+    def test_local_only_fields_are_kept_by_name(self):
         # The notetype has room for the extra local fields.
         nt = make_notetype(fields=["A", "B", "C", "D"])
         note = _note(
@@ -228,7 +247,9 @@ class TestFieldCountReconciliation:
             old_fields=["old a", "old b", "old c", "mine"],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C", "D"]
+        note.handle_import_config_changes(_config(), nm)
 
         assert note.anki_object_dict["fields"] == [
             "new a",
@@ -237,45 +258,171 @@ class TestFieldCountReconciliation:
             "mine",
         ]
 
-    def test_local_only_fields_use_the_explicit_mapping(self):
-        nt = make_notetype(fields=["A", "B", "C", "D"])
+    def test_local_only_values_are_found_by_name_in_the_notes_notetype(self):
+        nt = make_notetype(fields=["A", "B", "C", "D"])  # merged layout
+        old_nt = make_notetype(fields=["D", "C", "B", "A"])  # note's own layout
         note = _note(
             ["new a", "new b"],
-            old_fields=["old a", "old b", "old c", "mine"],
+            old_fields=["mine d", "mine c", "old b", "old a"],
             notetype=nt,
+            old_notetype=old_nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), [0, 1, 3, 2])
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C", "D"]
+        note.handle_import_config_changes(_config(), nm)
 
         assert note.anki_object_dict["fields"] == [
             "new a",
             "new b",
-            "mine",
-            "old c",
+            "mine c",
+            "mine d",
         ]
 
-    def test_local_only_fields_with_unmapped_index_are_skipped(self):
+    def test_local_only_field_missing_from_the_note_is_empty(self):
+        nt = make_notetype(fields=["A", "B", "C", "D"])
+        old_nt = make_notetype(fields=["A", "B"])  # note never had C/D
+        note = _note(
+            ["new a", "new b"],
+            old_fields=["old a", "old b"],
+            notetype=nt,
+            old_notetype=old_nt,
+        )
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C", "D"]
+        note.handle_import_config_changes(_config(), nm)
+
+        assert note.anki_object_dict["fields"] == ["new a", "new b", "", ""]
+
+    def test_local_value_beyond_the_notes_fields_is_left_empty(self, note_log):
         nt = make_notetype(fields=["A", "B", "C", "D"])
         note = _note(
             ["new a", "new b"],
-            old_fields=["old a", "old b", "old c", "mine"],
+            old_fields=["old a", "old b"],  # fewer values than the notetype
             notetype=nt,
         )
-        # Only index 3 has an old counterpart.
-        note.handle_import_config_changes(_config(), _nm(nt), [0, 1, None, 3])
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C", "D"]
+        with note_log.at_level(logging.WARNING):
+            note.handle_import_config_changes(_config(), nm)
 
-        # The unmapped slot is padded so Anki's field count still matches.
-        assert note.anki_object_dict["fields"] == ["new a", "new b", "mine", ""]
+        assert note.anki_object_dict["fields"] == ["new a", "new b", "", ""]
+        # One up-front warning covers every out-of-range position.
+        assert "only the values present can be preserved" in note_log.text
 
-    def test_local_only_field_mapping_out_of_range_is_skipped(self):
-        nt = make_notetype(fields=["A", "B", "C", "D"])
+    def test_local_only_field_is_found_when_its_casing_differs(self):
+        # The note's own notetype spells the field "extra", the merged one "Extra".
+        nt = make_notetype(fields=["A", "B", "Extra"])
+        old_nt = make_notetype(fields=["a", "b", "extra"], model_id=99)
         note = _note(
             ["new a", "new b"],
-            old_fields=["old a", "old b", "old c", "mine"],
+            old_fields=["old a", "old b", "mine"],
+            notetype=nt,
+            old_notetype=old_nt,
+        )
+        nm = _nm(nt)
+        nm.local_only_field_names = ["Extra"]
+        note.handle_import_config_changes(_config(), nm)
+
+        assert note.anki_object_dict["fields"] == ["new a", "new b", "mine"]
+
+    def test_exact_field_name_wins_over_a_case_variant(self):
+        # "extra" precedes "Extra" in the note's notetype; the exact match must win.
+        nt = make_notetype(fields=["A", "B", "Extra"])
+        old_nt = make_notetype(fields=["A", "B", "extra", "Extra"], model_id=99)
+        note = _note(
+            ["new a", "new b"],
+            old_fields=["old a", "old b", "lower", "exact"],
+            notetype=nt,
+            old_notetype=old_nt,
+        )
+        nm = _nm(nt)
+        nm.local_only_field_names = ["Extra"]
+        note.handle_import_config_changes(_config(), nm)
+
+        assert note.anki_object_dict["fields"] == ["new a", "new b", "exact"]
+
+    def test_ambiguous_case_variant_is_not_used(self):
+        # Two local fields differing only in casing: neither may be guessed.
+        nt = make_notetype(fields=["A", "B", "EXTRA"])
+        old_nt = make_notetype(fields=["A", "B", "extra", "Extra"], model_id=99)
+        note = _note(
+            ["new a", "new b"],
+            old_fields=["old a", "old b", "lower", "exact"],
+            notetype=nt,
+            old_notetype=old_nt,
+        )
+        nm = _nm(nt)
+        nm.local_only_field_names = ["EXTRA"]
+        note.handle_import_config_changes(_config(), nm)
+
+        assert note.anki_object_dict["fields"] == ["new a", "new b", ""]
+
+    def test_missing_local_only_field_is_logged(self, note_log):
+        nt = make_notetype(fields=["A", "B", "C"])
+        old_nt = make_notetype(fields=["A", "B"], model_id=99)
+        note = _note(
+            ["new a", "new b"],
+            old_fields=["old a", "old b"],
+            notetype=nt,
+            old_notetype=old_nt,
+        )
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C"]
+        with note_log.at_level(logging.WARNING):
+            note.handle_import_config_changes(_config(), nm)
+
+        assert note.anki_object_dict["fields"] == ["new a", "new b", ""]
+        assert "'C' has no unambiguous local counterpart" in note_log.text
+
+    def test_out_of_range_positions_are_reported_once(self, note_log):
+        """The note/notetype mismatch is reported once, not once per field."""
+        nt = make_notetype(fields=["A", "B", "C", "D"])
+        note = _note(["new a", "new b"], old_fields=["old a", "old b"], notetype=nt)
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C", "D"]
+        with note_log.at_level(logging.WARNING):
+            note.handle_import_config_changes(_config(), nm)
+
+        assert note_log.text.count("only the values present can be preserved") == 1
+        assert "no unambiguous local counterpart" not in note_log.text
+
+    def test_senders_own_extra_fields_never_overwrite_local_ones(self):
+        """A contributor's local fields arrive in the note JSON; ours must win."""
+        nt = make_notetype(fields=["A", "B", "C", "D"])
+        note = _note(
+            ["new a", "new b", "their c", "their d"],
+            old_fields=["old a", "old b", "mine c", "mine d"],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), [0, 1, 9, 3])
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C", "D"]
+        note.handle_import_config_changes(_config(), nm)
 
-        assert note.anki_object_dict["fields"] == ["new a", "new b", "mine", ""]
+        assert note.anki_object_dict["fields"] == [
+            "new a",
+            "new b",
+            "mine c",
+            "mine d",
+        ]
+
+    def test_sender_extras_do_not_shift_local_only_values(self):
+        """Remote note may carry fewer extras than we have; ours stay aligned."""
+        nt = make_notetype(fields=["A", "B", "C", "D"])
+        note = _note(
+            ["new a", "new b", "their c"],
+            old_fields=["old a", "old b", "mine c", "mine d"],
+            notetype=nt,
+        )
+        nm = _nm(nt)
+        nm.local_only_field_names = ["C", "D"]
+        note.handle_import_config_changes(_config(), nm)
+
+        assert note.anki_object_dict["fields"] == [
+            "new a",
+            "new b",
+            "mine c",
+            "mine d",
+        ]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -297,7 +444,7 @@ class TestTagDrivenProtection:
             old_tags=[tag],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert tag in note.anki_object_dict["tags"]
         assert "keep" in note.anki_object_dict["tags"]
@@ -310,7 +457,7 @@ class TestTagDrivenProtection:
             old_tags=[self._protected_tag("A")],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert note.anki_object_dict["fields"] == ["old a", "new b"]
 
@@ -322,11 +469,24 @@ class TestTagDrivenProtection:
             old_tags=[self._protected_tag("Extra_Info")],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert note.anki_object_dict["fields"] == ["old info", "new b"]
 
-    def test_named_field_protection_with_explicit_mapping(self):
+    def test_named_field_protection_works_for_field_index_zero(self):
+        """Index 0 must not be mistaken for "not found" when the name has an underscore."""
+        nt = make_notetype(fields=["My_Field", "B"])
+        note = _note(
+            ["new a", "new b"],
+            old_fields=["old a", "old b"],
+            old_tags=[self._protected_tag("My_Field")],
+            notetype=nt,
+        )
+        note.handle_import_config_changes(_config(), _nm(nt))
+
+        assert note.anki_object_dict["fields"] == ["old a", "new b"]
+
+    def test_named_field_protection_uses_the_field_name(self):
         nt = make_notetype(fields=["A", "B"])
         note = _note(
             ["new a", "new b"],
@@ -334,23 +494,108 @@ class TestTagDrivenProtection:
             old_tags=[self._protected_tag("B")],
             notetype=nt,
         )
-        # new B (index 1) came from old index 0
-        note.handle_import_config_changes(_config(), _nm(nt), [1, 0])
+        note.handle_import_config_changes(_config(), _nm(nt))
 
-        assert note.anki_object_dict["fields"] == ["new a", "old a"]
+        assert note.anki_object_dict["fields"] == ["new a", "old b"]
 
-    def test_an_unusable_mapping_keeps_the_remote_value(self):
-        nt = make_notetype(fields=["A", "B"])
+    def test_named_field_protection_ignores_field_name_casing(self):
+        """A remote case-only rename must not silently disable protection."""
+        nt = make_notetype(fields=["front", "Back"])  # merged/remote casing
         note = _note(
-            ["new a", "new b"],
-            old_fields=["old a", "old b"],
-            old_tags=[self._protected_tag("A")],
+            ["new front", "new back"],
+            old_fields=["my front", "old back"],
+            old_tags=[self._protected_tag("Front")],  # user's old casing
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), [None, 1])
+        note.handle_import_config_changes(_config(), _nm(nt))
+
+        assert note.anki_object_dict["fields"] == ["my front", "new back"]
+
+    def test_a_field_missing_from_the_local_note_keeps_the_remote_value(self):
+        nt = make_notetype(fields=["A", "B"])
+        old_nt = make_notetype(fields=["B"])  # local note never had A
+        note = _note(
+            ["new a", "new b"],
+            old_fields=["old b"],
+            old_tags=[self._protected_tag("A")],
+            notetype=nt,
+            old_notetype=old_nt,
+        )
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         # Nothing to preserve from, so the imported value must survive intact.
         assert note.anki_object_dict["fields"] == ["new a", "new b"]
+
+    def test_a_protected_field_added_by_the_merge_keeps_the_remote_value(self):
+        """After the merge the local note is padded with "" for the new field.
+
+        That padding is not a user value; protection must not replace the
+        imported content with it.
+        """
+        nt = make_notetype(fields=["A", "B"])
+        note = _note(
+            ["remote a", "remote b"],
+            old_fields=["", "old b"],  # note is already merged/remapped
+            notetype=nt,
+        )
+        nm = _nm(nt)
+        nm.local_field_names_before_merge = {"b"}
+        cfg = _config(personal=[("Basic", "A")])
+
+        note.handle_import_config_changes(cfg, nm)
+
+        assert note.anki_object_dict["fields"] == ["remote a", "remote b"]
+
+    def test_a_protected_field_that_existed_locally_keeps_its_empty_value(self):
+        """An empty field the user really had is still a value to protect."""
+        nt = make_notetype(fields=["A", "B"])
+        note = _note(
+            ["remote a", "remote b"],
+            old_fields=["", "old b"],
+            notetype=nt,
+        )
+        nm = _nm(nt)
+        nm.local_field_names_before_merge = {"a", "b"}
+        cfg = _config(personal=[("Basic", "A")])
+
+        note.handle_import_config_changes(cfg, nm)
+
+        assert note.anki_object_dict["fields"] == ["", "remote b"]
+
+    def test_a_migrated_notes_value_survives_for_a_field_the_target_lacked(self):
+        """A migration can bring real content into a field the target added.
+
+        That content is a user value even though the target notetype itself did
+        not have the field before the merge.
+        """
+        nt = make_notetype(fields=["A", "B"])
+        note = _note(
+            ["remote a", "remote b"],
+            old_fields=["migrated a", "old b"],
+            notetype=nt,
+        )
+        nm = _nm(nt)
+        nm.local_field_names_before_merge = {"b"}
+        cfg = _config(personal=[("Basic", "A")])
+
+        note.handle_import_config_changes(cfg, nm)
+
+        assert note.anki_object_dict["fields"] == ["migrated a", "remote b"]
+
+    def test_new_notes_never_apply_protection(self):
+        nt = make_notetype(fields=["A", "B"])
+        note = _note(
+            ["remote a", "remote b"],
+            old_fields=["", ""],
+            notetype=nt,
+        )
+        nm = _nm(nt)
+        nm.local_field_names_before_merge = {"a", "b"}
+        cfg = _config(personal=[("Basic", "A")])
+
+        note.handle_import_config_changes(cfg, nm, is_new=True)
+
+        assert note.anki_object_dict["fields"] == ["remote a", "remote b"]
 
     def test_tags_protection_copies_all_local_tags(self):
         nt = make_notetype(fields=["A", "B"])
@@ -361,7 +606,7 @@ class TestTagDrivenProtection:
             old_tags=["local-one", "local-two", self._protected_tag("Tags")],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert set(note.anki_object_dict["tags"]) >= {
             "local-one",
@@ -377,36 +622,36 @@ class TestTagDrivenProtection:
             old_tags=["local-tag", self._protected_tag("All")],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert note.anki_object_dict["fields"] == ["old a", "old b"]
         assert "local-tag" in note.anki_object_dict["tags"]
 
-    def test_all_protection_with_explicit_mapping(self):
-        nt = make_notetype(fields=["A", "B"])
+    def test_all_protection_copies_each_field_by_name(self):
+        nt = make_notetype(fields=["B", "A"])  # merged layout
+        old_nt = make_notetype(fields=["A", "B"])  # note's own layout
         note = _note(
-            ["new a", "new b"],
+            ["new b", "new a"],
             old_fields=["old a", "old b"],
             old_tags=[self._protected_tag("All")],
             notetype=nt,
+            old_notetype=old_nt,
         )
-        # Remote A <- old B, remote B <- old A.
-        note.handle_import_config_changes(_config(), _nm(nt), [1, 0])
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert note.anki_object_dict["fields"] == ["old b", "old a"]
 
-    def test_all_protection_ignores_out_of_range_mapping_entries(self):
+    def test_all_protection_ignores_values_beyond_the_local_fields(self):
         nt = make_notetype(fields=["A", "B"])
         note = _note(
             ["new a", "new b"],
-            old_fields=["old a", "old b"],
+            old_fields=["old a"],  # fewer values than the notetype
             old_tags=[self._protected_tag("All")],
             notetype=nt,
         )
-        # The second mapping entry is None and the first points out of range.
-        note.handle_import_config_changes(_config(), _nm(nt), [5, None])
+        note.handle_import_config_changes(_config(), _nm(nt))
 
-        assert note.anki_object_dict["fields"] == ["new a", "new b"]
+        assert note.anki_object_dict["fields"] == ["old a", "new b"]
 
     def test_unrelated_tags_are_left_alone(self):
         nt = make_notetype(fields=["A", "B"])
@@ -417,7 +662,7 @@ class TestTagDrivenProtection:
             old_tags=["beta"],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         assert note.anki_object_dict["tags"] == ["alpha"]
 
@@ -432,7 +677,7 @@ class TestTagDrivenProtection:
             old_tags=[lookalike],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(), _nm(nt), None)
+        note.handle_import_config_changes(_config(), _nm(nt))
 
         # Documented behaviour: the lookalike tag is preserved and "A" is
         # treated as the protected field name.
@@ -456,7 +701,7 @@ class TestPersonalTagMerging:
             notetype=nt,
         )
         note.handle_import_config_changes(
-            _config(personal_tags=["leech", "marked"]), _nm(nt), None
+            _config(personal_tags=["leech", "marked"]), _nm(nt)
         )
 
         tags = note.anki_object_dict["tags"]
@@ -474,7 +719,7 @@ class TestPersonalTagMerging:
             old_tags=["leech"],
             notetype=nt,
         )
-        note.handle_import_config_changes(_config(personal_tags=[]), _nm(nt), None)
+        note.handle_import_config_changes(_config(personal_tags=[]), _nm(nt))
         assert note.anki_object_dict["tags"] == ["remote"]
 
 
@@ -489,7 +734,7 @@ class TestOptionalTagFiltering:
             notetype=nt,
         )
         note.handle_import_config_changes(
-            _config(has_optional_tags=False, optional_tags=[]), _nm(nt), None
+            _config(has_optional_tags=False, optional_tags=[]), _nm(nt)
         )
         assert set(note.anki_object_dict["tags"]) == {optional, "plain"}
 
@@ -504,7 +749,7 @@ class TestOptionalTagFiltering:
             notetype=nt,
         )
         note.handle_import_config_changes(
-            _config(has_optional_tags=True, optional_tags=["hard"]), _nm(nt), None
+            _config(has_optional_tags=True, optional_tags=["hard"]), _nm(nt)
         )
         assert set(note.anki_object_dict["tags"]) == {keep, "plain"}
 
@@ -513,6 +758,6 @@ class TestOptionalTagFiltering:
         note = _note(["new a", "new b"], old_fields=["old a", "old b"], notetype=nt)
         del note.anki_object_dict["tags"]
         note.handle_import_config_changes(
-            _config(has_optional_tags=True, optional_tags=["hard"]), _nm(nt), None
+            _config(has_optional_tags=True, optional_tags=["hard"]), _nm(nt)
         )
         assert "tags" not in note.anki_object_dict

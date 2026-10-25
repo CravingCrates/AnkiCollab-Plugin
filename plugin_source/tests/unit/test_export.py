@@ -244,6 +244,13 @@ class TestFilterValidFilenameMapping:
         result = _filter_valid_filename_mapping(mapping, media_dir=str(tmp_path))
         assert result == {"a.png": "good.webp"}
 
+    def test_file_at_minimum_size_is_valid(self, tmp_path):
+        boundary = tmp_path / "boundary.webp"
+        boundary.write_bytes(b"\x00" * 100)
+        assert _filter_valid_filename_mapping(
+            {"old.png": "boundary.webp"}, media_dir=str(tmp_path)
+        ) == {"old.png": "boundary.webp"}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Personal tags for export

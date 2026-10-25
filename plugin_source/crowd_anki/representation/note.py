@@ -99,31 +99,19 @@ class Note(JsonSerializableAnkiObject):
         )
 
     @staticmethod
-    def _move_notes_to_decks(collection, note_to_deck_map, import_config):
-        """Move NEW notes from temp deck to their correct decks (updated notes handled separately)"""
+    def _move_notes_to_decks(collection, note_to_deck_map, temp_deck_id):
+        """Move NEW notes from the temp deck to their correct decks.
 
-        # Only move notes that are currently in temp decks (these are new notes)
-        temp_deck_pattern = "_ankicollab_import_"
-        temp_deck_ids = []
-
-        try:
-            for deck_name_id in collection.decks.all_names_and_ids():
-                deck_name = deck_name_id.name
-                deck_id = deck_name_id.id
-                if deck_name.startswith(temp_deck_pattern):
-                    temp_deck_ids.append(deck_id)
-        except Exception as e:
-            logger.warning(f"Error finding temp decks: {e}")
-            return
-
-        if not temp_deck_ids:
-            return
-
-        deck_operations = defaultdict(list)  # deck_id -> [card_ids]
-
+        Updated notes are handled separately. The temp deck itself is removed by
+        ``Deck._cleanup_temp_deck``, which refuses to delete a deck that still
+        has cards.
+        """
         note_uuids = list(note_to_deck_map.keys())
-        if not note_uuids:
+        if not temp_deck_id or not note_uuids:
             return
+
+        temp_deck_ids = [temp_deck_id]
+        deck_operations = defaultdict(list)  # deck_id -> [card_ids]
 
         deck_name_to_id_cache = {}
 
@@ -180,22 +168,6 @@ class Note(JsonSerializableAnkiObject):
             except Exception as e:
                 logger.warning(f"Error moving cards to deck {deck_id}: {e}")
                 continue
-
-        # Clean up temp deck
-        try:
-            temp_deck_pattern = "_ankicollab_import_"
-            deck_ids_to_remove = []
-
-            for deck_name_id in collection.decks.all_names_and_ids():
-                deck_name = deck_name_id.name
-                deck_id = deck_name_id.id
-                if deck_name.startswith(temp_deck_pattern):
-                    deck_ids_to_remove.append(deck_id)
-
-            if deck_ids_to_remove:
-                collection.decks.remove(deck_ids_to_remove)
-        except Exception as e:
-            logger.warning(f"Error cleaning up temp deck: {e}")
 
     @staticmethod
     def _sync_sibling_suspension_status(collection, notes, cards_before_update):
@@ -400,16 +372,23 @@ class Note(JsonSerializableAnkiObject):
                     chunk = cards_to_suspend[i : i + CHUNK_SIZE]
                     collection.sched.suspend_cards(chunk)
 
-    def handle_import_config_changes(
-        self, import_config, note_model, field_mapping=None
-    ):
+    def handle_import_config_changes(self, import_config, note_model, is_new=False):
         """
-        Handle import configuration changes including field mapping awareness.
+        Handle import configuration changes (protected fields, personal fields, tags).
+
+        Local values are preserved by looking them up by field *name* in the
+        note's current notetype. Note values are positional and the notetype
+        update already remapped every existing note, so a merge-time index
+        mapping must never be applied to them here.
+
+        Protection only applies to values the note already had: a brand-new
+        note (or a field the remote merge introduced) has no user value, so it
+        takes the imported value instead of being blanked.
 
         Args:
             import_config: Import configuration object
             note_model: The note model for this note
-            field_mapping: List mapping new field indices to old field indices
+            is_new: True when the note is being added, not updated
         """
         if (
             not hasattr(self, "anki_object_dict")
@@ -418,14 +397,13 @@ class Note(JsonSerializableAnkiObject):
         ):
             return
 
-        logger.debug(f"Field Mapping: {field_mapping}")
-
         # Cache field names and indices for faster lookup
         field_name_to_index = {
             field["name"]: idx for idx, field in enumerate(note_model.anki_dict["flds"])
         }
-
-        has_explicit_mapping = field_mapping is not None
+        field_name_to_index_lower = {
+            name.lower(): idx for name, idx in field_name_to_index.items()
+        }
 
         old_field_name_to_index = {}
         if self.anki_object:
@@ -441,6 +419,64 @@ class Note(JsonSerializableAnkiObject):
                     }
             except Exception as e:
                 logger.warning(f"Could not get old model fields: {e}")
+
+        # Single invariant for every local-value read below: a value can only
+        # come from a position the note actually stores. A note whose field
+        # count disagrees with its notetype (loaded before a notetype change, a
+        # short `flds` row) exposes only the values it has; the remaining
+        # positions resolve to "" instead of raising or reading a stale offset.
+        local_fields = self.anki_object.fields if self.anki_object else []
+        if old_field_name_to_index and len(local_fields) != len(
+            old_field_name_to_index
+        ):
+            logger.warning(
+                f"Note has {len(local_fields)} field values but its notetype "
+                f"defines {len(old_field_name_to_index)} fields - only the values "
+                f"present can be preserved"
+            )
+
+        local_values = {
+            name: local_fields[idx]
+            for name, idx in old_field_name_to_index.items()
+            if idx < len(local_fields)
+        }
+
+        # The note's notetype can spell a field differently than the merged one.
+        # An exact match always wins; a case-variant is only used when it is
+        # unambiguous (a malformed notetype could contain both spellings).
+        local_values_lower = {}
+        for name, value in local_values.items():
+            lowered = name.lower()
+            local_values_lower[lowered] = (
+                None if lowered in local_values_lower else value
+            )
+
+        def local_value(field_name):
+            """The note's own value for ``field_name``, or None if it has none."""
+            if field_name in local_values:
+                return local_values[field_name]
+            return local_values_lower.get(field_name.lower())
+
+        # A note loaded from disk has already been remapped/padded by the
+        # notetype merge, so "empty" alone cannot distinguish "the user's value
+        # is empty" from "the remote added this field". The notetype keeps the
+        # pre-merge names for exactly that distinction. ``None`` means the
+        # model did not come through the import path; preserve as before.
+        known_before_merge = note_model.local_field_names_before_merge
+
+        def should_preserve(field_name):
+            if is_new:
+                return False
+            if known_before_merge is None:
+                return True
+            if field_name.lower() in known_before_merge:
+                return True
+            # Not part of the local notetype before the merge. This is either a
+            # field the remote introduced (the note is padded with "") or a
+            # value a notetype migration brought over. Keep real local content;
+            # let padding be replaced by the imported value.
+            value = local_value(field_name)
+            return value not in (None, "")
 
         # Get protected fields set by maintainer (indices in NEW structure)
         max_fields = min(
@@ -460,99 +496,63 @@ class Note(JsonSerializableAnkiObject):
         ]
 
         logger.debug("Handling import config changes for note")
-        # Add local-only fields to anki_object_dict (user's custom fields at the bottom)
-        if (
-            self.anki_object
-            and hasattr(self.anki_object, "fields")
-            and len(self.anki_object.fields) > len(self.anki_object_dict["fields"])
-        ):
-            start_index = len(self.anki_object_dict["fields"])
-            # Only add the additional local fields that aren't in the remote data
-            for new_field_idx in range(start_index, len(self.anki_object.fields)):
-                if has_explicit_mapping:
-                    if (
-                        new_field_idx < len(field_mapping)
-                        and field_mapping[new_field_idx] is not None
-                        and field_mapping[new_field_idx] < len(self.anki_object.fields)
-                    ):
-                        old_field_idx = field_mapping[new_field_idx]
-                        # Keep the old content for this protected field
-                        self.anki_object_dict["fields"].append(
-                            self.anki_object.fields[old_field_idx]
+
+        # Anki stores field values positionally. Rebuild the list against the
+        # merged notetype: remote fields keep the incoming value, while only
+        # genuinely local fields take the user's own value. Extra fields a
+        # sender added locally must never leak into ours (and vice versa).
+        local_only = {name.lower() for name in note_model.local_only_field_names}
+        remote_values = self.anki_object_dict["fields"]
+        fields = []
+        for index, field in enumerate(note_model.anki_dict["flds"]):
+            lower_name = field["name"].lower()
+            if lower_name in local_only:
+                value = local_value(field["name"])
+                if value is None:
+                    # Out-of-range positions are covered by the up-front warning;
+                    # a name with no exact local counterpart is worth its own line.
+                    if field["name"] not in old_field_name_to_index:
+                        logger.warning(
+                            f"Local-only field '{field['name']}' has no unambiguous "
+                            f"local counterpart - importing it empty"
                         )
-                else:
-                    self.anki_object_dict["fields"].append(
-                        self.anki_object.fields[new_field_idx]
-                    )
-
-        # CRITICAL: Ensure field count matches notetype definition exactly
-        # Anki's update_notes requires this strict matching
-        expected_field_count = len(note_model.anki_dict["flds"])
-        current_field_count = len(self.anki_object_dict["fields"])
-
-        if current_field_count > expected_field_count:
-            # Truncate extra fields that exceed notetype definition
-            logger.debug(
-                f"Truncating {current_field_count - expected_field_count} extra fields to match notetype definition"
-            )
-            self.anki_object_dict["fields"] = self.anki_object_dict["fields"][
-                :expected_field_count
-            ]
-        elif current_field_count < expected_field_count:
-            # Pad with empty fields if we're missing some
-            logger.debug(
-                f"Padding {expected_field_count - current_field_count} missing fields"
-            )
-            while len(self.anki_object_dict["fields"]) < expected_field_count:
-                self.anki_object_dict["fields"].append("")
+                    value = ""
+                fields.append(value)
+            elif index < len(remote_values):
+                fields.append(remote_values[index])
+            else:
+                fields.append("")
+        self.anki_object_dict["fields"] = fields
 
         logger.debug(
             f"Local fields processed - final count: {len(self.anki_object_dict['fields'])}"
         )
         # Override protected fields with OLD content (maintainer wants to preserve old values)
         # This overrides the NEW remote content for specific fields the maintainer marked as protected
-        if (
-            protected_fields
-            and self.anki_object
-            and hasattr(self.anki_object, "fields")
-        ):
+        if protected_fields:
             for new_field_idx in protected_fields:
                 try:
-                    if has_explicit_mapping:
-                        # For protected fields, we want to keep the OLD value, not the new remote value
-                        if (
-                            new_field_idx < len(field_mapping)
-                            and field_mapping[new_field_idx] is not None
-                            and field_mapping[new_field_idx]
-                            < len(self.anki_object.fields)
-                        ):
-                            old_field_idx = field_mapping[new_field_idx]
-                            # Keep the old content for this protected field
-                            self.anki_object_dict["fields"][new_field_idx] = (
-                                self.anki_object.fields[old_field_idx]
-                            )
-                            logger.debug(
-                                f"Maintainer protected field index {new_field_idx} (old_idx={old_field_idx}): preserved content"
-                            )
-                        else:
-                            logger.warning(
-                                f"Invalid field mapping for protected field {new_field_idx}: mapping={field_mapping}"
-                            )
-                    else:
-                        # Strategy 2: name-based lookup
-                        field_name = note_model.anki_dict["flds"][new_field_idx]["name"]
-                        if field_name in old_field_name_to_index:
-                            old_field_idx = old_field_name_to_index[field_name]
-                            if old_field_idx < len(self.anki_object.fields):
-                                self.anki_object_dict["fields"][new_field_idx] = (
-                                    self.anki_object.fields[old_field_idx]
-                                )
-                                logger.debug(
-                                    f"Maintainer protected field '{field_name}' (new_idx={new_field_idx}, old_name_idx={old_field_idx}): preserved content via name match"
-                                )
+                    field_name = note_model.anki_dict["flds"][new_field_idx]["name"]
+                    if not should_preserve(field_name):
+                        logger.debug(
+                            f"Protected field '{field_name}' has no local value "
+                            f"to preserve - keeping the imported value"
+                        )
+                        continue
+                    value = local_value(field_name)
+                    if value is None:
+                        logger.warning(
+                            f"Could not find local value for protected field '{field_name}' (new_idx={new_field_idx})"
+                        )
+                        continue
+                    # Keep the old content for this protected field
+                    self.anki_object_dict["fields"][new_field_idx] = value
+                    logger.debug(
+                        f"Maintainer protected field '{field_name}' (new_idx={new_field_idx}): preserved content"
+                    )
                 except (IndexError, TypeError) as e:
                     logger.warning(
-                        f"Error accessing field mapping for protected field {new_field_idx}: {e}"
+                        f"Error preserving protected field {new_field_idx}: {e}"
                     )
                     continue
 
@@ -581,85 +581,46 @@ class Note(JsonSerializableAnkiObject):
             if (protected_field == "Tags" or protected_field == "All") and hasattr(
                 self.anki_object, "tags"
             ):
-                self.anki_object_dict["tags"] = list(
-                    self.anki_object.tags
-                )  # Copy to avoid reference issues
+                if not is_new:
+                    self.anki_object_dict["tags"] = list(
+                        self.anki_object.tags
+                    )  # Copy to avoid reference issues
 
             if protected_field == "All":
                 # If "All" is protected, copy all fields AND tags from anki_object to anki_object_dict
-                if hasattr(self.anki_object, "fields"):
-                    if has_explicit_mapping:
-                        # Use field mapping when available
-                        for new_idx, old_idx in enumerate(field_mapping):
-                            if (
-                                old_idx is not None
-                                and new_idx < len(self.anki_object_dict["fields"])
-                                and old_idx < len(self.anki_object.fields)
-                            ):
-                                self.anki_object_dict["fields"][new_idx] = (
-                                    self.anki_object.fields[old_idx]
-                                )
-                    else:
-                        # Strategy 2: name-based mapping for All
-                        for new_idx, field in enumerate(note_model.anki_dict["flds"]):
-                            if new_idx >= len(self.anki_object_dict["fields"]):
-                                break
-                            field_name = field["name"]
-                            if field_name in old_field_name_to_index:
-                                old_field_idx = old_field_name_to_index[field_name]
-                                if old_field_idx < len(self.anki_object.fields):
-                                    self.anki_object_dict["fields"][new_idx] = (
-                                        self.anki_object.fields[old_field_idx]
-                                    )
+                for new_idx, field in enumerate(note_model.anki_dict["flds"]):
+                    if not should_preserve(field["name"]):
+                        continue
+                    value = local_value(field["name"])
+                    if value is not None:
+                        self.anki_object_dict["fields"][new_idx] = value
                 break
 
-            # Handle individual field protection using field mapping
-            field_idx = field_name_to_index.get(
-                protected_field
-            ) or field_name_to_index.get(protected_field.replace("_", " "))
-            if (
-                field_idx is not None
-                and self.anki_object
-                and hasattr(self.anki_object, "fields")
-            ):
-
-                # For user-protected fields, use the same field mapping logic as maintainer-protected fields
-                if has_explicit_mapping:
-                    if field_idx < len(field_mapping):
-                        old_field_idx = field_mapping[field_idx]
-                        if (
-                            old_field_idx is not None
-                            and old_field_idx < len(self.anki_object.fields)
-                            and field_idx < len(self.anki_object_dict["fields"])
-                        ):
-                            # Preserve the old content for this protected field
-                            old_content = self.anki_object.fields[old_field_idx]
-                            self.anki_object_dict["fields"][field_idx] = old_content
-                            logger.debug(
-                                f"User protected field '{protected_field}' (new_idx={field_idx}, old_idx={old_field_idx}): preserved content"
-                            )
-                        else:
-                            logger.warning(
-                                f"Invalid field mapping for user protected field '{protected_field}'"
-                            )
-                else:
-                    # Strategy 2: name-based lookup
-                    for p_field_name in (
-                        protected_field,
-                        protected_field.replace("_", " "),
-                    ):
-                        if p_field_name in old_field_name_to_index:
-                            old_field_idx = old_field_name_to_index[p_field_name]
-                            if old_field_idx < len(
-                                self.anki_object.fields
-                            ) and field_idx < len(self.anki_object_dict["fields"]):
-                                self.anki_object_dict["fields"][field_idx] = (
-                                    self.anki_object.fields[old_field_idx]
-                                )
-                                logger.debug(
-                                    f"User protected field '{protected_field}' (new_idx={field_idx}, old_name_idx={old_field_idx}): preserved content via name match"
-                                )
-                                break
+            # Handle individual field protection
+            field_idx = field_name_to_index.get(protected_field)
+            if field_idx is None:
+                field_idx = field_name_to_index_lower.get(protected_field.lower())
+            if field_idx is None:
+                field_idx = field_name_to_index.get(protected_field.replace("_", " "))
+            if field_idx is None:
+                field_idx = field_name_to_index_lower.get(
+                    protected_field.replace("_", " ").lower()
+                )
+            if field_idx is not None:
+                field_name = note_model.anki_dict["flds"][field_idx]["name"]
+                if not should_preserve(field_name):
+                    continue
+                value = local_value(field_name)
+                if value is None:
+                    logger.warning(
+                        f"Could not find local value for user protected field '{protected_field}'"
+                    )
+                    continue
+                # Preserve the old content for this protected field
+                self.anki_object_dict["fields"][field_idx] = value
+                logger.debug(
+                    f"User protected field '{protected_field}' (new_idx={field_idx}): preserved content"
+                )
 
         logger.debug(f"Protected fields by tags handled")
 

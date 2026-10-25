@@ -217,7 +217,7 @@ class TestNotetypeSchemaChanges:
 
         note_model = NoteModel(nt_dict)
         config = MagicMock(is_personal_field=MagicMock(return_value=False))
-        note.handle_import_config_changes(config, note_model, None)
+        note.handle_import_config_changes(config, note_model)
         return note.anki_object_dict
 
     def test_field_added_preserves_existing_values(self):
@@ -248,7 +248,7 @@ class TestNotetypeSchemaChanges:
         )
         from crowd_anki.representation.note_model import NoteModel
 
-        note.handle_import_config_changes(config, NoteModel(nt), None)
+        note.handle_import_config_changes(config, NoteModel(nt))
         # "Front" (index 0) is protected → local value preserved
         assert note.anki_object_dict["fields"][0] == "local front"
         # "Back" is not protected → remote value kept

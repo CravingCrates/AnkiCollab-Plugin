@@ -3,7 +3,7 @@ from typing import Callable, Any, Iterable, List, Dict, Optional
 
 from .deck_config import DeckConfig
 from .json_serializable import JsonSerializableAnkiDict
-from .note_model import NoteModel
+from .note_model import NoteModel, NotetypeSaveError
 from .note import Note
 from ..anki.adapters.file_provider import FileProvider
 from anki.models import ChangeNotetypeRequest, NotetypeId
@@ -14,6 +14,8 @@ from ..utils.uuid import UuidFetcher
 from ...thread import sync_run_async
 from ...utils import get_logger, check_collection_or_abort, OperationAbortedError
 import uuid
+import re
+import copy
 
 from ... import main
 from ...media_progress_indicator import (
@@ -41,6 +43,14 @@ CHUNK_SIZE = 1000
 
 logger = get_logger("ankicollab.deck_import")
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
+
+
+class DeckImportCancelled(Exception):
+    """The user cancelled the import before any note/card/media writes.
+
+    Notetype changes have already been applied at that point (they are safe and
+    idempotent); the import must still not be reported as successful.
+    """
 
 
 class Deck(JsonSerializableAnkiDict):
@@ -84,9 +94,6 @@ class Deck(JsonSerializableAnkiDict):
         self.metadata = None
         self.root_deck_id = None
         self.keep_empty_subdecks = False
-
-        # Store field mappings for intelligent note import
-        self._field_mappings = {}  # notetype_uuid -> field_mapping
 
         # Latest import note counts (used for the completion tooltip)
         self._last_import_notes_new = 0
@@ -700,7 +707,7 @@ class Deck(JsonSerializableAnkiDict):
 
         # mw.col.media.check()
 
-        if result["success"]:
+        if result.get("success"):
             # Prefer counts carried in the result; fall back to the counts
             # recorded on this deck instance during bulk processing.
             notes_new = result.get("notes_new", self._last_import_notes_new)
@@ -778,6 +785,8 @@ class Deck(JsonSerializableAnkiDict):
 
             return success
 
+        except NotetypeSaveError:
+            raise
         except Exception as e:
             logger.error(f"Critical error in notetype management: {e}", exc_info=True)
             try:
@@ -811,10 +820,38 @@ class Deck(JsonSerializableAnkiDict):
                     )
                     continue
 
+                # A local notetype with this UUID is already the target. Name
+                # matching must not adopt a *copy* of it (e.g. "Basic-908e4"):
+                # two local notetypes would end up sharing one UUID and the
+                # import could then update the wrong one.
+                existing_local = UuidFetcher(collection).get_model(remote_uuid)
+                if existing_local:
+                    local_name = existing_local.get("name")
+                    if local_name and local_name != model_name:
+                        collision = collection.models.by_name(model_name)
+                        if collision and collision.get("id") != existing_local.get(
+                            "id"
+                        ):
+                            # The server name is taken by a different local
+                            # notetype. Keep our local name (e.g. the earlier
+                            # "Foo (AnkiCollab)") and remember the server name
+                            # for protected-field configuration.
+                            note_model.anki_dict.setdefault("original_name", model_name)
+                            note_model.anki_dict["name"] = local_name
+                    logger.info(
+                        f"Local notetype for UUID {remote_uuid} ('{model_name}') already exists, "
+                        f"skipping duplicate detection"
+                    )
+                    continue
+
                 # Find existing local models with same name
                 existing_models_with_name = []
                 for existing_nt in collection.models.all():
-                    if existing_nt.get("name", "").startswith(model_name):
+                    local_name = existing_nt.get("name", "")
+                    if self._is_anki_duplicate_name(local_name, model_name):
+                        logger.info(
+                            f"Found local notetype '{local_name}' that may conflict with remote '{model_name}'"
+                        )
                         existing_models_with_name.append(existing_nt)
 
                 if existing_models_with_name:
@@ -836,8 +873,7 @@ class Deck(JsonSerializableAnkiDict):
                         note_model.anki_dict["id"] = compatible_notetype["id"]
                         # note_model.anki_dict["flds"] = compatible_model["flds"]
 
-                        # Critical: Always preserve the remote UUID for tracking
-                        if UUID_FIELD_NAME not in note_model.anki_dict:
+                        if not note_model.anki_dict.get(UUID_FIELD_NAME):
                             new_uuid = str(uuid.uuid1())
                             note_model.anki_dict[UUID_FIELD_NAME] = new_uuid
                             remote_uuid = note_model.get_uuid()
@@ -865,6 +901,22 @@ class Deck(JsonSerializableAnkiDict):
                 logger.error(f"Failed to report to Sentry: {sentry_error}")
             return False
 
+    @staticmethod
+    def _is_anki_duplicate_name(local_name: str, remote_name: str) -> bool:
+        # Anki treats notetype names case-insensitively when making them unique.
+        if local_name.casefold() == remote_name.casefold():
+            return True
+        # Anki's duplicate suffixes: "+" (current) or "-<5 hex chars>" (legacy),
+        # optionally followed by more "+" characters.
+        return (
+            re.fullmatch(
+                re.escape(remote_name) + r"(?:\++|-[0-9a-f]{5}\+*)",
+                local_name,
+                re.IGNORECASE,
+            )
+            is not None
+        )
+
     def _create_and_update_notetypes(
         self, collection: Collection, failed_operations: List[str]
     ) -> bool:
@@ -891,8 +943,8 @@ class Deck(JsonSerializableAnkiDict):
             try:
                 model_name = note_model.anki_dict.get("name", "unknown")
                 logger.info(f"Processing notetype '{model_name}' for creation/update")
-                # Critical: Ensure UUID field is preserved before saving
-                if UUID_FIELD_NAME not in note_model.anki_dict:
+
+                if not note_model.anki_dict.get(UUID_FIELD_NAME):
                     new_uuid = str(uuid.uuid1())
                     note_model.anki_dict[UUID_FIELD_NAME] = new_uuid
                     logger.info(
@@ -903,43 +955,44 @@ class Deck(JsonSerializableAnkiDict):
                 new_notetype_dict, field_mapping = note_model.save_to_collection(
                     collection
                 )
-                # Store field mapping for later use in note processing
                 if field_mapping is not None:
                     logger.info(
                         f"Notetype '{model_name}' saved with field mapping: {field_mapping}"
                     )
-                    note_model_uuid = note_model.get_uuid()
-                    self._field_mappings[note_model_uuid] = field_mapping
                 if new_notetype_dict is not None:
                     # Update the note model with the new notetype dict fields. we keep all else
                     # in the server version because stuff like naming is used to identify the protected fields (ikik this is getting confusing)
                     note_model.anki_dict["flds"] = new_notetype_dict["flds"]
-                    # Critical: Also update the ID to ensure it's available for note processing
-                    if (
-                        "id" not in note_model.anki_dict
-                        or note_model.anki_dict["id"] is None
-                    ):
-                        note_model.anki_dict["id"] = new_notetype_dict["id"]
+
+                    actual_name = new_notetype_dict.get("name")
+                    if actual_name and actual_name != note_model.anki_dict.get("name"):
+                        note_model.anki_dict.setdefault(
+                            "original_name", note_model.anki_dict.get("name")
+                        )
+                        note_model.anki_dict["name"] = actual_name
                     logger.info(f"Notetype '{model_name}' created/updated successfully")
 
-                # Ensure the model has a valid ID after save_to_collection
-                if (
-                    "id" not in note_model.anki_dict
-                    or note_model.anki_dict["id"] is None
-                ):
+                if not note_model.anki_dict.get("id"):
                     # Try to fetch the model by UUID to get the ID
                     fetcher = UuidFetcher(collection)
                     saved_model = fetcher.get_model(note_model.get_uuid())
-                    if saved_model and "id" in saved_model:
+                    if saved_model and saved_model.get("id"):
                         note_model.anki_dict["id"] = saved_model["id"]
                         logger.info(
                             f"Retrieved ID {saved_model['id']} for notetype '{model_name}'"
                         )
                     else:
-                        logger.error(
-                            f"Failed to get valid ID for notetype '{model_name}'"
-                        )
+                        error = f"Failed to get valid ID for notetype '{model_name}'"
+                        logger.error(error)
+                        failed_operations.append(error)
+                        raise NotetypeSaveError(error)
 
+            except NotetypeSaveError as e:
+                try:
+                    sentry_sdk.capture_exception(e)
+                except Exception as sentry_error:
+                    logger.error(f"Failed to report to Sentry: {sentry_error}")
+                raise
             except Exception as e:
                 model_name = note_model.anki_dict.get("name", "unknown")
                 failed_operations.append(f"Error with notetype '{model_name}': {e}")
@@ -1064,6 +1117,7 @@ class Deck(JsonSerializableAnkiDict):
                     logger.warning(
                         f"Error processing note batch {i//LARGE_BATCH_SIZE + 1}: {e}"
                     )
+                    problem_notes.append(f"Note batch {i//LARGE_BATCH_SIZE + 1}: {e}")
                     continue
 
             logger.info(
@@ -1083,6 +1137,15 @@ class Deck(JsonSerializableAnkiDict):
             success = True
             total_notes_changed = 0
             notes_requiring_review = []
+
+            if problem_notes:
+                failed_operations.extend(problem_notes)
+                success = False
+
+            if not problem_notes:
+                self._preserve_local_fields_for_related_migrations(
+                    collection, all_local_models, note_type_changes
+                )
 
             for (old_mid, new_mid), note_ids in note_type_changes.items():
                 if not note_ids:
@@ -1163,6 +1226,98 @@ class Deck(JsonSerializableAnkiDict):
             except Exception as sentry_error:
                 logger.error(f"Failed to report to Sentry: {sentry_error}")
             return False
+
+    def _migration_is_related(self, old_model: Dict, new_model: Dict) -> bool:
+        """Whether a migration is the "same" notetype re-homed to a new name.
+
+        Only then are old-only fields worth keeping: a user who manually
+        switched a note to a different notetype should not pollute the deck's
+        target notetype with that type's fields.
+        """
+        old_name = old_model.get("name", "")
+        new_name = new_model.get("name", "")
+        if not old_name or not new_name:
+            return False
+        return (
+            self._is_anki_duplicate_name(old_name, new_name)
+            or self._is_anki_duplicate_name(new_name, old_name)
+            or new_name.lower().startswith(f"{old_name.lower()} (ankicollab)")
+            or old_name.lower().startswith(f"{new_name.lower()} (ankicollab)")
+        )
+
+    def _preserve_local_fields_for_related_migrations(
+        self, collection, all_local_models, note_type_changes
+    ):
+        """Append old-only fields to the target before a related migration.
+
+        ``change_notetype_of_notes`` can only move values into existing target
+        fields. Without this, an incompatible local twin's custom fields would
+        be discarded when its notes are migrated to the deck notetype.
+        """
+        extras_by_target = {}
+        for old_mid, new_mid in note_type_changes:
+            if old_mid == new_mid:
+                continue
+            old_model = all_local_models.get(old_mid)
+            new_model = all_local_models.get(new_mid)
+            if not old_model or not new_model:
+                continue
+            if not self._migration_is_related(old_model, new_model):
+                continue
+            new_names = {field["name"].lower() for field in new_model.get("flds", [])}
+            extras = extras_by_target.setdefault(new_mid, {})
+            for field in old_model.get("flds", []):
+                lowered = field["name"].lower()
+                if lowered not in new_names:
+                    extras[lowered] = field
+
+        for new_mid, extras in extras_by_target.items():
+            target = all_local_models.get(new_mid)
+            if not target or not extras:
+                continue
+            fields = list(target.get("flds", []))
+            existing = {field["name"].lower() for field in fields}
+            appended = []
+            for lowered, field in extras.items():
+                if lowered in existing:
+                    continue
+                clone = copy.deepcopy(field)
+                clone["ord"] = len(fields)
+                fields.append(clone)
+                existing.add(lowered)
+                appended.append(clone["name"])
+
+            if not appended:
+                continue
+
+            target = copy.deepcopy(target)
+            target["flds"] = fields
+            collection.models.update_dict(target)
+            saved = collection.models.get(new_mid) or target
+            all_local_models[new_mid] = saved
+            uuid_value = saved.get(UUID_FIELD_NAME)
+            note_model = None
+            if self.metadata:
+                note_model = self.metadata.models.get(uuid_value)
+                if note_model is None:
+                    note_model = next(
+                        (
+                            model
+                            for model in self.metadata.models.values()
+                            if model.get_uuid() == uuid_value
+                            or model.anki_dict.get("id") == new_mid
+                        ),
+                        None,
+                    )
+            if note_model:
+                note_model.anki_dict["flds"] = saved.get("flds", fields)
+                for name in appended:
+                    if name not in note_model.local_only_field_names:
+                        note_model.local_only_field_names.append(name)
+            logger.info(
+                f"Preserving local-only fields {appended} on notetype "
+                f"'{saved.get('name', new_mid)}' for note migration"
+            )
 
     def _assess_change_risk(self, old_model: Dict, new_model: Dict) -> bool:
         """
@@ -1288,14 +1443,15 @@ class Deck(JsonSerializableAnkiDict):
             old_name = old_notetype.get("name", f"ID{old_mid}")
             new_name = new_notetype.get("name", f"ID{new_mid}")
 
-            # Field mapping is now captured during notetype save in _create_and_update_notetypes
-            # and stored in self._field_mappings[note_model_uuid]
-            note_model_uuid = new_notetype.get(UUID_FIELD_NAME)
-            if note_model_uuid and note_model_uuid in self._field_mappings:
-                field_map = self._field_mappings[note_model_uuid]
-            else:
-                # Fallback: create a simple 1:1 mapping if no mapping was captured
-                field_map = list(range(len(new_notetype.get("flds", []))))
+            # The mapping is relative to the note's *own* old notetype, so it is
+            # always derived from the two notetypes being connected. -1 is
+            # Anki's sentinel for "new field, no source value".
+            field_map = [
+                -1 if index is None else index
+                for index in NoteModel._build_intelligent_field_map(
+                    old_notetype, new_notetype
+                )[: len(new_notetype.get("flds", []))]
+            ]
 
             # Get current schema with error handling
             try:
@@ -1363,7 +1519,6 @@ class Deck(JsonSerializableAnkiDict):
                 if not actual_notetype:
                     missing_notetypes.append(f"{model_name} ({model_uuid})")
                 else:
-                    # Critical: Validate that UUID field is preserved
                     if UUID_FIELD_NAME not in actual_notetype:
                         uuid_validation_failures.append(f"{model_name} ({model_uuid})")
                     elif actual_notetype.get(UUID_FIELD_NAME) != model_uuid:
@@ -1418,7 +1573,21 @@ class Deck(JsonSerializableAnkiDict):
                 return self._check_fields_compatible(remote_notetype, local_notetype)
             else:
                 # For non-projektanki: we ensure full compatibility in both fields and templates
-                return not remote_model._detect_changes_needed(local_notetype, False)
+                local_for_comparison = local_notetype
+                if (
+                    local_notetype.get("name")
+                    and remote_notetype.get("name")
+                    and self._is_anki_duplicate_name(
+                        local_notetype["name"], remote_notetype["name"]
+                    )
+                ):
+                    local_for_comparison = {
+                        **local_notetype,
+                        "name": remote_notetype.get("name", ""),
+                    }
+                return not remote_model._detect_changes_needed(
+                    local_for_comparison, False
+                )
 
         except Exception:
             return False
@@ -1461,8 +1630,8 @@ class Deck(JsonSerializableAnkiDict):
 
         # Handle notetype changes first (create/update notetypes and change existing notes)
         if not self.handle_notetype_changes(collection):
-            logger.warning(
-                "Some notetype operations failed, but continuing with deck import"
+            raise NotetypeSaveError(
+                "Notetype changes could not be applied safely - aborting import"
             )
 
         # Save deck configurations
@@ -1599,7 +1768,7 @@ class Deck(JsonSerializableAnkiDict):
             check_collection_or_abort(current_phase)
             progress_tracker.set_phase_label("Organizing notes into decks...")
             logger.info("Organizing notes into decks based on collected mapping...")
-            Note._move_notes_to_decks(collection, note_to_deck_map, import_config)
+            Note._move_notes_to_decks(collection, note_to_deck_map, temp_deck_id)
             self.root_deck_id = collection.decks.id(root_deck_name)
 
             # Add Sentry breadcrumb for note organization
@@ -1613,7 +1782,6 @@ class Deck(JsonSerializableAnkiDict):
             except Exception as sentry_error:
                 logger.error(f"Failed to add Sentry breadcrumb: {sentry_error}")
 
-            # Critical: Clean up temp deck after successful note move
             current_phase = "temp_deck_cleanup"
             if temp_deck_id:
                 self._cleanup_temp_deck(
@@ -1691,6 +1859,10 @@ class Deck(JsonSerializableAnkiDict):
             # Re-raise as a specific abort error that won't be treated as a failure
             raise
 
+        except DeckImportCancelled:
+            logger.info("Deck import cancelled by user")
+            raise
+
         except Exception as e:
             error_context = {
                 "phase": current_phase,
@@ -1708,18 +1880,15 @@ class Deck(JsonSerializableAnkiDict):
                 extra=error_context,
             )
 
-            # Enhanced Sentry reporting
             try:
                 sentry_sdk.set_context("import_failure", error_context)
                 sentry_sdk.capture_exception(e)
             except Exception as sentry_error:
                 logger.error(f"Failed to report to Sentry: {sentry_error}")
 
-            # Guaranteed cleanup in finally block below
             raise ImportError(f"Bulk import failed at {current_phase}: {str(e)}") from e
 
         finally:
-            # GUARANTEED temp deck cleanup - runs on both success and failure
             if temp_deck_id:
                 try:
                     self._cleanup_temp_deck(
@@ -1750,12 +1919,16 @@ class Deck(JsonSerializableAnkiDict):
 
         # Add this deck's notes
         for note in self.notes:
-            all_notes.append(note)
-            if note.get_uuid() in note_to_deck_map:
+            note_uuid = note.get_uuid()
+            if note_uuid and note_uuid in note_to_deck_map:
                 logger.warning(
-                    f"Note {note.get_uuid()} already mapped to deck {note_to_deck_map[note.get_uuid()]}, overwriting with {full_name}"
+                    f"Duplicate note {note_uuid} in deck '{full_name}' ignored; "
+                    f"it is already assigned to "
+                    f"'{note_to_deck_map[note_uuid]}'"
                 )
-            note_to_deck_map[note.get_uuid()] = full_name
+                continue
+            all_notes.append(note)
+            note_to_deck_map[note_uuid] = full_name
 
         # Recursively process children, passing the server root name
         for child in self.children:
@@ -1872,7 +2045,12 @@ class Deck(JsonSerializableAnkiDict):
                     if (
                         has_separate_new_notes_deck
                         and home_deck_prefix
-                        and target_deck.startswith(home_deck_prefix)
+                        and (
+                            target_deck == home_deck_prefix
+                            or target_deck.startswith(
+                                f"{home_deck_prefix}{self.DECK_NAME_DELIMITER}"
+                            )
+                        )
                     ):
                         relative_path = target_deck[home_deck_prefix_len:].lstrip(
                             self.DECK_NAME_DELIMITER
@@ -1897,6 +2075,7 @@ class Deck(JsonSerializableAnkiDict):
         import uuid as uuid_module
 
         temp_deck_name = f"_ankicollab_import_{uuid_module.uuid4().hex[:8]}"
+        self._remove_stale_empty_temp_decks(collection)
         self.root_deck_id = collection.decks.id(temp_deck_name)
 
         logger.info(
@@ -1925,8 +2104,6 @@ class Deck(JsonSerializableAnkiDict):
                     )
                     continue
 
-                field_mapping = self._field_mappings.get(note_model_uuid)
-
                 model_new_notes = notes_by_model_new.get(note_model_uuid, [])
                 model_update_notes = notes_by_model_update.get(note_model_uuid, [])
 
@@ -1940,7 +2117,6 @@ class Deck(JsonSerializableAnkiDict):
                         model_new_notes,
                         collection,
                         note_model,
-                        field_mapping,
                         import_config,
                         int_time,
                     )
@@ -1951,7 +2127,6 @@ class Deck(JsonSerializableAnkiDict):
                         model_update_notes,
                         collection,
                         note_model,
-                        field_mapping,
                         import_config,
                         int_time,
                         existing_note_map,
@@ -1966,12 +2141,16 @@ class Deck(JsonSerializableAnkiDict):
                 ):
                     progress_tracker.update_notes_progress(processed_count)
                     if mw.progress.want_cancel():
-                        # Record partial note counts for the completion tooltip
-                        self._last_import_notes_new = len(all_new_notes)
-                        self._last_import_notes_updated = len(all_update_notes)
-                        # Return temp deck info for cleanup
-                        return processed_count, self.root_deck_id, temp_deck_name
+                        self._cleanup_temp_deck(
+                            collection,
+                            self.root_deck_id,
+                            temp_deck_name,
+                            "user_cancel",
+                        )
+                        raise DeckImportCancelled()
 
+            except DeckImportCancelled:
+                raise
             except Exception as e:
                 logger.warning(f"Error processing note model {note_model_uuid}: {e}")
                 continue
@@ -1991,6 +2170,9 @@ class Deck(JsonSerializableAnkiDict):
 
         except Exception as e:
             logger.error(f"Error in bulk note operations: {e}", exc_info=True)
+            self._cleanup_temp_deck(
+                collection, self.root_deck_id, temp_deck_name, "bulk_write_failure"
+            )
             try:
                 sentry_sdk.capture_exception(e)
             except Exception as sentry_error:
@@ -2003,6 +2185,31 @@ class Deck(JsonSerializableAnkiDict):
 
         # Return temp deck info along with count for cleanup
         return processed_count, self.root_deck_id, temp_deck_name
+
+    def _remove_stale_empty_temp_decks(self, collection):
+        """Remove empty temp decks left behind by an interrupted import.
+
+        A deck that still has cards is never touched: those notes are not lost
+        silently. Only this import's reserved prefix is considered.
+        """
+        try:
+            stale = []
+            for entry in collection.decks.all_names_and_ids():
+                if not entry.name.startswith("_ankicollab_import_"):
+                    continue
+                try:
+                    if (
+                        collection.decks.card_count(entry.id, include_subdecks=True)
+                        == 0
+                    ):
+                        stale.append(entry.id)
+                except Exception:
+                    continue
+            if stale:
+                collection.decks.remove(stale)
+                logger.info(f"Removed {len(stale)} stale empty temp deck(s)")
+        except Exception as e:
+            logger.warning(f"Could not clean stale temp decks: {e}")
 
     def _cleanup_temp_deck(self, collection, temp_deck_id, temp_deck_name, context):
         """
@@ -2096,7 +2303,6 @@ class Deck(JsonSerializableAnkiDict):
         notes_batch,
         collection,
         note_model,
-        field_mapping,
         import_config,
         int_time,
     ):
@@ -2105,7 +2311,6 @@ class Deck(JsonSerializableAnkiDict):
             notes_batch,
             collection,
             note_model,
-            field_mapping,
             import_config,
             int_time,
             is_new=True,
@@ -2117,7 +2322,6 @@ class Deck(JsonSerializableAnkiDict):
         notes_batch,
         collection,
         note_model,
-        field_mapping,
         import_config,
         int_time,
         existing_note_map,
@@ -2127,7 +2331,6 @@ class Deck(JsonSerializableAnkiDict):
             notes_batch,
             collection,
             note_model,
-            field_mapping,
             import_config,
             int_time,
             is_new=False,
@@ -2139,7 +2342,6 @@ class Deck(JsonSerializableAnkiDict):
         notes_batch,
         collection,
         note_model,
-        field_mapping,
         import_config,
         int_time,
         is_new,
@@ -2155,7 +2357,7 @@ class Deck(JsonSerializableAnkiDict):
                 note_uuid = note.get_uuid()
                 note.anki_object = AnkiNote(collection, id=existing_note_map[note_uuid])
 
-            note.handle_import_config_changes(import_config, note_model, field_mapping)
+            note.handle_import_config_changes(import_config, note_model, is_new=is_new)
 
             # Store original ID for new notes before removing it
             # For existing notes we must never overwrite the current Anki note ID
@@ -2166,7 +2368,6 @@ class Deck(JsonSerializableAnkiDict):
                 note.anki_object_dict.pop("id", None)
             note.anki_object.__dict__.update(note.anki_object_dict)
 
-            # Defensive check for model ID
             model_id = note_model.anki_dict.get("id")
             if model_id is None or model_id == 0:
                 # Try to fetch the model ID by UUID as last resort
@@ -2193,14 +2394,16 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             note_type = "new" if is_new else "update"
             logger.warning(f"Error in batch processing {note_type} notes: {e}")
-            # Fallback to individual processing with per-note error handling
+            processed = []
             for note in notes_batch:
                 try:
                     process_single_note(note)
+                    processed.append(note)
                 except Exception as note_error:
                     logger.warning(
                         f"Error processing individual {note_type} note {note.get_uuid()}: {note_error}"
                     )
+            notes_batch[:] = processed
 
     def _restore_original_note_ids(self, collection, notes):
         """
@@ -2359,14 +2562,10 @@ class Deck(JsonSerializableAnkiDict):
 
     def _show_media_completion(self, result):
         """Show media download completion notification - now handled by progress indicator"""
-        # The beautiful progress indicator now handles completion messages
-        # No need for additional tooltips that interrupt the user
         if result and not result.get("success"):
-            # Only show errors that weren't already shown by the progress indicator
             error_msg = result.get("message", "Unknown error")
             logger.error(f"Media download error: {error_msg}")
         else:
-            # Success cases are beautifully handled by the progress indicator
             logger.info("Media download completed successfully")
 
     def _save_deck(self, collection, parent_name, home_deck, server_root_name=None):
@@ -2403,7 +2602,10 @@ class Deck(JsonSerializableAnkiDict):
                     new_deck_id
                 )  # Create deck in collection
 
-        deck_dict.update(self.anki_dict)
+        payload_without_id = {
+            key: value for key, value in self.anki_dict.items() if key != "id"
+        }
+        deck_dict.update(payload_without_id)
 
         self.anki_dict = deck_dict
         self.anki_dict["name"] = full_name

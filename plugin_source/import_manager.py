@@ -33,6 +33,7 @@ from .dialogs import (
 )
 
 from .crowd_anki.representation import deck_initializer
+from .crowd_anki.representation.deck import DeckImportCancelled
 from .crowd_anki.importer.import_dialog import ImportConfig
 
 from .utils import (
@@ -779,7 +780,13 @@ def install_update(subscription, input_hash=None, update_timestamp_after=False):
 
     def _on_install_failure(e: Exception):
         """Handle installation failure, with special handling for graceful aborts."""
-        if isinstance(e, OperationAbortedError):
+        if isinstance(e, DeckImportCancelled):
+            logger.info("Import cancelled by user before importing notes")
+            try:
+                aqt.utils.tooltip("Import cancelled.", parent=mw, period=2500)
+            except Exception:
+                pass
+        elif isinstance(e, OperationAbortedError):
             logger.warning(f"Import aborted gracefully at phase '{e.phase}': {e}")
             # Safely get parent widget - mw might be None if profile was closed
             parent_widget = None

@@ -23,7 +23,7 @@ import pytest
 from tests.conftest import create_mock_collection
 
 from crowd_anki.representation import deck as deck_module
-from crowd_anki.representation.deck import Deck
+from crowd_anki.representation.deck import Deck, DeckImportCancelled
 from crowd_anki.representation.note import Note
 from utils import OperationAbortedError
 
@@ -205,7 +205,7 @@ class TestSaveBulkOrchestration:
 
         assert move.call_args.args[0] is col
         assert move.call_args.args[1] == {"n1": "Home"}
-        assert move.call_args.args[2] is cfg
+        assert move.call_args.args[2] == 99  # the temp deck created for this import
 
     def test_the_resulting_root_deck_is_recorded_on_the_deck(self):
         deck, col, cfg, progress = self._env()
@@ -332,6 +332,21 @@ class TestSaveBulkFailureHandling:
     def test_an_abort_is_propagated_unchanged(self, mw_mock):
         abort = OperationAbortedError("closed", phase="note_processing")
         assert self._abort_run(abort) is abort
+
+    def test_a_user_cancel_is_propagated_unchanged(self, mw_mock):
+        """A cancel is not an error; the caller must be able to tell it apart."""
+        deck, col, cfg, progress = self._env()
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    Deck,
+                    "_bulk_process_all_notes",
+                    side_effect=DeckImportCancelled(),
+                )
+            )
+            stack.enter_context(_collect_patcher())
+            with pytest.raises(DeckImportCancelled):
+                deck.save_decks_and_notes_bulk(col, progress, cfg)
 
     def test_a_failure_is_wrapped_as_an_import_error(self, mw_mock):
         """Callers distinguish an import failure from an abort by the type."""

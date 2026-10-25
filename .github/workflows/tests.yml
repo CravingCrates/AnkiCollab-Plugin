@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SKIP_INIT: "1"
+      ANKICOLLAB_REAL_ANKI: "0"
 
     steps:
       - name: Check out repository

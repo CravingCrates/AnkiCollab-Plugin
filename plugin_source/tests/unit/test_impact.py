@@ -493,3 +493,21 @@ class TestNumbersPresentation:
         assert impact.format_accepted_at(None) == ""
         assert impact.format_accepted_at("") == ""
         assert impact.format_accepted_at("not a date") == "not a date"
+
+
+class TestBackgroundNudgeFetch:
+    def test_a_failed_background_fetch_does_not_show_an_error_dialog(self):
+        with (
+            patch("aqt.operations.QueryOp") as query_op,
+            patch("anki.utils.point_version", return_value=250000),
+        ):
+            impact._fetch_in_background(lambda stats: None)
+
+            failure = query_op.return_value.failure.call_args.args[0]
+            # Must not raise (QueryOp would otherwise show the exception popup).
+            failure(RuntimeError("network down"))
+
+        started = (
+            query_op.return_value.failure.return_value.without_collection.return_value
+        )
+        started.run_in_background.assert_called_once()

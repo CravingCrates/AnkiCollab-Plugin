@@ -101,7 +101,8 @@ class JsonSerializableAnkiDict(JsonSerializable):
         )
 
     def _update_fields(self):
-        self.anki_dict.setdefault(UUID_FIELD_NAME, str(uuid1()))
+        if not self.anki_dict.get(UUID_FIELD_NAME):
+            self.anki_dict[UUID_FIELD_NAME] = str(uuid1())
 
     def get_uuid(self):
         super(JsonSerializableAnkiDict, self).get_uuid()

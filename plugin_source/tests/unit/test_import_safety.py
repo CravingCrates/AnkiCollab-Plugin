@@ -67,7 +67,6 @@ class TestSchedulingDataPreservation:
         col = create_mock_collection()
         nt = make_notetype(fields=["Front", "Back"])
         nm = NoteModel(nt)
-        field_mapping = [0, 1]
 
         note, config = self._make_note_with_scheduling(
             col,
@@ -76,7 +75,7 @@ class TestSchedulingDataPreservation:
             notetype=nt,
         )
 
-        note.handle_import_config_changes(config, nm, field_mapping)
+        note.handle_import_config_changes(config, nm)
 
         # Apply the dict to the anki_object (same as _batch_process_notes does)
         note.anki_object.__dict__.update(note.anki_object_dict)
@@ -132,7 +131,7 @@ class TestSchedulingDataPreservation:
         original_card_ids = list(note.anki_object._card_ids)
 
         # First update
-        note.handle_import_config_changes(config, nm, [0, 1])
+        note.handle_import_config_changes(config, nm)
         note.anki_object.__dict__.update(note.anki_object_dict)
 
         # Card IDs should still be accessible
@@ -149,7 +148,7 @@ class TestSchedulingDataPreservation:
         )
         original_note_mod = note.anki_object.mod
 
-        note.handle_import_config_changes(config, nm, [0, 1])
+        note.handle_import_config_changes(config, nm)
         note.anki_object.__dict__.update(note.anki_object_dict)
 
         # The note mod is set from the remote server's dict
@@ -180,7 +179,7 @@ class TestFieldUpdateBoundaries:
         config.is_personal_field = MagicMock(return_value=False)
         config.has_optional_tags = False
 
-        note.handle_import_config_changes(config, nm, [0, 1])
+        note.handle_import_config_changes(config, nm)
 
         # The "id" from remote should be removed (handled by _batch_process_notes)
         # but the existing note.anki_object.id should remain intact
@@ -427,7 +426,6 @@ class TestBulkUpdatePipeline:
                 [note],
                 col,
                 nm,
-                [0, 1],
                 config,
                 1700000001,
                 is_new=False,
@@ -466,7 +464,6 @@ class TestBulkUpdatePipeline:
                 [note],
                 col,
                 nm,
-                [0, 1],
                 config,
                 1700000001,
                 is_new=True,
@@ -579,8 +576,9 @@ class TestSuspensionPreservation:
 class TestDeckMovementPreservation:
     """Verify that cards in filtered decks are NOT moved during import."""
 
-    def test_new_cards_move_out_of_temp_deck_and_temp_deck_is_removed(self):
-        """New cards are moved to their mapped deck before the temp deck is removed."""
+    def test_new_cards_move_out_of_the_given_temp_deck(self):
+        """New cards are moved to their mapped deck; removing the temp deck is
+        left to ``Deck._cleanup_temp_deck`` (which refuses non-empty decks)."""
         col = create_mock_collection()
         col.decks._store[1] = {
             "id": 1,
@@ -597,11 +595,21 @@ class TestDeckMovementPreservation:
         Note._move_notes_to_decks(
             col,
             {"uuid1": "Target::Deck"},
-            MagicMock(),
+            1,
         )
 
         col.set_deck.assert_called_once_with([100], 2)
-        col.decks.remove.assert_called_once_with([1])
+        col.decks.remove.assert_not_called()
+        # Only the deck we created is considered, never stale temp decks.
+        assert col.db.all.call_args.args[-1] == 1
+
+    def test_without_a_temp_deck_nothing_is_moved(self):
+        col = create_mock_collection()
+
+        Note._move_notes_to_decks(col, {"uuid1": "Target::Deck"}, None)
+
+        col.db.all.assert_not_called()
+        col.set_deck.assert_not_called()
 
     def test_filtered_card_updates_original_deck_without_moving_card(self):
         """A filtered card keeps its current deck while its original deck is updated."""

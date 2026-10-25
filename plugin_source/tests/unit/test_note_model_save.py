@@ -13,9 +13,11 @@ from __future__ import annotations
 import copy
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tests.conftest import create_mock_collection, make_notetype
 
-from crowd_anki.representation.note_model import NoteModel
+from crowd_anki.representation.note_model import NoteModel, NotetypeSaveError
 from crowd_anki.utils.constants import UUID_FIELD_NAME
 
 
@@ -73,16 +75,17 @@ class TestSaveToCollectionDispatch:
         assert fetcher.return_value.get_model.call_args.args == ("existing-uuid",)
         assert update.call_args.args == (col, existing)
 
-    def test_a_lookup_failure_is_reported_as_no_change(self):
+    def test_a_lookup_failure_is_fatal(self):
         col = create_mock_collection()
         nm = _nm(model_uuid="boom-uuid")
         fetcher = MagicMock()
         fetcher.return_value.get_model.side_effect = RuntimeError("db gone")
 
         with patch("crowd_anki.representation.note_model.UuidFetcher", fetcher):
-            assert nm.save_to_collection(col) == (None, None)
+            with pytest.raises(NotetypeSaveError):
+                nm.save_to_collection(col)
 
-    def test_an_update_failure_is_reported_as_no_change(self):
+    def test_an_update_failure_is_fatal(self):
         col = create_mock_collection()
         nm = _nm(model_uuid="boom-uuid")
         fetcher_patch, _fetcher = _with_fetcher({"id": 1, "flds": []})
@@ -95,9 +98,10 @@ class TestSaveToCollectionDispatch:
                 side_effect=ValueError("nope"),
             ),
         ):
-            assert nm.save_to_collection(col) == (None, None)
+            with pytest.raises(NotetypeSaveError):
+                nm.save_to_collection(col)
 
-    def test_a_creation_failure_is_reported_as_no_change(self):
+    def test_a_creation_failure_is_fatal(self):
         col = create_mock_collection()
         nm = _nm(model_uuid="boom-uuid")
         fetcher_patch, _fetcher = _with_fetcher(None)
@@ -108,7 +112,20 @@ class TestSaveToCollectionDispatch:
                 NoteModel, "_create_new_notetype", side_effect=ValueError("nope")
             ),
         ):
-            assert nm.save_to_collection(col) == (None, None)
+            with pytest.raises(NotetypeSaveError):
+                nm.save_to_collection(col)
+
+    def test_a_creation_returning_none_is_fatal(self):
+        col = create_mock_collection()
+        nm = _nm(model_uuid="boom-uuid")
+        fetcher_patch, _fetcher = _with_fetcher(None)
+
+        with (
+            fetcher_patch,
+            patch.object(NoteModel, "_create_new_notetype", return_value=None),
+        ):
+            with pytest.raises(NotetypeSaveError):
+                nm.save_to_collection(col)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -310,6 +327,45 @@ class TestUpdateExistingNotetypeFields:
         assert updated["id"] == existing["id"]
         assert nm.anki_dict["id"] == existing["id"]
 
+    def test_unchanged_notetype_uses_the_local_id_not_the_payload_id(self):
+        """A no-op merge must still expose the *local* notetype id.
+
+        The payload's id is the sender's local id. If it survives into note
+        processing, notes are written with a mid that does not exist (or, worse,
+        belongs to a different notetype) in this collection.
+        """
+        col = create_mock_collection()
+        existing = make_notetype(fields=["Front", "Back"], model_id=7)
+        incoming = copy.deepcopy(existing)
+        incoming["id"] = 999_999
+        nm = NoteModel(incoming)
+
+        result = nm._update_existing_notetype(col, existing)
+
+        assert result == (None, [0, 1])
+        assert nm.anki_dict["id"] == 7
+        assert nm.anki_dict["flds"] == existing["flds"]
+        col.models.update_dict.assert_not_called()
+
+    def test_renamed_notetype_records_the_actual_local_name(self):
+        """Anki suffixes a name on collision; the next import must not rename again."""
+        col = create_mock_collection()
+        existing = make_notetype(fields=["Front", "Back"], model_id=1)
+        incoming = copy.deepcopy(existing)
+        incoming["name"] = "Renamed"
+
+        def collide(notetype):
+            notetype["name"] = "Renamed-abcde"
+
+        col.models.update_dict.side_effect = collide
+        nm = NoteModel(incoming)
+
+        nm._update_existing_notetype(col, existing)
+
+        assert nm.anki_dict["name"] == "Renamed-abcde"
+        # Config/protected-field lookups still use the server-side name.
+        assert nm.anki_dict["original_name"] == "Renamed"
+
     def test_extra_keys_are_copied_but_id_fields_templates_css_are_not(self):
         col = create_mock_collection()
         existing = make_notetype(fields=["Front", "Back"], model_id=1)
@@ -329,7 +385,7 @@ class TestUpdateExistingNotetypeFields:
         assert updated["type"] == 3
         assert updated["id"] == existing["id"]
 
-    def test_a_rejected_update_reports_no_change(self):
+    def test_a_rejected_update_is_fatal(self):
         col = create_mock_collection()
         existing = make_notetype(fields=["Front", "Back"], model_id=1)
         incoming = copy.deepcopy(existing)
@@ -337,7 +393,107 @@ class TestUpdateExistingNotetypeFields:
         nm = NoteModel(incoming)
         col.models.update_dict.side_effect = ValueError("locked")
 
-        assert nm._update_existing_notetype(col, existing) == (None, None)
+        with pytest.raises(NotetypeSaveError):
+            nm._update_existing_notetype(col, existing)
+
+
+class TestNoteValueRemap:
+    """Anki stores note values positionally; update_dict() does not move them.
+
+    Whenever the merged field order differs from the local order the existing
+    notes of that notetype must be remapped by name, or every note outside the
+    imported deck silently shows its content under the wrong field names.
+    """
+
+    def test_appended_field_does_not_remap(self):
+        col = create_mock_collection()
+        col.db.list.return_value = [10]
+        existing = make_notetype(fields=["A", "B"], model_id=1)
+        incoming = make_notetype(fields=["A", "B", "C"], model_id=1)
+
+        NoteModel(incoming)._update_existing_notetype(col, existing)
+
+        col.models.change_notetype_of_notes.assert_not_called()
+
+    def test_reordered_fields_remap_all_notes_by_name(self):
+        col = create_mock_collection()
+        col.db.list.return_value = [10, 11]
+        col.db.scalar.return_value = 987
+        existing = make_notetype(fields=["A", "B", "C"], model_id=1)
+        incoming = make_notetype(fields=["C", "A", "B"], model_id=1)
+
+        with patch(
+            "crowd_anki.representation.note_model.ChangeNotetypeRequest"
+        ) as request_type:
+            NoteModel(incoming)._update_existing_notetype(col, existing)
+
+        kwargs = request_type.call_args.kwargs
+        assert kwargs["note_ids"] == [10, 11]
+        assert kwargs["new_fields"] == [2, 0, 1]
+        assert kwargs["old_notetype_id"] == 1
+        assert kwargs["new_notetype_id"] == 1
+        assert kwargs["current_schema"] == 987
+        col.models.change_notetype_of_notes.assert_called_once_with(
+            request_type.return_value
+        )
+
+    def test_inserted_field_is_empty_and_values_shift_correctly(self):
+        col = create_mock_collection()
+        col.db.list.return_value = [10]
+        existing = make_notetype(fields=["A", "B", "Local"], model_id=1)
+        incoming = make_notetype(fields=["A", "New", "B"], model_id=1)
+
+        with patch(
+            "crowd_anki.representation.note_model.ChangeNotetypeRequest"
+        ) as request_type:
+            NoteModel(incoming)._update_existing_notetype(col, existing)
+
+        # A<-0, New<-none, B<-1, Local kept at the end
+        assert request_type.call_args.kwargs["new_fields"] == [0, -1, 1, 2]
+
+    def test_notes_are_remapped_in_chunks(self):
+        col = create_mock_collection()
+        col.db.list.return_value = list(range(2500))
+        existing = make_notetype(fields=["A", "B"], model_id=1)
+        incoming = make_notetype(fields=["B", "A"], model_id=1)
+
+        with patch(
+            "crowd_anki.representation.note_model.ChangeNotetypeRequest"
+        ) as request_type:
+            NoteModel(incoming)._update_existing_notetype(col, existing)
+
+        sizes = [len(call.kwargs["note_ids"]) for call in request_type.call_args_list]
+        assert sizes == [1000, 1000, 500]
+
+    def test_a_remap_failure_is_fatal(self):
+        col = create_mock_collection()
+        col.db.list.return_value = [10]
+        col.models.change_notetype_of_notes.side_effect = RuntimeError("locked")
+        existing = make_notetype(fields=["A", "B"], model_id=1)
+        incoming = make_notetype(fields=["B", "A"], model_id=1)
+
+        with pytest.raises(NotetypeSaveError):
+            NoteModel(incoming)._update_existing_notetype(col, existing)
+
+    def test_local_only_field_names_are_captured(self):
+        col = create_mock_collection()
+        existing = make_notetype(fields=["A", "B", "Mein Schatz"], model_id=1)
+        incoming = make_notetype(fields=["A", "B"], model_id=1)
+        nm = NoteModel(incoming)
+
+        nm._update_existing_notetype(col, existing)
+
+        assert nm.local_only_field_names == ["Mein Schatz"]
+
+    def test_local_only_field_names_respect_case_insensitive_names(self):
+        col = create_mock_collection()
+        existing = make_notetype(fields=["A", "b"], model_id=1)
+        incoming = make_notetype(fields=["a", "B"], model_id=1)
+        nm = NoteModel(incoming)
+
+        nm._update_existing_notetype(col, existing)
+
+        assert nm.local_only_field_names == []
 
 
 class TestCreateNewNotetype:
