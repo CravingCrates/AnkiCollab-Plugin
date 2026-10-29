@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+import sentry_sdk
 from datetime import datetime, timedelta, timezone
 
 import aqt
@@ -20,6 +21,7 @@ from aqt.qt import QDialog, QApplication, QMessageBox
 from aqt import mw
 
 from . import config_manager
+from . import consent
 from . import impact
 from .api_client import api_client
 from .auth_manager import auth_manager
@@ -28,8 +30,8 @@ from .dialogs import (
     ChangelogDialog,
     DeletedNotesDialog,
     OptionalTagsDialog,
-    AskShareStatsDialog,
     RateAddonDialog,
+    ReviewDataConsentDialog,
 )
 
 from .crowd_anki.representation import deck_initializer
@@ -48,7 +50,7 @@ from .utils import (
     get_noteids_from_uuids,
 )
 
-from .stats import ReviewHistory, on_stats_upload_done, update_stats_timestamp
+from .stats import ReviewHistory, on_stats_upload_done
 
 import base64
 import gzip
@@ -536,9 +538,8 @@ def update_deck_stats_enabled(given_deck_hash, stats_enabled):
         if details:
             details["stats_enabled"] = stats_enabled
             if not stats_enabled:
-                details["last_stats_timestamp"] = (
-                    0  # Reset last stats timestamp if stats are disabled
-                )
+                # Reset last stats timestamp if stats are disabled
+                consent.reset_stats_watermark(details)
 
 
 def delete_notes(nids):
@@ -569,19 +570,37 @@ def update_stats() -> None:
     decks = DeckManager()
 
     for deck_hash, details in decks:
-        if details.get("stats_enabled", False):
-            # Only upload stats if the user has already agreed to share them
-            share_stats = details.get("share_stats", False)
-            if share_stats:
-                last_stats_timestamp = details.get("last_stats_timestamp", 0)
-                rh = ReviewHistory(deck_hash)
-                op = QueryOp(
-                    parent=mw,
-                    op=lambda _: rh.upload_review_history(last_stats_timestamp),
-                    success=on_stats_upload_done,
-                )
-                op.with_progress("Uploading Review History...").run_in_background()
-                update_stats_timestamp(deck_hash)
+        if not details.get("stats_enabled", False):
+            continue
+        # Consent, not a preference flag, decides whether data leaves the device.
+        if not consent.has_granted_consent(deck_hash):
+            continue
+        last_stats_timestamp = details.get("last_stats_timestamp", 0)
+        rh = ReviewHistory(deck_hash)
+        op = QueryOp(
+            parent=mw,
+            op=lambda _, rh=rh: rh.upload_review_history(last_stats_timestamp),
+            success=lambda done, deck_hash=deck_hash: on_stats_upload_done(
+                done, deck_hash
+            ),
+        )
+        op.with_progress("Uploading Review History...").run_in_background()
+
+    _retry_pending_erasures()
+
+
+def _retry_pending_erasures() -> None:
+    """Retry withdrawals the server has not confirmed yet.
+
+    Imported lazily: hooks imports this module, so the dependency can only be
+    resolved at call time.
+    """
+    try:
+        from .hooks import retry_pending_erasures
+
+        retry_pending_erasures()
+    except Exception as exc:
+        logger.warning(f"AnkiCollab: could not retry pending erasures: {exc}")
 
 
 def wants_to_share_stats(deck_hash) -> tuple[bool, int]:
@@ -592,8 +611,7 @@ def wants_to_share_stats(deck_hash) -> tuple[bool, int]:
             return False, 0
 
         last_stats_timestamp = details.get("last_stats_timestamp", 0)
-        stats_enabled = details.get("share_stats", False)
-        return stats_enabled, last_stats_timestamp
+        return consent.has_granted_consent(deck_hash), last_stats_timestamp
 
 
 def _install_deck_op(deck, config, map_cache=None, note_type_data=None):
@@ -682,6 +700,7 @@ def _on_deck_installed(
                     datetime.now(timezone.utc) - timedelta(days=1)
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 details["stats_enabled"] = subscription["stats_enabled"]
+                details["last_stats_timestamp"] = 0
     else:
         # Only ask for a rating if they are updating a deck and not adding a new deck to avoid spam popups
         ask_for_rating()
@@ -704,12 +723,7 @@ def _on_deck_installed(
         except Exception as e:
             logger.error(f"Error parsing last modified time: {e}")
             # Don't let this error break the import process
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_exception(e)
-            except Exception:
-                pass
+            sentry_sdk.capture_exception(e)
 
     # Now handle stats sharing dialog AFTER import is complete
     deck_hash = subscription["deck_hash"]
@@ -724,30 +738,27 @@ def _on_deck_installed(
 def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
     """Handle stats sharing dialog after import is complete."""
     try:
+        # The manager writes its snapshot back on exit, so this block only
+        # reads: recording consent around it would be clobbered.
         with DeckManager() as decks:
             details = decks.get_by_hash(deck_hash)
-            if details is None:
+            if details is None or not details.get("stats_enabled", False):
                 return
 
-            stats_enabled = details.get("share_stats")
-            if stats_enabled is None:
-                # Only show dialog if not already decided
-                if deck_name:
-                    dialog = AskShareStatsDialog(deck_name, parent=mw)
-                    choice = dialog.exec()
-                    stats_enabled = choice == QDialog.DialogCode.Accepted
+        if not deck_name:
+            return
+        if not consent.can_record_consent():
+            # Fail closed: a prompt whose answer we cannot verify is worse
+            # than no prompt. The user will be asked again once logged in.
+            return
+        if not consent.needs_prompt(deck_hash):
+            return
 
-                    if dialog.isChecked():
-                        details["share_stats"] = stats_enabled
+        ReviewDataConsentDialog(deck_name, deck_hash, parent=mw).exec()
     except Exception as e:
         logger.error(f"Error handling stats sharing dialog: {e}")
         # Don't let this error break the import process
-        try:
-            import sentry_sdk
-
-            sentry_sdk.capture_exception(e)
-        except Exception:
-            pass
+        sentry_sdk.capture_exception(e)
 
 
 def install_update(subscription, input_hash=None, update_timestamp_after=False):
@@ -929,6 +940,7 @@ def import_webresult(data):
             aqt.utils.tooltip("Your deck is up to date.", parent=mw, period=2000)
 
         update_stats()
+        # At most one friendly line per day, and only for people who reached somebody.
         impact.maybe_show_nudge()
         return
 
@@ -1009,12 +1021,7 @@ def get_new_notes_home_deck(given_deck_hash):
     except Exception as e:
         logger.error(f"Error getting new notes home deck: {e}")
         # Fall back to regular home deck
-        try:
-            import sentry_sdk
-
-            sentry_sdk.capture_exception(e)
-        except Exception:
-            pass
+        sentry_sdk.capture_exception(e)
         return get_home_deck(given_deck_hash)
 
     return None
@@ -1065,20 +1072,10 @@ def remove_nonexistent_decks():
                         logger.debug("strings_data is None or empty")
         except requests.exceptions.RequestException as e:
             logger.error(f"Network error checking deck alive: {e}")
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_exception(e)
-            except Exception:
-                pass
+            sentry_sdk.capture_exception(e)
         except Exception as e:
             logger.exception(f"Unexpected error checking deck alive: {e}")
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_exception(e)
-            except Exception:
-                pass
+            sentry_sdk.capture_exception(e)
 
 
 def _remove_subscription_from_config(deck_hash: str) -> None:
@@ -1121,6 +1118,9 @@ def async_start_pull(input_hash, silent=False):
                 else {}
             )
 
+        # Pulling used to be anonymous, but the server now needs the token to record the subscriber
+        # as active and to restore a subscription row for a deck it deleted. Conditional because
+        # `auth=True` raises when no token is stored, and pulling must work while signed out.
         pull_auth = auth_manager.is_logged_in()
 
         try:
@@ -1191,12 +1191,7 @@ def async_start_pull(input_hash, silent=False):
             return (None, None, True)
         except (requests.exceptions.RequestException, OSError, ValueError, gzip.BadGzipFile, base64.binascii.Error) as e:  # type: ignore
             logger.error(f"Error pulling changes: {e}")
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_exception(e)
-            except Exception:
-                pass
+            sentry_sdk.capture_exception(e)
             infot = "A Network Error occurred while fetching changes."
             aqt.mw.taskman.run_on_main(
                 lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
@@ -1204,12 +1199,7 @@ def async_start_pull(input_hash, silent=False):
             return (None, None, silent)
         except Exception as e:
             logger.exception(f"Unexpected error pulling changes: {e}")
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_exception(e)
-            except Exception:
-                pass
+            sentry_sdk.capture_exception(e)
             infot = "An unexpected error occurred while fetching changes."
             aqt.mw.taskman.run_on_main(
                 lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())

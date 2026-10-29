@@ -100,21 +100,6 @@ def from_collection(
     return deck
 
 
-def remove_unchanged_notes(deck, timestamp, timestamp2) -> None:
-    """Remove notes that have not been changed since the last sync"""
-    if deck is None:
-        return
-
-    deck.notes = [
-        note
-        for note in deck.notes
-        if note.anki_object.mod > timestamp or note.anki_object.mod > timestamp2
-    ]
-
-    for child in deck.children:
-        remove_unchanged_notes(child, timestamp, timestamp2)
-
-
 def remove_tags_from_notes(deck, tags) -> None:
     """Remove tags from all notes in the deck and its children"""
     if deck is None:

@@ -1,6 +1,4 @@
 from __future__ import annotations
-import datetime
-from datetime import datetime
 import aqt
 import aqt.utils
 from anki.errors import NotFoundError
@@ -177,18 +175,6 @@ logger = logging.getLogger("ankicollab")
 
 
 from typing import Dict, Iterator, Optional, Tuple
-
-
-def get_timestamp(given_deck_hash):
-    decks = DeckManager()
-    details = decks.get_by_hash(given_deck_hash)
-
-    if details is not None:
-
-        date_string = details["timestamp"]
-        datetime_obj = datetime.strptime(date_string, "%Y-%m-%d %H:%M:%S")
-        unix_timestamp = datetime_obj.timestamp()
-        return unix_timestamp
 
 
 def get_hash_from_local_id(deck_id) -> Optional[str]:

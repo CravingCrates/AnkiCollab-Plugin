@@ -45,6 +45,14 @@ logger = get_logger("ankicollab.deck_import")
 DeckMetadata = namedtuple("DeckMetadata", ["deck_configs", "models"])
 
 
+def _report_exception(exc: Exception, **kwargs: Any) -> None:
+    """Hand an exception to Sentry; failing to report must not mask it."""
+    try:
+        sentry_sdk.capture_exception(exc, **kwargs)
+    except Exception as sentry_error:
+        logger.error(f"Failed to report to Sentry: {sentry_error}")
+
+
 class DeckImportCancelled(Exception):
     """The user cancelled the import before any note/card/media writes.
 
@@ -289,10 +297,7 @@ class Deck(JsonSerializableAnkiDict):
             return file_provider.get_files()
         except Exception as e:
             logger.error(f"Error getting media files from models: {e}", exc_info=True)
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             return set()
 
     # This is a little gadget i wrote, because in ankicollab the note_models are in the deck that use it, not in the topmost deck. So in the "OG" Deck we aggregate all notetypes
@@ -458,10 +463,7 @@ class Deck(JsonSerializableAnkiDict):
 
             except Exception as e:
                 logger.error(f"Media download error: {e}", exc_info=True)
-                try:
-                    sentry_sdk.capture_exception(e)
-                except Exception as sentry_error:
-                    logger.error(f"Failed to report to Sentry: {sentry_error}")
+                _report_exception(e)
                 media_result.update(
                     {"success": False, "message": f"Media download failed: {e}"}
                 )
@@ -546,10 +548,7 @@ class Deck(JsonSerializableAnkiDict):
                 continue
             except Exception as e:
                 logger.error(f"Error while processing deck {name}: {e}", exc_info=True)
-                try:
-                    sentry_sdk.capture_exception(e)
-                except Exception as sentry_error:
-                    logger.error(f"Failed to report to Sentry: {sentry_error}")
+                _report_exception(e)
                 continue
 
     def on_success(self, count: int, media_result) -> None:
@@ -585,10 +584,7 @@ class Deck(JsonSerializableAnkiDict):
                     self.delete_empty_subdecks()
             except Exception as e:
                 logger.error(f"Post-import cleanup failed: {e}", exc_info=True)
-                try:
-                    sentry_sdk.capture_exception(e)
-                except Exception:
-                    pass
+                _report_exception(e)
 
         def on_done(_) -> None:
             aqt.mw.reset()
@@ -789,10 +785,7 @@ class Deck(JsonSerializableAnkiDict):
             raise
         except Exception as e:
             logger.error(f"Critical error in notetype management: {e}", exc_info=True)
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             return False
 
     def _handle_notetype_duplicates(
@@ -895,10 +888,7 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             failed_operations.append(f"Duplicate handling: {e}")
             logger.error(f"Error handling notetype duplicates: {e}", exc_info=True)
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             return False
 
     @staticmethod
@@ -988,10 +978,7 @@ class Deck(JsonSerializableAnkiDict):
                         raise NotetypeSaveError(error)
 
             except NotetypeSaveError as e:
-                try:
-                    sentry_sdk.capture_exception(e)
-                except Exception as sentry_error:
-                    logger.error(f"Failed to report to Sentry: {sentry_error}")
+                _report_exception(e)
                 raise
             except Exception as e:
                 model_name = note_model.anki_dict.get("name", "unknown")
@@ -1000,10 +987,7 @@ class Deck(JsonSerializableAnkiDict):
                     f"Failed to process notetype '{model_name}': {e}", exc_info=True
                 )
                 success = False
-                try:
-                    sentry_sdk.capture_exception(e)
-                except Exception as sentry_error:
-                    logger.error(f"Failed to report to Sentry: {sentry_error}")
+                _report_exception(e)
 
         return success
 
@@ -1194,10 +1178,7 @@ class Deck(JsonSerializableAnkiDict):
                         f"Failed to change notetype for {len(note_ids)} notes: {e}",
                         exc_info=True,
                     )
-                    try:
-                        sentry_sdk.capture_exception(e)
-                    except Exception as sentry_error:
-                        logger.error(f"Failed to report to Sentry: {sentry_error}")
+                    _report_exception(e)
                     success = False
 
             # Report results and any required manual review
@@ -1221,10 +1202,7 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             failed_operations.append(f"Note type changes: {e}")
             logger.error(f"Error in notetype changes: {e}", exc_info=True)
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             return False
 
     def _migration_is_related(self, old_model: Dict, new_model: Dict) -> bool:
@@ -1399,12 +1377,7 @@ class Deck(JsonSerializableAnkiDict):
                                 total_success = False
                         except Exception as e:
                             logger.error(f"Mini-batch failed: {e}", exc_info=True)
-                            try:
-                                sentry_sdk.capture_exception(e)
-                            except Exception as sentry_error:
-                                logger.error(
-                                    f"Failed to report to Sentry: {sentry_error}"
-                                )
+                            _report_exception(e)
                             total_success = False
                 else:
                     # Large batch succeeded
@@ -1416,10 +1389,7 @@ class Deck(JsonSerializableAnkiDict):
                     f"Exception in optimized batch {i//OPTIMIZED_BATCH_SIZE + 1}: {e}",
                     exc_info=True,
                 )
-                try:
-                    sentry_sdk.capture_exception(e)
-                except Exception as sentry_error:
-                    logger.error(f"Failed to report to Sentry: {sentry_error}")
+                _report_exception(e)
                 total_success = False
 
         return total_success
@@ -1486,10 +1456,7 @@ class Deck(JsonSerializableAnkiDict):
                 exc_info=True,
             )
             # Log the error but don't lose notes - they keep their old notetype
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             return False
 
     def _validate_notetype_operations(
@@ -1550,10 +1517,7 @@ class Deck(JsonSerializableAnkiDict):
         except Exception as e:
             failed_operations.append(f"Validation: {e}")
             logger.error(f"Error in notetype validation: {e}", exc_info=True)
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             return False
 
     def _are_notetypes_compatible(
@@ -1882,9 +1846,9 @@ class Deck(JsonSerializableAnkiDict):
 
             try:
                 sentry_sdk.set_context("import_failure", error_context)
-                sentry_sdk.capture_exception(e)
             except Exception as sentry_error:
                 logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
 
             raise ImportError(f"Bulk import failed at {current_phase}: {str(e)}") from e
 
@@ -1902,10 +1866,7 @@ class Deck(JsonSerializableAnkiDict):
                         f"Failed to cleanup temp deck in finally block: {cleanup_error}",
                         exc_info=True,
                     )
-                    try:
-                        sentry_sdk.capture_exception(cleanup_error)
-                    except Exception as sentry_error:
-                        logger.error(f"Failed to report to Sentry: {sentry_error}")
+                    _report_exception(cleanup_error)
 
     def _collect_all_notes(
         self, all_notes, note_to_deck_map, parent_name, home_deck, server_root_name=None
@@ -2173,10 +2134,7 @@ class Deck(JsonSerializableAnkiDict):
             self._cleanup_temp_deck(
                 collection, self.root_deck_id, temp_deck_name, "bulk_write_failure"
             )
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             raise
 
         # Record note counts for the completion tooltip
@@ -2283,20 +2241,17 @@ class Deck(JsonSerializableAnkiDict):
                 f"Error cleaning up temp deck {temp_deck_name} (context: {context}): {e}",
                 exc_info=True,
             )
-            try:
-                sentry_sdk.capture_exception(
-                    e,
-                    contexts={
-                        "temp_deck_cleanup": {
-                            "temp_deck_name": temp_deck_name,
-                            "temp_deck_id": temp_deck_id,
-                            "cleanup_context": context,
-                            "error_type": type(e).__name__,
-                        }
-                    },
-                )
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(
+                e,
+                contexts={
+                    "temp_deck_cleanup": {
+                        "temp_deck_name": temp_deck_name,
+                        "temp_deck_id": temp_deck_id,
+                        "cleanup_context": context,
+                        "error_type": type(e).__name__,
+                    }
+                },
+            )
 
     def _batch_process_new_notes(
         self,
@@ -2524,10 +2479,7 @@ class Deck(JsonSerializableAnkiDict):
 
         except Exception as e:
             logger.error(f"Error restoring original note IDs: {e}", exc_info=True)
-            try:
-                sentry_sdk.capture_exception(e)
-            except Exception as sentry_error:
-                logger.error(f"Failed to report to Sentry: {sentry_error}")
+            _report_exception(e)
             for note in notes_with_original_ids:
                 if hasattr(note, "_original_id"):
                     delattr(note, "_original_id")
@@ -2559,14 +2511,6 @@ class Deck(JsonSerializableAnkiDict):
                 f"Error creating deck structure for {self.anki_dict.get('name', 'unknown')}: {e}"
             )
             return parent_name
-
-    def _show_media_completion(self, result):
-        """Show media download completion notification - now handled by progress indicator"""
-        if result and not result.get("success"):
-            error_msg = result.get("message", "Unknown error")
-            logger.error(f"Media download error: {error_msg}")
-        else:
-            logger.info("Media download completed successfully")
 
     def _save_deck(self, collection, parent_name, home_deck, server_root_name=None):
         # Use the smart mapping logic for deck names

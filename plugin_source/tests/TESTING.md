@@ -19,7 +19,7 @@ $env:SKIP_INIT="1"; python -m pytest tests/
 python -m pytest tests/real_anki -c tests/real_anki/pytest.ini
 ```
 
-**Current test count: 1443.** This includes `tests/test_real_anki.py` (6
+**Current test count: 1511.** This includes `tests/test_real_anki.py` (6
 per-file subprocess runners plus a discovery guard). The 44 real-Anki scenarios
 run inside those runners when a real Anki installation is importable; otherwise
 the runners skip with a clear reason. CI verifies the collected count against
@@ -182,15 +182,15 @@ Constants and configuration: `API_BASE_URL`, `VERSION`, `DEFAULT_PROTECTED_TAGS`
 tag/field prefixes, Sentry config. These break immediately if you rename or
 remove a constant.
 
-### `test_utils.py` (~35 tests)
+### `test_utils.py` (~41 tests)
 Core utility layer — the most critical file:
 - **Collection guards**: `ensure_collection()`, `is_collection_available()`,
   `check_collection_or_abort()` — tests both success and `mw.col=None` paths.
 - **DeckManager**: Filtering reserved keys (`settings`, `auth`), hash lookup,
   iteration, context-manager save, None config resilience.
-- **Lookup chain**: `get_timestamp()` → `get_hash_from_local_id()` →
-  `get_did_from_hash()` → `get_local_deck_from_hash()` → `get_deck_hash_from_did()`
-  with parent fallback → `get_deck_hash_from_card()` with odid + dynamic deck.
+- **Lookup chain**: `get_hash_from_local_id()` → `get_did_from_hash()` →
+  `get_local_deck_from_hash()` → `get_deck_hash_from_did()` with parent fallback
+  → `get_deck_hash_from_card()` with odid + dynamic deck.
 - **`get_deck_and_subdecks()`**: Recursive child traversal, invalid ID guards.
 - **Backup**: Input validation (`bg+critical`), no-collection paths.
 
@@ -274,7 +274,6 @@ checks output/behavior. The mock layer only replaces Anki's runtime
 (`aqt.mw`, `mw.col.db`, network calls). If you change any of these:
 
 - **DeckManager iteration logic** → `test_filters_settings_and_auth` fails
-- **Timestamp parsing format** → `test_get_timestamp_returns_float` fails
 - **Deck hash lookup chain** → `test_direct_match`, `test_falls_back_to_parent` fail
 - **Filtered deck detection** → `test_dynamic_deck_returns_filtered_error` fails
 - **Token refresh threshold** → `test_near_expiry_returns_true` fails

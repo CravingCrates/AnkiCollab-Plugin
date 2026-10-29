@@ -22,6 +22,7 @@ ADDON_ROOT = TESTS_DIR.parent
 CORE_MODULES = [
     "api_client",
     "auth_manager",
+    "consent",
     "identifier",
     "export_manager",
     "import_manager",

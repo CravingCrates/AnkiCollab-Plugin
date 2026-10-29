@@ -751,57 +751,178 @@ class DeletedNotesDialog(QDialog):
         self.adjustSize()
 
 
-class AskShareStatsDialog(QDialog):
-    def __init__(self, deck_name, parent=None):
+class ReviewDataConsentDialog(QDialog):
+    """Ask once whether review data may be shared with a deck's maintainers."""
+
+    def __init__(self, deck_name, deck_hash, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Help Improve the Deck")
+        self.setWindowTitle("Share your review data?")
+        self.setModal(True)
 
         colors = get_colors()
         self.setStyleSheet(get_dialog_style())
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(12)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-
         self.deck_name = deck_name
+        self.deck_hash = deck_hash
+        self._recorded = False
 
-        header = QLabel("Share Review Data")
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(18, 18, 18, 18)
+
+        header = QLabel("Share your review data?")
         header.setStyleSheet(
             f"font-size: 15px; font-weight: 500; color: {colors['text_primary']};"
         )
+        header.ensurePolished()
         main_layout.addWidget(header)
 
-        self.message = QLabel(
-            f"The maintainers of '{self.deck_name}' would like to use anonymized review data to improve the deck. Would you like to share your stats?"
-        )
-        self.message.setWordWrap(True)
-        self.message.setStyleSheet(
-            f"color: {colors['text_primary']}; margin-bottom: 8px;"
-        )
-        main_layout.addWidget(self.message)
+        # The body scrolls so the buttons stay on screen on short displays.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._scroll = scroll
 
-        self.checkbox = QCheckBox("Remember my decision")
-        self.checkbox.setStyleSheet(f"color: {colors['text_secondary']};")
-        main_layout.addWidget(self.checkbox)
+        body = QWidget()
+        body.setObjectName("reviewConsentBody")
+        body.setAutoFillBackground(False)
+        body.setStyleSheet("#reviewConsentBody { background: transparent; }")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(10)
+        self._body = body
 
-        # Buttons
+        message = QLabel(
+            f"AnkiCollab can send the people who maintain <b>{self.deck_name}</b> "
+            "statistics from your reviews, so they can see which notes are "
+            "working and which aren't."
+        )
+        message.setWordWrap(True)
+        message.setStyleSheet(f"color: {colors['text_primary']};")
+        body_layout.addWidget(message)
+
+        details = QLabel(
+            "<b>What's sent:</b> per-note retention, lapse and repetition counts "
+            "(averaged per deck), the deck names, and a "
+            "note identifier for each note.<br><br>"
+            "<b>Who sees it:</b> the maintainers of this deck, and the "
+            "AnkiCollab team."
+        )
+        details.setWordWrap(True)
+        details.setStyleSheet(f"color: {colors['text_secondary']};")
+        body_layout.addWidget(details)
+
+        linkage = QLabel(
+            "This data is tied to your AnkiCollab account. The maintainers see "
+            "the statistics, not your username.<br><br>"
+            "We may also use it for deck statistics and academic research, as "
+            "described in the Privacy Policy."
+        )
+        linkage.setWordWrap(True)
+        linkage.setStyleSheet(f"color: {colors['text_secondary']};")
+        body_layout.addWidget(linkage)
+
+        withdrawal = QLabel(
+            "You can change your mind at any time in <b>Manage Subscriptions "
+            "&rarr; Configure &rarr; Review data</b>. Turning it off stops "
+            "future uploads and schedules the statistics you've already "
+            "shared for deletion."
+        )
+        withdrawal.setWordWrap(True)
+        withdrawal.setStyleSheet(f"color: {colors['text_secondary']};")
+        body_layout.addWidget(withdrawal)
+
+        link_color = colors["primary"]
+        policy_link = QLabel(
+            f'<a href="{WEBSITE_BASE_URL}/privacy" style="color: {link_color}; '
+            f'text-decoration: none;">Read our Privacy Policy</a>'
+        )
+        policy_link.setOpenExternalLinks(True)
+        body_layout.addWidget(policy_link)
+
+        body_layout.addStretch()
+        scroll.setWidget(body)
+        main_layout.addWidget(scroll, 1)
+
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
-        no_button = QPushButton("No Thanks")
+        no_button = QPushButton("Don't share")
         no_button.setStyleSheet(get_button_style("neutral"))
+        no_button.setAutoDefault(False)
         no_button.clicked.connect(self.reject)
 
-        yes_button = QPushButton("Yes, Share")
-        yes_button.setStyleSheet(get_button_style("success"))
+        yes_button = QPushButton("Share review data")
+        yes_button.setStyleSheet(get_button_style("neutral"))
+        yes_button.setAutoDefault(False)
         yes_button.clicked.connect(self.accept)
 
         button_layout.addWidget(no_button)
         button_layout.addWidget(yes_button)
         main_layout.addLayout(button_layout)
 
-    def isChecked(self):
-        return self.checkbox.isChecked()
+        self._header = header
+        self._button_layout = button_layout
+        self._fit_to_screen()
+
+    def _fit_to_screen(self):
+        """Size the dialog to its content: wide enough to stay short, and never
+        taller than the display, in which case the body scrolls instead."""
+        screen = None
+        get_screen = getattr(self, "screen", None)
+        if get_screen is not None:
+            screen = get_screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+
+        available = screen.availableGeometry()
+        width = min(660, int(available.width() * 0.9))
+        self.setMinimumWidth(width)
+        self.setMaximumWidth(width)
+
+        layout = self.layout()
+        margins = layout.contentsMargins()
+        chrome = (
+            margins.top()
+            + margins.bottom()
+            + self._header.sizeHint().height()
+            + self._button_layout.sizeHint().height()
+            + 2 * layout.spacing()
+        )
+
+        self.layout().activate()
+        content_width = (
+            self._scroll.viewport().width() or width - margins.left() - margins.right()
+        )
+        content_height = self._body.heightForWidth(content_width)
+        if content_height < 0:
+            content_height = self._body.sizeHint().height()
+
+        max_height = int(available.height() * 0.85)
+        body_height = min(content_height, max(0, max_height - chrome))
+        self._scroll.setFixedHeight(body_height)
+        self.setFixedHeight(chrome + body_height)
+
+    def _record(self, granted):
+        if self._recorded:
+            return
+        self._recorded = True
+        from .consent import record_consent
+
+        record_consent(self.deck_hash, granted)
+
+    def accept(self):
+        self._record(True)
+        super().accept()
+
+    def reject(self):
+        self._record(False)
+        super().reject()
 
 
 class RateAddonDialog(QDialog):
@@ -849,16 +970,13 @@ class RateAddonDialog(QDialog):
         message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(message)
 
-        # Add some breathing room
         layout.addSpacing(8)
 
-        # Primary action - the one thing we're asking for
         love_button = QPushButton("Leave a Rating")
         love_button.setFixedHeight(36)
         love_button.setStyleSheet(get_button_style("success"))
         layout.addWidget(love_button)
 
-        # Secondary options, less prominent
         secondary_layout = QHBoxLayout()
 
         help_button = QPushButton("Join Discord")

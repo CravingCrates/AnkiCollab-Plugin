@@ -22,6 +22,7 @@ import json
 from typing import Sequence, List, Tuple, Optional
 
 from . import config_manager
+from . import consent
 from .media_manager import MediaManager  # Import List
 
 from .export_manager import *
@@ -50,20 +51,7 @@ def add_sidebar_context_menu(
 ) -> None:
     if auth_manager.is_logged_in():
         menu.addSeparator()
-        menu.addAction("Suggest on AnkiCollab", lambda: suggest_context_handler(item))
         menu.addAction("Add new Changelog", lambda: changelog_context_handler(item))
-
-
-def suggest_context_handler(item: SidebarItem):
-    # Decide if this needs login. If so, add guard:
-    if not auth_manager.is_logged_in():
-        showInfo("Please log in to suggest changes.")
-        return
-    if item.item_type == SidebarItemType.DECK:
-        selected_deck = DeckId(item.id)
-        suggest_subdeck(selected_deck)
-    else:
-        aqt.utils.tooltip("Please select a deck")
 
 
 def changelog_context_handler(item: SidebarItem):
@@ -843,6 +831,21 @@ def patch_image_occlusion_enhanced():
     return True
 
 
+def retry_pending_erasures():
+    """Retry review-data deletions the server has not confirmed yet."""
+    try:
+        if not consent.pending_erasures():
+            return
+    except Exception as exc:
+        logger.warning(f"AnkiCollab: could not read the erasure queue: {exc}")
+        return
+
+    try:
+        mw.taskman.run_in_background(consent.flush_pending_erasures)
+    except Exception as exc:
+        logger.warning(f"AnkiCollab: could not schedule erasure retry: {exc}")
+
+
 def onProfileLoaded():
     """Called when the Anki profile finishes loading."""
     from . import main
@@ -854,6 +857,7 @@ def onProfileLoaded():
 
     autoUpdate()
     refresh_notifications()
+    retry_pending_erasures()
     patch_successful = patch_image_occlusion_enhanced()
     logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
 

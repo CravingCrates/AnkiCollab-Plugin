@@ -33,6 +33,7 @@ source_paths = [
     "media_progress_indicator.py",
     "media_optimizer.py",
     "stats.py",
+    "consent.py",
     "dialogs.py",
     "export_manager.py",
     "import_manager.py",

@@ -57,4 +57,4 @@ def disambiguate_note_model_uuids(collection, notifier=None) -> None:
             "The replacement should be a one-off occurrence.  "
             "If this message appears frequently, please open an issue!"
         )
-        notifier.info("UUIDs disambiguated", full_message)
+        # notifier.info("UUIDs disambiguated", full_message)
