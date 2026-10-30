@@ -19,8 +19,8 @@ $env:SKIP_INIT="1"; python -m pytest tests/
 python -m pytest tests/real_anki -c tests/real_anki/pytest.ini
 ```
 
-**Current test count: 1443.** This includes `tests/test_real_anki.py` (6
-per-file subprocess runners plus a discovery guard). The 44 real-Anki scenarios
+**Current test count: 1458.** This includes `tests/test_real_anki.py` (6
+per-file subprocess runners plus a discovery guard). The 45 real-Anki scenarios
 run inside those runners when a real Anki installation is importable; otherwise
 the runners skip with a clear reason. CI verifies the collected count against
 this number; if you add or remove tests, update it in the same change.
@@ -161,6 +161,7 @@ Provides the autouse `mw_mock` fixture that runs before every test:
 │       ├── test_note_import_config.py    # Note.handle_import_config_changes
 │       ├── test_note_model.py
 │       ├── test_note_model_save.py       # NoteModel -> collection persistence
+│       ├── test_note_model_protected_content.py  # ANKICOLLAB_END user content
 │       ├── test_notifications_center.py
 │       ├── test_sentry_integration.py
 │       ├── test_stats.py

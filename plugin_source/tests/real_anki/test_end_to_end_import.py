@@ -527,3 +527,73 @@ def test_multi_deck_cards_export_and_import_at_scale(col, target_col, monkeypatc
         "A": "a57",
         "B": "b57",
     }
+
+
+def _set_styling(collection, notetype_id, css=None, qfmt=None):
+    notetype = collection.models.get(notetype_id)
+    if css is not None:
+        notetype["css"] = css
+    if qfmt is not None:
+        notetype["tmpls"][0]["qfmt"] = qfmt
+    collection.models.update_dict(notetype)
+
+
+def test_user_content_below_the_marker_survives_and_is_never_uploaded(
+    col, target_col, monkeypatch
+):
+    css_marker = "/*\nANKICOLLAB_END\n*/"
+    html_marker = "<!--\nANKICOLLAB_END\n-->"
+    notetype = make_notetype(col, "Styled", ["Front", "Back"], uuid="styled-e2e")
+    add_note(col, notetype, col.decks.id("Source"), ["front", "back"])
+    _set_styling(
+        col,
+        notetype["id"],
+        css=".card { color: black; }\n" + css_marker + "\n.maintainer { }",
+        qfmt="{{Front}}\n" + html_marker + "\nmaintainer config",
+    )
+
+    _deck, payload = export_deck(col, "Source", monkeypatch)
+    [exported] = payload["note_models"]
+    assert exported["css"] == ".card { color: black; }\n" + css_marker
+    assert exported["tmpls"][0]["qfmt"] == "{{Front}}\n" + html_marker
+    import_deck(target_col, payload, monkeypatch)
+
+    [target_notetype] = [
+        model
+        for model in target_col.models.all()
+        if model.get("crowdanki_uuid") == "styled-e2e"
+    ]
+    _set_styling(
+        target_col,
+        target_notetype["id"],
+        css=target_notetype["css"] + "\n.user { }",
+        qfmt=target_notetype["tmpls"][0]["qfmt"] + "\nuser config",
+    )
+
+    # An unchanged deck must leave the subscriber's notetype alone
+    real_update_dict = target_col.models.update_dict
+    updated_ids = []
+
+    def spy_update_dict(notetype, *args, **kwargs):
+        updated_ids.append(notetype["id"])
+        return real_update_dict(notetype, *args, **kwargs)
+
+    monkeypatch.setattr(target_col.models, "update_dict", spy_update_dict)
+    import_deck(target_col, payload, monkeypatch)
+    assert target_notetype["id"] not in updated_ids
+    monkeypatch.setattr(target_col.models, "update_dict", real_update_dict)
+
+    _set_styling(
+        col,
+        notetype["id"],
+        css=".card { color: navy; }\n" + css_marker + "\n.maintainer { }",
+        qfmt="<b>{{Front}}</b>\n" + html_marker + "\nmaintainer config",
+    )
+    _deck, payload2 = export_deck(col, "Source", monkeypatch)
+    import_deck(target_col, payload2, monkeypatch)
+
+    updated = target_col.models.get(target_notetype["id"])
+    assert updated["css"] == ".card { color: navy; }\n" + css_marker + "\n.user { }"
+    assert updated["tmpls"][0]["qfmt"] == (
+        "<b>{{Front}}</b>\n" + html_marker + "\nuser config"
+    )

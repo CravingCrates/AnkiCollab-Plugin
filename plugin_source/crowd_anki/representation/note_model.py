@@ -1,6 +1,7 @@
 from collections import namedtuple
 import copy
 import logging
+import re
 from typing import Optional, List, Dict, Any, Set, Tuple
 
 from anki.collection import Collection
@@ -13,6 +14,67 @@ from ...utils import get_logger
 logger = get_logger("ankicollab.note_model")
 
 NOTE_REMAP_CHUNK_SIZE = 1000
+
+# Everything after a comment containing this marker belongs to the user: it
+# survives deck updates and is never uploaded with the deck.
+PROTECTED_CONTENT_MARKER = "ANKICOLLAB_END"
+_HTML_MARKER_RE = re.compile(
+    rf"<!--(?:(?!-->).)*?{PROTECTED_CONTENT_MARKER}.*?-->", re.DOTALL
+)
+_CSS_MARKER_RE = re.compile(
+    rf"/\*(?:(?!\*/).)*?{PROTECTED_CONTENT_MARKER}.*?\*/", re.DOTALL
+)
+
+
+def _strip_protected_content(content: str, marker_re: re.Pattern) -> str:
+    """Drops everything after the marker comment, keeping the marker itself."""
+    match = marker_re.search(content)
+    return content[: match.end()] if match else content
+
+
+def _carry_over_protected_content(
+    local: str, incoming: str, marker_re: re.Pattern
+) -> str:
+    """Returns ``incoming`` with the user's content below the local marker kept."""
+    local_match = marker_re.search(local)
+    if not local_match:
+        return incoming
+
+    incoming_match = marker_re.search(incoming)
+    if incoming_match:
+        return incoming[: incoming_match.end()] + local[local_match.end() :]
+
+    # The deck dropped its marker; keep the user's marker and content at the end
+    if not local[local_match.end() :].strip():
+        return incoming
+    return incoming.rstrip() + "\n\n" + local[local_match.start() :]
+
+
+def _carry_over_protected_templates(
+    local_templates: List[Dict], incoming_templates: List[Dict]
+) -> List[Dict]:
+    """Pairs templates by name, falling back to position for renamed ones."""
+    local_by_name = {tmpl.get("name"): tmpl for tmpl in local_templates}
+    incoming_names = {tmpl.get("name") for tmpl in incoming_templates}
+
+    merged_templates = copy.deepcopy(incoming_templates)
+    for i, tmpl in enumerate(merged_templates):
+        local_tmpl = local_by_name.get(tmpl.get("name"))
+        if (
+            local_tmpl is None
+            and i < len(local_templates)
+            and local_templates[i].get("name") not in incoming_names
+        ):
+            local_tmpl = local_templates[i]
+        if local_tmpl is None:
+            continue
+
+        for key in ["qfmt", "afmt"]:
+            if isinstance(tmpl.get(key), str) and isinstance(local_tmpl.get(key), str):
+                tmpl[key] = _carry_over_protected_content(
+                    local_tmpl[key], tmpl[key], _HTML_MARKER_RE
+                )
+    return merged_templates
 
 
 class NotetypeSaveError(RuntimeError):
@@ -123,6 +185,11 @@ class NoteModel(JsonSerializableAnkiDict):
             self.local_field_names_before_merge = {
                 field["name"].lower() for field in existing_model_dict.get("flds", [])
             }
+
+            if not should_preserve_templates:
+                # Done before change detection so the user's section is not
+                # mistaken for a deck change on every sync
+                self._keep_protected_user_content(existing_model_dict)
 
             # Check if any changes are actually needed
             changes_needed = self._detect_changes_needed(
@@ -235,6 +302,35 @@ class NoteModel(JsonSerializableAnkiDict):
             raise NotetypeSaveError(
                 f"Failed to update notetype '{existing_model_dict.get('name', 'unknown')}': {e}"
             ) from e
+
+    def _keep_protected_user_content(self, existing_model: NotetypeDict) -> None:
+        """
+        Copies the user's content below the ANKICOLLAB_END markers of the local
+        notetype into the incoming CSS and templates.
+        """
+        if isinstance(self.anki_dict.get("css"), str) and isinstance(
+            existing_model.get("css"), str
+        ):
+            self.anki_dict["css"] = _carry_over_protected_content(
+                existing_model["css"], self.anki_dict["css"], _CSS_MARKER_RE
+            )
+        if "tmpls" in self.anki_dict:
+            self.anki_dict["tmpls"] = _carry_over_protected_templates(
+                existing_model.get("tmpls", []), self.anki_dict["tmpls"]
+            )
+
+    def serialization_dict(self):
+        # Never upload the maintainer's own content below the markers
+        result = super(NoteModel, self).serialization_dict()
+        if isinstance(result.get("css"), str):
+            result["css"] = _strip_protected_content(result["css"], _CSS_MARKER_RE)
+        if "tmpls" in result:
+            result["tmpls"] = copy.deepcopy(result["tmpls"])
+            for tmpl in result["tmpls"]:
+                for key in ["qfmt", "afmt"]:
+                    if isinstance(tmpl.get(key), str):
+                        tmpl[key] = _strip_protected_content(tmpl[key], _HTML_MARKER_RE)
+        return result
 
     @staticmethod
     def _remap_notes_after_field_change(
