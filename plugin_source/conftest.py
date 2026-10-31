@@ -539,6 +539,7 @@ _ADDON_MODULES_ORDERED = [
     "auth_manager",
     "api_client",
     "identifier",
+    "consent",
     "thread",
     "media_exporter",
     "media_export",

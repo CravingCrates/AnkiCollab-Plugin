@@ -1,5 +1,5 @@
 from aqt import mw
-from aqt.utils import askUser, showInfo
+from aqt.utils import askUser, showInfo, tooltip
 from aqt.qt import *
 
 # Explicit imports to satisfy static analyzers (aqt.qt re-exports Qt classes)
@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 import webbrowser
 
 from . import config_manager
+from . import consent
 from .identifier import subscribe_to_deck, unsubscribe_from_deck
 from .var_defs import DEFAULT_PROTECTED_TAGS
 from .utils import get_local_deck_from_hash, DeckManager
@@ -89,36 +90,76 @@ def force_logout(with_dialog=True):
     mw.reset()
 
 
-def delete_selected_rows(table, dialog):
-    if table.selectedIndexes() == []:
-        showInfo(
-            "No subscription selected.\n\nClick on a row in the table to select it first."
-        )
-        return
-    dialog.accept()
-    strings_data = config_manager.get_stored_config()
-    selected_rows = sorted(
-        set(index.row() for index in table.selectedIndexes()), reverse=True
+def _erase_review_data(deck_hash):
+    """Ask the server to schedule deletion of this account's review data."""
+    consent.enqueue_erasure(deck_hash)
+    op = QueryOp(
+        parent=mw,
+        op=lambda col: consent.request_erasure(deck_hash),
+        success=lambda accepted: _on_erase_finished(deck_hash, accepted),
     )
-    for row in selected_rows:
-        if table.item(row, 0) is not None:
-            deck_hash = table.item(row, 0).text()
-            logger.debug(f"found: {deck_hash}")
-            op = QueryOp(
-                parent=mw,
-                op=lambda col: unsubscribe_from_deck(deck_hash),
-                success=lambda result: None,
-            )
-            if point_version() >= 231000:
-                op = op.without_collection()
-            op.run_in_background()
+    if point_version() >= 231000:
+        op = op.without_collection()
+    op.run_in_background()
 
-            if deck_hash in strings_data:
-                logger.debug(f"Unsubscribing from deck: {deck_hash}")
-                strings_data.pop(deck_hash)
-        table.removeRow(row)
+
+def _on_erase_finished(deck_hash, accepted):
+    if not accepted:
+        return
+    consent.clear_erasure(deck_hash)
+    tooltip(
+        "Review data scheduled for deletion.",
+        parent=mw,
+        period=5000,
+    )
+
+
+def delete_subscription(deck_hash, parent_dialog=None):
+    if not askUser(
+        f"Are you sure you want to delete the subscription for '{deck_hash}'?",
+        title="Delete Subscription",
+    ):
+        return False
+
+    strings_data = config_manager.get_stored_config()
+    if deck_hash not in strings_data:
+        showInfo("Subscription not found!")
+        return False
+
+    # Uploaded review data outlives the subscription unless we ask for it to be
+    # deleted, so give the user the choice while the record still exists.
+    also_erase = False
+    if consent.has_granted_consent(deck_hash):
+        also_erase = askUser(
+            "Also schedule the review statistics you've shared with this "
+            "deck's maintainers for deletion?",
+            title="Delete Review Data",
+        )
+        if also_erase:
+            # Queued before the entry is dropped: the queue is account-level,
+            # so a failed request survives this subscription's deletion.
+            consent.add_to_queue(strings_data, deck_hash)
+
+    logger.debug(f"Unsubscribing from deck: {deck_hash}")
+    op = QueryOp(
+        parent=mw,
+        op=lambda col: unsubscribe_from_deck(deck_hash),
+        success=lambda result: None,
+    )
+    if point_version() >= 231000:
+        op = op.without_collection()
+    op.run_in_background()
+
+    strings_data.pop(deck_hash)
     config_manager.write_config(strings_data)
-    on_edit_list()  # This will create a fresh DeckManager() and table
+
+    if also_erase:
+        _erase_review_data(deck_hash)
+
+    if parent_dialog is not None:
+        parent_dialog.accept()
+        on_edit_list()
+    return True
 
 
 def validate_deck_hash(deck_hash: str) -> bool:
@@ -171,6 +212,7 @@ def add_to_table(line_edit, table, dialog):
             "deckId": 0,
             "optional_tags": {},
             "personal_tags": DEFAULT_PROTECTED_TAGS,
+            consent.STATS_TIMESTAMP_KEY: 0,
         }
         config_manager.write_config(strings_data)
         line_edit.setText("")
@@ -283,14 +325,14 @@ def on_edit_list():
         item4.setFlags(item4.flags() & ~Qt.ItemFlag.ItemIsEditable)
         table.setItem(row, 3, item4)
 
-        # Actions - compact button that scales with content
+        # Actions menu - compact button that scales with content
         actions_widget = QWidget()
         actions_layout = QHBoxLayout(actions_widget)
         actions_layout.setContentsMargins(2, 0, 2, 0)
         actions_layout.setSpacing(0)
 
         edit_button = QPushButton("···")
-        edit_button.setToolTip("Configure deck location and sync settings")
+        edit_button.setToolTip("Actions")
         edit_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -308,9 +350,16 @@ def on_edit_list():
             }}
         """)
         edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        edit_button.clicked.connect(
+        actions_menu = QMenu(edit_button)
+        configure_action = actions_menu.addAction("Configure")
+        configure_action.triggered.connect(
             lambda checked, h=deck_hash, d=dialog: edit_subscription_details(h, d)
         )
+        delete_action = actions_menu.addAction("Delete")
+        delete_action.triggered.connect(
+            lambda checked, h=deck_hash, d=dialog: delete_subscription(h, d)
+        )
+        edit_button.setMenu(actions_menu)
         actions_layout.addWidget(edit_button)
 
         table.setCellWidget(row, 4, actions_widget)
@@ -352,11 +401,6 @@ def on_edit_list():
     # Bottom buttons
     button_layout = QHBoxLayout()
 
-    delete_button = QPushButton("Delete Selected")
-    delete_button.setStyleSheet(get_button_style("danger"))
-    delete_button.clicked.connect(lambda: delete_selected_rows(table, dialog))
-    button_layout.addWidget(delete_button)
-
     settings_button = QPushButton("Global Settings")
     settings_button.setStyleSheet(get_button_style("neutral"))
     settings_button.clicked.connect(lambda: show_global_settings_dialog(dialog))
@@ -372,6 +416,40 @@ def on_edit_list():
     layout.addLayout(button_layout)
 
     dialog.exec()
+
+
+def _format_consent_date(value):
+    """Render a stored ISO timestamp as '29 Oct 2026', or None."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%d %b %Y")
+    except (ValueError, TypeError):
+        return None
+
+
+def _describe_consent_state(deck_hash, record, stats_supported):
+    """Human-readable summary of the review-data decision for a subscription."""
+    if not stats_supported:
+        return "This deck does not collect review statistics, so there is nothing to share."
+
+    if record is None:
+        text = "Not sharing yet."
+    elif not record.granted:
+        decided = _format_consent_date(record.decided_at)
+        text = f"Not sharing (declined {decided})." if decided else "Not sharing."
+    elif consent.needs_prompt(deck_hash):
+        text = (
+            "Your earlier consent no longer applies because our wording "
+            "changed. Tick the box to share again."
+        )
+    else:
+        decided = _format_consent_date(record.decided_at)
+        text = f"Sharing since {decided}." if decided else "Sharing."
+
+    if deck_hash in consent.pending_erasures():
+        text += " Your previously shared data is still scheduled for deletion."
+    return text
 
 
 def edit_subscription_details(deck_hash, parent_dialog):
@@ -504,6 +582,54 @@ def edit_subscription_details(deck_hash, parent_dialog):
     new_notes_layout.addWidget(new_notes_combo)
     layout.addWidget(new_notes_group)
 
+    # Review data consent - the only place a recorded decision can be changed
+    review_group = QGroupBox("Review data")
+    review_group.setStyleSheet(get_groupbox_style())
+    review_layout = QVBoxLayout(review_group)
+
+    consent_record = consent.get_consent(deck_hash)
+    consent_active = bool(
+        consent_record is not None
+        and consent_record.granted
+        and not consent.needs_prompt(deck_hash)
+    )
+    # A stale or foreign record renders unchecked: the checkbox shows what is
+    # actually in force, not what was once agreed to.
+    rendered_consent = consent_active if consent_record is not None else None
+    stats_supported = bool(details.get("stats_enabled", False))
+
+    share_checkbox = QCheckBox("Share my review data with this deck's maintainers")
+    share_checkbox.setChecked(bool(rendered_consent))
+    share_checkbox.setEnabled(stats_supported)
+    review_layout.addWidget(share_checkbox)
+
+    review_state = QLabel(
+        _describe_consent_state(deck_hash, consent_record, stats_supported)
+    )
+    review_state.setWordWrap(True)
+    review_state.setStyleSheet(f"color: {colors['text_secondary']}; font-size: 12px;")
+    review_layout.addWidget(review_state)
+
+    review_link = QLabel(
+        f'<a href="{consent.PRIVACY_POLICY_URL}" style="color: {colors["primary"]}; '
+        f'text-decoration: none;">Read our Privacy Policy</a>'
+    )
+    review_link.setOpenExternalLinks(True)
+    review_link.setStyleSheet("font-size: 12px;")
+    review_layout.addWidget(review_link)
+
+    review_hint = QLabel(
+        "Turning this off stops new uploads and schedules the review statistics "
+        "you've already shared for deletion. They disappear from statistics "
+        "pages within 24 hours."
+    )
+    review_hint.setWordWrap(True)
+    review_hint.setStyleSheet(f"color: {colors['text_muted']}; font-size: 11px;")
+    if stats_supported:
+        review_layout.addWidget(review_hint)
+
+    layout.addWidget(review_group)
+
     # Buttons - Cancel on left, Save on right
     button_layout = QHBoxLayout()
     button_layout.addStretch()
@@ -526,6 +652,47 @@ def edit_subscription_details(deck_hash, parent_dialog):
             if not local_deck_name:
                 showInfo("Please select a local deck.")
                 return
+
+            # Consent is written only when the user changed it. Writing on
+            # every save would let someone record a decline just by opening
+            # this window to change a deck.
+            erase_requested = False
+            plan = (
+                consent.plan_change(rendered_consent, share_checkbox.isChecked())
+                if stats_supported
+                else None
+            )
+            if plan is not None and plan.write is not None:
+                if plan.confirm_erasure and not askUser(
+                    "Turn off sharing and schedule the review statistics you've "
+                    "shared for this deck for deletion?\n\n"
+                    "They disappear from statistics pages within 24 hours. This "
+                    "cannot be undone.",
+                    title="Delete Review Data",
+                ):
+                    return
+                erase_requested = plan.queue_erasure
+
+                record = consent.build_record(plan.write)
+                if record is None:
+                    if plan.write:
+                        showInfo(
+                            "Could not verify your AnkiCollab account. Please "
+                            "log in and try again."
+                        )
+                        return
+                    # Turning sharing off must never be blocked: drop the
+                    # record so nothing can be uploaded, and queue the erase.
+                    details.pop(consent.CONSENT_KEY, None)
+                    details.pop(consent.LEGACY_KEY, None)
+                else:
+                    details[consent.CONSENT_KEY] = record
+                    details.pop(consent.LEGACY_KEY, None)
+                if plan.write is False:
+                    # Re-sharing later has to send the full history again.
+                    consent.reset_stats_watermark(details)
+                if plan.queue_erasure:
+                    consent.add_to_queue(strings_data, deck_hash)
 
             # Save local deck
             local_deck_id = mw.col.decks.id(local_deck_name)
@@ -552,6 +719,8 @@ def edit_subscription_details(deck_hash, parent_dialog):
             dialog.accept()
             parent_dialog.accept()  # Close parent dialog
             on_edit_list()  # Reopen with updated data
+            if erase_requested:
+                _erase_review_data(deck_hash)
 
         except Exception as e:
             showInfo(f"Error saving changes: {str(e)}")
@@ -1144,7 +1313,6 @@ def show_global_settings_dialog(parent_dialog):
 
     media_import_button = QPushButton("Import Media from Folder")
     media_import_button.setStyleSheet(get_button_style("neutral", "small"))
-    media_import_button.setMaximumWidth(180)
     media_import_button.setSizePolicy(
         QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
     )
@@ -1161,37 +1329,7 @@ def show_global_settings_dialog(parent_dialog):
     )
     media_layout.addWidget(media_info_label)
 
-    # Statistics groupbox
-    stats_group = QGroupBox("Statistics")
-    stats_group.setStyleSheet(get_groupbox_style())
-    stats_group.setSizePolicy(
-        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-    )
-    stats_layout = QVBoxLayout(stats_group)
-    stats_layout.setContentsMargins(6, 6, 6, 6)
-    stats_layout.setSpacing(5)
-
-    stats_push_button = QPushButton("Share Review History")
-    stats_push_button.setStyleSheet(get_button_style("neutral", "small"))
-    stats_push_button.setMaximumWidth(180)
-    stats_push_button.setSizePolicy(
-        QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
-    )
-    stats_push_button.clicked.connect(on_push_all_stats_action)
-    stats_layout.addWidget(stats_push_button)
-
-    stats_info_label = QLabel(
-        "Share your review history to help the maintainers improve the deck."
-    )
-    stats_info_label.setWordWrap(True)
-    stats_info_label.setStyleSheet(hint_caption_style)
-    stats_info_label.setSizePolicy(
-        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-    )
-    stats_layout.addWidget(stats_info_label)
-
     media_stats_layout.addWidget(media_group, 1)
-    media_stats_layout.addWidget(stats_group, 1)
     layout.addWidget(media_stats_container)
 
     # Buttons
@@ -1276,19 +1414,32 @@ def on_push_all_stats_action():
             return
 
     decks = DeckManager()
-    for deck_hash, details in decks:
-        if details.get("stats_enabled", False):
-            # Only upload stats if the user wants to share them
-            share_data, _ = wants_to_share_stats(deck_hash)
-            if share_data:
-                rh = ReviewHistory(deck_hash)
-                op = QueryOp(
-                    parent=mw,
-                    op=lambda _: rh.upload_review_history(0),
-                    success=on_stats_upload_done,
-                )
-                op.with_progress("X Review History...").run_in_background()
-                update_stats_timestamp(deck_hash)
+    shared = [
+        deck_hash
+        for deck_hash, details in decks
+        if details.get("stats_enabled", False)
+        and consent.has_granted_consent(deck_hash)
+    ]
+
+    if not shared:
+        showInfo(
+            "No decks are set to share review data.\n\n"
+            "Enable it per deck under Manage Subscriptions -> Configure -> "
+            "Review data.",
+            parent=mw,
+        )
+        return
+
+    for deck_hash in shared:
+        rh = ReviewHistory(deck_hash)
+        op = QueryOp(
+            parent=mw,
+            op=lambda _, rh=rh: rh.upload_review_history(0),
+            success=lambda done, deck_hash=deck_hash: on_stats_upload_done(
+                done, deck_hash
+            ),
+        )
+        op.with_progress("Uploading Review History...").run_in_background()
 
 
 def open_community_site():

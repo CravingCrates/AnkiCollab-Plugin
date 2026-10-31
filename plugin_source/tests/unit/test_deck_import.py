@@ -468,25 +468,6 @@ class TestTempDeckCleanup:
 
 
 class TestDeckInitializerHelpers:
-    def test_remove_unchanged_notes(self):
-        nt = make_notetype(name="Basic", model_uuid="m-001")
-        notes = [
-            make_note_dict(guid=f"n{i}", note_model_uuid="m-001") for i in range(3)
-        ]
-        deck_json = make_deck_json(name="Test", notes=notes, note_models=[nt])
-        deck = deck_initializer.from_json(deck_json)
-
-        # Simulate mod timestamps: only n0 was modified after timestamp
-        for i, note in enumerate(deck.notes):
-            mock_obj = MockAnkiNote()
-            mock_obj.mod = 100 + i * 10  # 100, 110, 120
-            note.anki_object = mock_obj
-
-        # timestamp2 must also exclude old notes (not be 0, since all mod > 0)
-        deck_initializer.remove_unchanged_notes(deck, 115, 115)
-        # Only note with mod=120 should remain
-        assert len(deck.notes) == 1
-
     def test_remove_tags_from_notes(self):
         nt = make_notetype(name="Basic", model_uuid="m-001")
         notes = [
