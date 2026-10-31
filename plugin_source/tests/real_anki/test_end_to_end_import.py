@@ -541,8 +541,8 @@ def _set_styling(collection, notetype_id, css=None, qfmt=None):
 def test_user_content_below_the_marker_survives_and_is_never_uploaded(
     col, target_col, monkeypatch
 ):
-    css_marker = "/*\nANKICOLLAB_END\n*/"
-    html_marker = "<!--\nANKICOLLAB_END\n-->"
+    css_marker = "/*\nUSER_CUSTOMISATION\n*/"
+    html_marker = "<!--\nUSER_CUSTOMISATION\n-->"
     notetype = make_notetype(col, "Styled", ["Front", "Back"], uuid="styled-e2e")
     add_note(col, notetype, col.decks.id("Source"), ["front", "back"])
     _set_styling(

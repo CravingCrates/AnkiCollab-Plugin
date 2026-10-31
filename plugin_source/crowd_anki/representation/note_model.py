@@ -16,8 +16,9 @@ logger = get_logger("ankicollab.note_model")
 NOTE_REMAP_CHUNK_SIZE = 1000
 
 # Everything after a comment containing this marker belongs to the user: it
-# survives deck updates and is never uploaded with the deck.
-PROTECTED_CONTENT_MARKER = "ANKICOLLAB_END"
+# survives deck updates and is never uploaded with the deck. Either spelling
+# of USER_CUSTOMISATION is accepted.
+PROTECTED_CONTENT_MARKER = "USER_CUSTOMI[SZ]ATION"
 _HTML_MARKER_RE = re.compile(
     rf"<!--(?:(?!-->).)*?{PROTECTED_CONTENT_MARKER}.*?-->", re.DOTALL
 )
@@ -305,7 +306,7 @@ class NoteModel(JsonSerializableAnkiDict):
 
     def _keep_protected_user_content(self, existing_model: NotetypeDict) -> None:
         """
-        Copies the user's content below the ANKICOLLAB_END markers of the local
+        Copies the user's content below the USER_CUSTOMISATION markers of the local
         notetype into the incoming CSS and templates.
         """
         if isinstance(self.anki_dict.get("css"), str) and isinstance(

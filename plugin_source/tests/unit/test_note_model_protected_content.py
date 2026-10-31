@@ -1,4 +1,4 @@
-"""Tests for the ``ANKICOLLAB_END`` marker.
+"""Tests for the ``USER_CUSTOMISATION`` marker.
 
 Content after the marker comment belongs to the user: it must survive deck
 updates, must not make an unchanged deck look changed, and must never be
@@ -13,8 +13,8 @@ from tests.conftest import create_mock_collection, make_notetype
 
 from crowd_anki.representation.note_model import NoteModel
 
-CSS_MARKER = "/*\nANKICOLLAB_END\nText below this comment is yours.\n*/"
-HTML_MARKER = "<!--\nANKICOLLAB_END\nText below this comment is yours.\n-->"
+CSS_MARKER = "/*\nUSER_CUSTOMISATION\nText below this comment is yours.\n*/"
+HTML_MARKER = "<!--\nUSER_CUSTOMISATION\nText below this comment is yours.\n-->"
 
 USER_CSS = "\n.card { background: hotpink; }"
 USER_HTML = "\n<script>var userConfig = { hints: false };</script>"
@@ -115,13 +115,30 @@ class TestUpdateKeepsUserContent:
         col.models.update_dict.assert_not_called()
 
     def test_marker_text_may_differ_between_deck_and_user(self):
-        user_marker = "/* ANKICOLLAB_END */"
+        user_marker = "/* USER_CUSTOMISATION */"
         existing = _notetype(css="a\r\n" + user_marker + USER_CSS)
         incoming = _notetype(css="b\n" + CSS_MARKER)
 
         updated, _col = _update(existing, incoming)
 
         assert updated["css"] == "b\n" + CSS_MARKER + USER_CSS
+
+    def test_american_spelling_of_the_marker_is_recognised(self):
+        css_marker = "/* USER_CUSTOMIZATION */"
+        html_marker = "<!-- USER_CUSTOMIZATION -->"
+        existing = _notetype(
+            css="a\n" + css_marker + USER_CSS,
+            templates=[_template(qfmt="a\n" + html_marker + USER_HTML)],
+        )
+        incoming = _notetype(
+            css="b\n" + css_marker,
+            templates=[_template(qfmt="b\n" + html_marker)],
+        )
+
+        updated, _col = _update(existing, incoming)
+
+        assert updated["css"] == "b\n" + css_marker + USER_CSS
+        assert updated["tmpls"][0]["qfmt"] == "b\n" + html_marker + USER_HTML
 
 
 class TestUpdateWithoutUserMarker:
@@ -149,7 +166,7 @@ class TestUpdateWithoutUserMarker:
         assert updated["css"] == "b\n" + CSS_MARKER + "\n.deck-default { }"
 
     def test_marker_outside_a_comment_is_ignored(self):
-        existing = _notetype(css="a\nANKICOLLAB_END" + USER_CSS)
+        existing = _notetype(css="a\nUSER_CUSTOMISATION" + USER_CSS)
         incoming = _notetype(css="b\n" + CSS_MARKER)
 
         updated, _col = _update(existing, incoming)
