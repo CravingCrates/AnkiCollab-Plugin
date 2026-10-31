@@ -66,6 +66,31 @@ Yes, you can safeguard specific fields within individual notes to prevent them f
 Additionally, it's worth noting that certain fields may already be protected by the maintainers on the website. This is often the case for "personal" fields designed for individual customization. If you're unsure whether a field is protected, or if you're a maintainer looking to protect fields for all users, you can check and adjust these settings in the Deck Settings on the website.
 </details>
 <details close>
+<summary><b>Can I customise a notetype's styling or card templates without updates overwriting it?</b></summary>
+Yes. When a deck updates, AnkiCollab replaces the notetype's Styling and card templates with the deck's version, but anything you put below a <code>USER_CUSTOMISATION</code> marker is kept.<br><br>
+
+- In the Styling, the marker is a CSS comment:
+
+```css
+/*
+USER_CUSTOMISATION
+Anything below this comment is yours and won't be changed by deck updates.
+*/
+```
+
+- In the Front and Back templates, it's an HTML comment:
+
+```html
+<!--
+USER_CUSTOMISATION
+Anything below this comment is yours and won't be changed by deck updates.
+-->
+```
+
+Put your own CSS or template additions below the marker and leave the comment itself in place. The American spelling <code>USER_CUSTOMIZATION</code> works too. Anything above the marker belongs to the deck and will be updated as usual.<br><br>
+If the deck already ships a marker, put your content below that one rather than adding a second. If it doesn't, you can add the marker yourself at the very end of the Styling or template, and AnkiCollab will keep it and your content at the end after each update.
+</details>
+<details close>
 <summary><b>I get this Error: "Please only use notetypes that the maintainer added"!?</b></summary>
 The maintainer can choose to not allow new notetype creation. If that is the case, you can only suggest notes with notetypes that already exist in the deck. That way, the maintainer can be sure that subscribers only upload notes with correct notetypes (e.g. to prevent flooding of the deck with slightly different versions of notetypes).
 </details>
@@ -121,6 +146,12 @@ This new capability eliminates the need to navigate to the Anki website separate
 <summary><b>How do I change the deck name on AnkiCollab?</b></summary>
 The only way to do that currently is by messaging the Discord group with your request here: https://discord.com/invite/9x4DRxzqwM 
 Keep in mind that when you change the deck name on AnkiCollab, you will also have to change your deck name locally. All your subscribers must also change their deck name locally to receive changes.
+</details>
+
+<details close>
+<summary><b>How can I let subscribers customise my notetype's styling or templates?</b></summary>
+Add a <code>USER_CUSTOMISATION</code> comment at the end of the notetype's Styling (<code>/* USER_CUSTOMISATION */</code>) and of each card template (<code>&lt;!-- USER_CUSTOMISATION --&gt;</code>), then publish the change. Subscribers can then add their own CSS and template content below the marker and it will survive deck updates. See <i>Can I customise a notetype's styling or card templates without updates overwriting it?</i> under Subscriber.<br><br>
+Anything below the marker in your own copy is treated as yours too: it is never uploaded when you publish or suggest changes, so you can keep personal tweaks there without them reaching your subscribers. Changes you want subscribers to receive need to go above the marker.
 </details>
 
 <details close>
