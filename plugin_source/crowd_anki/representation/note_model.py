@@ -19,12 +19,9 @@ NOTE_REMAP_CHUNK_SIZE = 1000
 # survives deck updates and is never uploaded with the deck. Either spelling
 # of USER_CUSTOMISATION is accepted.
 PROTECTED_CONTENT_MARKER = "USER_CUSTOMI[SZ]ATION"
-_HTML_MARKER_RE = re.compile(
-    rf"<!--(?:(?!-->).)*?{PROTECTED_CONTENT_MARKER}.*?-->", re.DOTALL
-)
-_CSS_MARKER_RE = re.compile(
-    rf"/\*(?:(?!\*/).)*?{PROTECTED_CONTENT_MARKER}.*?\*/", re.DOTALL
-)
+
+_HTML_MARKER_RE = re.compile(rf"<!--\s*{PROTECTED_CONTENT_MARKER}(?:(?!-->)[\s\S])*-->")
+_CSS_MARKER_RE = re.compile(rf"/\*\s*{PROTECTED_CONTENT_MARKER}(?:(?!\*/)[\s\S])*\*/")
 
 
 def _strip_protected_content(content: str, marker_re: re.Pattern) -> str:
