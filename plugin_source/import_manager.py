@@ -23,6 +23,7 @@ from aqt import mw
 from . import config_manager
 from . import consent
 from . import impact
+from . import note_status
 from .api_client import api_client
 from .auth_manager import auth_manager
 
@@ -671,6 +672,20 @@ def _on_deck_installed(
     deleted_notes = subscription.get("deleted_notes", [])
     deck_name = deck.anki_dict["name"]
     deck_hash = subscription["deck_hash"]
+
+    try:
+        store = note_status.CollabNoteStore.for_current_profile()
+        if store is not None:
+            note_status.record_pull(
+                store,
+                deck_hash,
+                subscription.get("deck", {}),
+                deleted_notes,
+                full_deck=bool(input_hash),
+            )
+    except Exception as e:
+        # Only the editor hint depends on this record; never fail an import for it
+        logger.warning(f"Could not update the AnkiCollab note record: {e}")
 
     # unfortunately, the db scalar shits itself when called from the success callback after the deck has been installed
     if deleted_notes:
