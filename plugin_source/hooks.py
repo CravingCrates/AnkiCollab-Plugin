@@ -677,8 +677,12 @@ _BUTTON_STATES = {
 
 
 def _set_editor_button(editor, button_id: str, label, tip: str, enabled: bool):
+    # The editor adds its toolbar buttons after the first note has loaded, so
+    # keep looking for the button for up to 2 seconds before giving up
     script = (
-        "var b = document.getElementById(%s); if (b) {%s b.title = %s; b.disabled = %s;}"
+        "var b = document.getElementById(%s);"
+        " if (!b) { if (tries > 0) setTimeout(function () { apply(tries - 1); }, 100); return; }"
+        "%s b.title = %s; b.disabled = %s;"
         % (
             json.dumps(button_id),
             f" b.textContent = {json.dumps(label)};" if label is not None else "",
@@ -686,7 +690,7 @@ def _set_editor_button(editor, button_id: str, label, tip: str, enabled: bool):
             "false" if enabled else "true",
         )
     )
-    editor.web.eval(f"(function() {{ {script} }})();")
+    editor.web.eval(f"(function apply(tries) {{ {script} }})(20);")
 
 
 def _note_status_for_editor(note) -> Optional[note_status.NoteStatus]:
