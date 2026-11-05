@@ -19,7 +19,7 @@ $env:SKIP_INIT="1"; python -m pytest tests/
 python -m pytest tests/real_anki -c tests/real_anki/pytest.ini
 ```
 
-**Current test count: 1558.** This includes `tests/test_real_anki.py` (6
+**Current test count: 1568.** This includes `tests/test_real_anki.py` (6
 per-file subprocess runners plus a discovery guard). The 44 real-Anki scenarios
 run inside those runners when a real Anki installation is importable; otherwise
 the runners skip with a clear reason. CI verifies the collected count against

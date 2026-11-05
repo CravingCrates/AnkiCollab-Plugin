@@ -39,7 +39,11 @@ from .utils import get_local_deck_from_hash, DeckManager
 from .import_manager import *
 from .export_manager import handle_export
 from .media_import import on_media_btn
-from .hooks import async_update, update_hooks_for_login_state
+from .hooks import (
+    async_update,
+    refresh_note_status_record,
+    update_hooks_for_login_state,
+)
 from .dialogs import LoginDialog
 from .auth_manager import auth_manager
 from .notifications_center import (
@@ -1468,6 +1472,7 @@ def on_login_manager_btn():
         if auth_manager.is_logged_in():  # Verify login status *after* dialog closes
             showInfo("Welcome back! You're now logged in.")
             update_ui_for_login_state()  # Update UI after successful login
+            refresh_note_status_record()
 
 
 def _on_profile_changed_for_default_config(_profile_name):

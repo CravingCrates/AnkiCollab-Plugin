@@ -41,6 +41,7 @@ from typing import Callable, Tuple, Dict, List, Any, Optional, Set
 import os
 
 from . import config_manager
+from . import note_status
 from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style
 
 from .utils import get_personal_tags
@@ -1088,6 +1089,13 @@ def _submit_deck_op(
         response.raise_for_status()
 
         logger.info(f"Deck submission response status: {response.status_code}")
+        if force_overwrite:
+            try:
+                store = note_status.CollabNoteStore.for_current_profile()
+                if store is not None:
+                    store.add_notes(deckHash, note_status._guids_in_deck_json(deck))
+            except Exception as exc:
+                logger.warning(f"Could not update the AnkiCollab note record: {exc}")
         # Return data needed for media upload if successful and media exists
         if media_files_info:
             bulk_operation_id = ""  # only used for new decks
@@ -1788,6 +1796,10 @@ def _on_suggest_deck_submitted(
     """Success callback after deck submission for suggestions."""
     # Runs on Main Thread
     logger.info("Deck submission complete. Starting media upload if needed.")
+    if editor is not None:
+        from .hooks import update_editor_note_status
+
+        update_editor_note_status(editor)
 
     # Step 3: Upload Media (Background Op, started by _start_media_upload)
     # The final success callback handles UI updates and rating request
@@ -2074,7 +2086,21 @@ def _create_deck_op(
         response.raise_for_status()  # Check for HTTP errors
 
         logger.info(f"Create deck response status: {response.status_code}")
-        return response.json()  # Return parsed JSON response
+        result = response.json()  # Return parsed JSON response
+        if isinstance(result, dict) and result.get("status") == 1:
+            deck_hash = result.get("message")
+            if isinstance(deck_hash, str) and deck_hash:
+                try:
+                    store = note_status.CollabNoteStore.for_current_profile()
+                    if store is not None:
+                        note_status.record_pull(
+                            store, deck_hash, deck_repr, [], full_deck=True
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        f"Could not update the AnkiCollab note record: {exc}"
+                    )
+        return result
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error during deck creation: {e}")
@@ -2399,8 +2425,8 @@ def _on_suggest_deck_prepared(
             return
 
         if (
-            rationale_id != 6 and not force_overwrite
-        ):  # Skip dialog for 'New Card' unless maintainer
+            rationale_id != 6 or editor is not None
+        ) and not force_overwrite:  # Skip dialog for automatic 'New Card' unless from editor or maintainer
             result = get_commit_info(rationale_id, parent=parent_widget)
             if result is None or result[0] is None:
                 aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)

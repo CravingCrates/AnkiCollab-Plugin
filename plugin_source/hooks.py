@@ -607,6 +607,16 @@ def _open_note_on_ankicollab(note_id: NoteId, editor=None) -> None:
     webbrowser.open(target_url)
 
 
+def _suggest_from_editor(editor) -> None:
+    try:
+        status = _note_status_for_editor(getattr(editor, "note", None))
+    except Exception as e:
+        logger.warning(f"Could not read the AnkiCollab status of a note: {e}")
+        status = None
+    rationale = 6 if status is note_status.NoteStatus.NOT_ON_COLLAB else 2
+    suggest_notes([editor.note.id], rationale, editor=editor)
+
+
 def init_editor_card(buttons: List[str], editor):
     if not auth_manager.is_logged_in():
         return
@@ -618,7 +628,7 @@ def init_editor_card(buttons: List[str], editor):
     b = editor.addButton(
         icon=None,
         cmd="AnkiCollab_Suggestion",
-        func=lambda editor=editor: suggest_notes([editor.note.id], 2, editor=editor),
+        func=lambda editor=editor: _suggest_from_editor(editor),
         tip=_SUGGEST_CHANGES_TIP,
         label=_SUGGEST_CHANGES_LABEL,
         id=_SUGGEST_BUTTON_ID,
@@ -670,8 +680,8 @@ _BUTTON_STATES = {
         _SUGGEST_CHANGES_LABEL,
         "AnkiCollab: This note was deleted from the deck on AnkiCollab",
         False,
-        _OPEN_NOTE_TIP,
-        True,
+        "AnkiCollab: This note was deleted from the deck on AnkiCollab",
+        False,
     ),
 }
 
@@ -746,10 +756,13 @@ def refresh_note_status_record() -> None:
     from .api_client import api_client
 
     def post(endpoint, payload, timeout):
-        return api_client.post_json(endpoint, payload, timeout=timeout, auth=logged_in)
+        return api_client.post_json(endpoint, payload, timeout=timeout, auth=True)
 
     def fill():
         try:
+            if not logged_in:
+                store.forget_decks_except(deck_hashes)
+                return
             note_status.fill_missing_decks(store, deck_hashes, post)
         except Exception as e:
             logger.warning(f"Could not fill the AnkiCollab note record: {e}")

@@ -8,30 +8,32 @@ carries the notes that changed and the notes that were deleted.
 
 from __future__ import annotations
 
-import logging
 import sqlite3
 from contextlib import closing
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Set
+from typing import Any, Iterable, Iterator, List, Optional, Set
 
 from . import config_manager
+from .utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("ankicollab.note_status")
 
 DB_FILE_NAME = "collab_notes.sqlite3"
 NOTE_GUIDS_ENDPOINT = "/GetDeckNoteGuids"
+
+_SCHEMA_VERSION = 2
 
 # "decks" lists the decks whose record is complete. Until a deck is listed, a
 # note missing from "notes" may still be on the server, so its status is
 # unknown rather than "not on AnkiCollab".
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes (
-    guid TEXT PRIMARY KEY,
     deck_hash TEXT NOT NULL,
-    deleted INTEGER NOT NULL DEFAULT 0
+    guid TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (deck_hash, guid)
 );
-CREATE INDEX IF NOT EXISTS notes_by_deck ON notes (deck_hash);
 CREATE TABLE IF NOT EXISTS decks (
     deck_hash TEXT PRIMARY KEY
 );
@@ -65,6 +67,12 @@ class CollabNoteStore:
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path, timeout=10)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version != _SCHEMA_VERSION:
+            conn.executescript(
+                f"DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS decks; "
+                f"PRAGMA user_version = {_SCHEMA_VERSION};"
+            )
         conn.executescript(_SCHEMA)
         return conn
 
@@ -75,14 +83,14 @@ class CollabNoteStore:
         self._upsert(deck_hash, guids, deleted=True)
 
     def _upsert(self, deck_hash: str, guids: Iterable[str], deleted: bool) -> None:
-        rows = [(guid, deck_hash, int(deleted)) for guid in guids if guid]
+        rows = [(deck_hash, guid, int(deleted)) for guid in guids if guid]
         if not rows:
             return
         with closing(self._connect()) as conn, conn:
             conn.executemany(
-                "INSERT INTO notes (guid, deck_hash, deleted) VALUES (?, ?, ?) "
-                "ON CONFLICT(guid) DO UPDATE SET "
-                "deck_hash = excluded.deck_hash, deleted = excluded.deleted",
+                "INSERT INTO notes (deck_hash, guid, deleted) VALUES (?, ?, ?) "
+                "ON CONFLICT(deck_hash, guid) DO UPDATE SET "
+                "deleted = excluded.deleted",
                 rows,
             )
 
@@ -108,7 +116,8 @@ class CollabNoteStore:
     def status(self, guid: str, deck_hash: str) -> NoteStatus:
         with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT deleted FROM notes WHERE guid = ?", (guid,)
+                "SELECT deleted FROM notes WHERE deck_hash = ? AND guid = ?",
+                (deck_hash, guid),
             ).fetchone()
             if row is not None:
                 return NoteStatus.DELETED if row[0] else NoteStatus.ON_COLLAB
@@ -118,20 +127,35 @@ class CollabNoteStore:
         return NoteStatus.NOT_ON_COLLAB if complete else NoteStatus.UNKNOWN
 
 
-def _guids_in_deck_json(deck_json: Dict[str, Any]) -> Iterator[str]:
-    for note in deck_json.get("notes", []):
-        guid = note.get("guid") if isinstance(note, dict) else None
-        if guid:
+def _guids_in_deck_json(deck_json: Any) -> Iterator[str]:
+    notes = (
+        deck_json.get("notes", [])
+        if isinstance(deck_json, dict)
+        else getattr(deck_json, "notes", [])
+    )
+    for note in notes:
+        if isinstance(note, dict):
+            guid = note.get("guid")
+        elif hasattr(note, "get_uuid"):
+            guid = note.get_uuid()
+        else:
+            guid = getattr(note, "guid", None)
+        if guid and isinstance(guid, str):
             yield guid
-    for child in deck_json.get("children", []):
-        if isinstance(child, dict):
+    children = (
+        deck_json.get("children", [])
+        if isinstance(deck_json, dict)
+        else getattr(deck_json, "children", [])
+    )
+    for child in children:
+        if isinstance(child, dict) or hasattr(child, "notes"):
             yield from _guids_in_deck_json(child)
 
 
 def record_pull(
     store: CollabNoteStore,
     deck_hash: str,
-    deck_json: Dict[str, Any],
+    deck_json: Any,
     deleted_guids: Iterable[str],
     full_deck: bool,
 ) -> None:

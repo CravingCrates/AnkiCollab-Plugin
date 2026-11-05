@@ -9,11 +9,13 @@ complete and how pulls and the server's note list keep it up to date.
 from __future__ import annotations
 
 import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import export_manager
 import hooks
 import import_manager
 import note_status
@@ -100,6 +102,37 @@ class TestStatus:
 
         assert store.complete_decks() == set()
         assert store.status("a", "deck1") is NoteStatus.UNKNOWN
+
+    def test_note_status_is_scoped_to_its_deck(self, store):
+        store.add_notes("deck1", ["shared"])
+        store.mark_complete("deck1")
+        store.mark_complete("deck2")
+
+        assert store.status("shared", "deck1") is NoteStatus.ON_COLLAB
+        assert store.status("shared", "deck2") is NoteStatus.NOT_ON_COLLAB
+
+    def test_deleting_in_one_deck_does_not_affect_another_deck(self, store):
+        store.add_notes("deck1", ["shared"])
+        store.add_notes("deck2", ["shared"])
+        store.mark_deleted("deck1", ["shared"])
+
+        assert store.status("shared", "deck1") is NoteStatus.DELETED
+        assert store.status("shared", "deck2") is NoteStatus.ON_COLLAB
+
+    def test_older_schema_version_is_rebuilt(self, store):
+        store.path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(store.path) as conn:
+            conn.executescript(
+                "CREATE TABLE notes (guid TEXT PRIMARY KEY, deck_hash TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);"
+                "CREATE TABLE decks (deck_hash TEXT PRIMARY KEY);"
+                "INSERT INTO notes (guid, deck_hash, deleted) VALUES ('a', 'deck1', 0);"
+            )
+
+        store.add_notes("deck1", ["a"])
+        store.add_notes("deck2", ["a"])
+
+        assert store.status("a", "deck1") is NoteStatus.ON_COLLAB
+        assert store.status("a", "deck2") is NoteStatus.ON_COLLAB
 
 
 class TestRecordPull:
@@ -317,12 +350,73 @@ class TestEditorButtons:
         assert "b.disabled = false" in suggest
         assert "b.disabled = false" in self._button(scripts, hooks._OPEN_BUTTON_ID)
 
-    def test_deleted_note_disables_suggesting(self, store):
+    def test_deleted_note_disables_suggesting_and_open(self, store):
         store.mark_deleted("deck1", ["a"])
 
         scripts = self._scripts(store, self._editor("a"))
 
         assert "b.disabled = true" in self._button(scripts, hooks._SUGGEST_BUTTON_ID)
+        assert "b.disabled = true" in self._button(scripts, hooks._OPEN_BUTTON_ID)
+
+    def test_suggest_from_editor_uses_new_card_rationale_when_not_on_collab(
+        self, store
+    ):
+        store.mark_complete("deck1")
+        editor = self._editor("new-note")
+
+        with (
+            patch.object(
+                note_status.CollabNoteStore,
+                "for_current_profile",
+                return_value=store,
+            ),
+            patch("hooks.get_deck_hash_from_card", return_value=("deck1", None)),
+            patch("hooks.suggest_notes") as suggest,
+        ):
+            hooks._suggest_from_editor(editor)
+
+        suggest.assert_called_once_with([1], 6, editor=editor)
+
+    def test_suggest_from_editor_uses_updated_content_rationale_when_on_collab(
+        self, store
+    ):
+        store.add_notes("deck1", ["a"])
+        store.mark_complete("deck1")
+        editor = self._editor("a")
+
+        with (
+            patch.object(
+                note_status.CollabNoteStore,
+                "for_current_profile",
+                return_value=store,
+            ),
+            patch("hooks.get_deck_hash_from_card", return_value=("deck1", None)),
+            patch("hooks.suggest_notes") as suggest,
+        ):
+            hooks._suggest_from_editor(editor)
+
+        suggest.assert_called_once_with([1], 2, editor=editor)
+
+    def test_new_card_from_editor_still_opens_commit_dialog(self, mw_mock):
+        editor = self._editor("new-note")
+        with (
+            patch("export_manager.is_collection_available", return_value=True),
+            patch("export_manager.get_maintainer_data", return_value=("tok", False)),
+            patch(
+                "export_manager.get_commit_info", return_value=(6, "added new card")
+            ) as commit_info,
+            patch("export_manager.QueryOp") as query_op,
+            patch("export_manager._on_suggest_media_optimized") as optimized,
+        ):
+            export_manager._on_suggest_deck_prepared(
+                ("deck", []), 7, "deck1", 6, editor
+            )
+            query_op.call_args.kwargs["success"]("opt")
+
+        assert commit_info.call_args.args[0] == 6
+        optimized.assert_called_once_with(
+            "opt", "deck", [], 7, 6, "added new card", editor
+        )
 
     def test_unknown_status_resets_the_buttons(self, store):
         scripts = self._scripts(store, self._editor("a"))
@@ -350,3 +444,117 @@ class TestEditorButtons:
         assert '"AC: Suggest changes"' in self._button(
             scripts, hooks._SUGGEST_BUTTON_ID
         )
+
+
+class TestRefreshAndExportUpdates:
+    def test_refresh_requests_missing_decks_with_auth_when_logged_in(
+        self, store, mw_mock
+    ):
+        mw_mock.taskman.run_in_background.side_effect = lambda fn: fn()
+        with (
+            patch.object(
+                note_status.CollabNoteStore,
+                "for_current_profile",
+                return_value=store,
+            ),
+            patch("hooks.DeckManager", return_value=[("deck1", {})]),
+            patch("hooks.auth_manager.is_logged_in", return_value=True),
+            patch(
+                "api_client.api_client.post_json",
+                return_value=_response(payload={"deck1": ["a"]}),
+            ) as post_json,
+        ):
+            hooks.refresh_note_status_record()
+
+        post_json.assert_called_once_with(
+            note_status.NOTE_GUIDS_ENDPOINT,
+            {"deck_hashes": ["deck1"]},
+            timeout=30,
+            auth=True,
+        )
+        assert store.status("a", "deck1") is NoteStatus.ON_COLLAB
+        assert store.status("b", "deck1") is NoteStatus.NOT_ON_COLLAB
+
+    def test_refresh_skips_network_and_forgets_unsubscribed_decks_when_logged_out(
+        self, store, mw_mock
+    ):
+        store.add_notes("old", ["a"])
+        store.mark_complete("old")
+        mw_mock.taskman.run_in_background.side_effect = lambda fn: fn()
+        with (
+            patch.object(
+                note_status.CollabNoteStore,
+                "for_current_profile",
+                return_value=store,
+            ),
+            patch("hooks.DeckManager", return_value=[("deck1", {})]),
+            patch("hooks.auth_manager.is_logged_in", return_value=False),
+            patch("api_client.api_client.post_json") as post_json,
+        ):
+            hooks.refresh_note_status_record()
+
+        post_json.assert_not_called()
+        assert store.complete_decks() == set()
+        assert store.status("a", "old") is NoteStatus.UNKNOWN
+
+    def test_publishing_a_deck_completes_its_record(self, store, mw_mock):
+        deck = SimpleNamespace(
+            notes=[SimpleNamespace(get_uuid=lambda: "n1")],
+            children=[
+                SimpleNamespace(
+                    notes=[SimpleNamespace(get_uuid=lambda: "n2")], children=[]
+                )
+            ],
+        )
+        resp = _response(
+            payload={"status": 1, "message": "new-deck", "bulk_operation_id": "op1"}
+        )
+        with (
+            patch.object(
+                note_status.CollabNoteStore,
+                "for_current_profile",
+                return_value=store,
+            ),
+            patch("export_manager.get_personal_tags", return_value=[]),
+            patch("export_manager.deck_initializer"),
+            patch.object(
+                export_manager.Deck,
+                "default_json",
+                staticmethod(lambda _obj: {"name": "Deck"}),
+            ),
+            patch("api_client.api_client.post_gzip", return_value=resp),
+        ):
+            export_manager._create_deck_op(deck)
+
+        assert store.status("n1", "new-deck") is NoteStatus.ON_COLLAB
+        assert store.status("n2", "new-deck") is NoteStatus.ON_COLLAB
+        assert store.status("other", "new-deck") is NoteStatus.NOT_ON_COLLAB
+
+    def test_maintainer_overwrite_records_submitted_notes(self, store, mw_mock):
+        mw_mock.col.decks.name.return_value = "Deck"
+        deck = SimpleNamespace(
+            notes=[SimpleNamespace(get_uuid=lambda: "n1")],
+            children=[],
+        )
+        store.mark_complete("deck1")
+        with (
+            patch.object(
+                note_status.CollabNoteStore,
+                "for_current_profile",
+                return_value=store,
+            ),
+            patch("export_manager.get_deck_hash_from_did", return_value="deck1"),
+            patch("export_manager.get_personal_tags", return_value=[]),
+            patch("export_manager.get_local_deck_from_hash", return_value="Deck"),
+            patch("export_manager.get_maintainer_data", return_value=("tok", True)),
+            patch("export_manager.deck_initializer"),
+            patch.object(
+                export_manager.Deck,
+                "default_json",
+                staticmethod(lambda _obj: {"name": "Deck"}),
+            ),
+            patch("api_client.api_client.post_gzip", return_value=_response()),
+        ):
+            export_manager._submit_deck_op(deck, 1, 10, "", [], {})
+
+        assert store.status("n1", "deck1") is NoteStatus.ON_COLLAB
