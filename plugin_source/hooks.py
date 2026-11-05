@@ -23,6 +23,7 @@ from typing import Sequence, List, Tuple, Optional
 
 from . import config_manager
 from . import consent
+from . import note_status
 from .media_manager import MediaManager  # Import List
 
 from .export_manager import *
@@ -37,7 +38,12 @@ from .var_defs import API_BASE_URL, PREFIX_PROTECTED_FIELDS
 
 from .auth_manager import auth_manager
 from .notifications_center import refresh_notifications, register_sync_refresh_hook
-from .utils import get_logger, get_guids_from_noteids, get_deck_hash_from_card
+from .utils import (
+    DeckManager,
+    get_logger,
+    get_guids_from_noteids,
+    get_deck_hash_from_card,
+)
 import requests
 
 logger = get_logger("ankicollab.hooks")
@@ -613,8 +619,9 @@ def init_editor_card(buttons: List[str], editor):
         icon=None,
         cmd="AnkiCollab_Suggestion",
         func=lambda editor=editor: suggest_notes([editor.note.id], 2, editor=editor),
-        tip="AnkiCollab: Suggest changes for this note",
-        label="AC: Suggest changes",
+        tip=_SUGGEST_CHANGES_TIP,
+        label=_SUGGEST_CHANGES_LABEL,
+        id=_SUGGEST_BUTTON_ID,
         keys=None,
         disables=False,
     )
@@ -625,14 +632,129 @@ def init_editor_card(buttons: List[str], editor):
         func=lambda editor=editor: _open_note_on_ankicollab(
             editor.note.id, editor=editor
         ),
-        tip="AnkiCollab: Open this note on the website",
+        tip=_OPEN_NOTE_TIP,
         label="AC: ↗ Open",
+        id=_OPEN_BUTTON_ID,
         keys=None,
         disables=False,
     )
 
     buttons.append(b)
     buttons.append(b2)
+
+
+_SUGGEST_BUTTON_ID = "ankicollab-suggest"
+_OPEN_BUTTON_ID = "ankicollab-open"
+_SUGGEST_CHANGES_LABEL = "AC: Suggest changes"
+_SUGGEST_CHANGES_TIP = "AnkiCollab: Suggest changes for this note"
+_OPEN_NOTE_TIP = "AnkiCollab: Open this note on the website"
+
+# (suggest label, suggest tip, suggest enabled, open tip, open enabled).
+# An unknown status keeps the buttons as they were before the record existed.
+_DEFAULT_BUTTON_STATE = (
+    _SUGGEST_CHANGES_LABEL,
+    _SUGGEST_CHANGES_TIP,
+    True,
+    _OPEN_NOTE_TIP,
+    True,
+)
+_BUTTON_STATES = {
+    note_status.NoteStatus.NOT_ON_COLLAB: (
+        "AC: Suggest new note",
+        "AnkiCollab: This note isn't on AnkiCollab yet. Suggest it as a new note",
+        True,
+        "AnkiCollab: This note isn't on AnkiCollab yet",
+        False,
+    ),
+    note_status.NoteStatus.DELETED: (
+        _SUGGEST_CHANGES_LABEL,
+        "AnkiCollab: This note was deleted from the deck on AnkiCollab",
+        False,
+        _OPEN_NOTE_TIP,
+        True,
+    ),
+}
+
+
+def _set_editor_button(editor, button_id: str, label, tip: str, enabled: bool):
+    # The editor adds its toolbar buttons after the first note has loaded, so
+    # keep looking for the button for up to 2 seconds before giving up
+    script = (
+        "var b = document.getElementById(%s);"
+        " if (!b) { if (tries > 0) setTimeout(function () { apply(tries - 1); }, 100); return; }"
+        "%s b.title = %s; b.disabled = %s;"
+        % (
+            json.dumps(button_id),
+            f" b.textContent = {json.dumps(label)};" if label is not None else "",
+            json.dumps(tip),
+            "false" if enabled else "true",
+        )
+    )
+    editor.web.eval(f"(function apply(tries) {{ {script} }})(20);")
+
+
+def _note_status_for_editor(note) -> Optional[note_status.NoteStatus]:
+    if note is None or not note.id:
+        return None
+    cards = note.cards()
+    if not cards:
+        return None
+    deck_hash, _error = get_deck_hash_from_card(cards[0])
+    if deck_hash is None:
+        return None
+    store = note_status.CollabNoteStore.for_current_profile()
+    if store is None:
+        return None
+    return store.status(note.guid, deck_hash)
+
+
+def update_editor_note_status(editor) -> None:
+    """Shows on the editor buttons whether the note is already on AnkiCollab.
+
+    The editor is reused for every note opened in the browser, so the buttons
+    are set on each load, including back to their default state.
+    """
+    if getattr(editor, "web", None) is None:
+        return
+    try:
+        status = _note_status_for_editor(getattr(editor, "note", None))
+    except Exception as e:
+        logger.warning(f"Could not read the AnkiCollab status of a note: {e}")
+        status = None
+
+    suggest_label, suggest_tip, suggest_enabled, open_tip, open_enabled = (
+        _BUTTON_STATES.get(status, _DEFAULT_BUTTON_STATE)
+    )
+    _set_editor_button(
+        editor, _SUGGEST_BUTTON_ID, suggest_label, suggest_tip, suggest_enabled
+    )
+    _set_editor_button(editor, _OPEN_BUTTON_ID, None, open_tip, open_enabled)
+
+
+def refresh_note_status_record() -> None:
+    """Fills the note record of subscribed decks that do not have one yet."""
+    try:
+        store = note_status.CollabNoteStore.for_current_profile()
+        if store is None:
+            return
+        deck_hashes = [deck_hash for deck_hash, _details in DeckManager()]
+        logged_in = auth_manager.is_logged_in()
+    except Exception as e:
+        logger.warning(f"Could not prepare the AnkiCollab note record: {e}")
+        return
+
+    from .api_client import api_client
+
+    def post(endpoint, payload, timeout):
+        return api_client.post_json(endpoint, payload, timeout=timeout, auth=logged_in)
+
+    def fill():
+        try:
+            note_status.fill_missing_decks(store, deck_hashes, post)
+        except Exception as e:
+            logger.warning(f"Could not fill the AnkiCollab note record: {e}")
+
+    mw.taskman.run_in_background(fill)
 
 
 def init_add_card(addCardsDialog):
@@ -858,6 +980,7 @@ def onProfileLoaded():
     autoUpdate()
     refresh_notifications()
     retry_pending_erasures()
+    refresh_note_status_record()
     patch_successful = patch_image_occlusion_enhanced()
     logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
 
@@ -940,6 +1063,7 @@ def hooks_init():
 
     # Editor related
     gui_hooks.editor_did_init_buttons.append(init_editor_card)
+    gui_hooks.editor_did_load_note.append(update_editor_note_status)
 
     # Browser related
     gui_hooks.deck_browser_will_show_options_menu.append(
