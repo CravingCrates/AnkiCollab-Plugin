@@ -33,6 +33,7 @@ import webbrowser
 
 from . import config_manager
 from . import consent
+from . import note_status
 from .identifier import subscribe_to_deck, unsubscribe_from_deck
 from .var_defs import DEFAULT_PROTECTED_TAGS
 from .utils import get_local_deck_from_hash, DeckManager
@@ -156,6 +157,15 @@ def delete_subscription(deck_hash, parent_dialog=None):
 
     strings_data.pop(deck_hash)
     config_manager.write_config(strings_data)
+
+    try:
+        store = note_status.CollabNoteStore.for_current_profile()
+        if store is not None:
+            store.forget_deck(deck_hash)
+    except Exception as exc:
+        logger.warning(
+            f"Could not drop the AnkiCollab note record for {deck_hash}: {exc}"
+        )
 
     if also_erase:
         _erase_review_data(deck_hash)

@@ -94,6 +94,40 @@ class TestStatus:
         assert store.status("a", "keep") is NoteStatus.ON_COLLAB
         assert store.status("b", "gone") is NoteStatus.UNKNOWN
 
+    def test_forget_deck_removes_that_deck_without_touching_others(self, store):
+        store.add_notes("keep", ["a"])
+        store.add_notes("gone", ["b"])
+        store.mark_complete("keep")
+        store.mark_complete("gone")
+
+        store.forget_deck("gone")
+
+        assert store.complete_decks() == {"keep"}
+        assert store.status("a", "keep") is NoteStatus.ON_COLLAB
+        assert store.status("b", "gone") is NoteStatus.UNKNOWN
+
+    def test_forget_deck_shrinks_database_on_disk(self, store):
+        large_batch = [f"guid_{i}" for i in range(5000)]
+        store.add_notes("deck1", large_batch)
+        store.mark_complete("deck1")
+
+        size_before = store.path.stat().st_size
+        store.forget_deck("deck1")
+        size_after = store.path.stat().st_size
+
+        assert size_after < size_before
+
+    def test_forget_decks_except_shrinks_database_on_disk(self, store):
+        large_batch = [f"guid_{i}" for i in range(5000)]
+        store.add_notes("deck1", large_batch)
+        store.mark_complete("deck1")
+
+        size_before = store.path.stat().st_size
+        store.forget_decks_except([])
+        size_after = store.path.stat().st_size
+
+        assert size_after < size_before
+
     def test_forgetting_with_no_subscriptions_clears_everything(self, store):
         store.add_notes("deck1", ["a"])
         store.mark_complete("deck1")
@@ -242,9 +276,13 @@ class TestFillMissingDecks:
 
 
 class TestPullUpdatesTheRecord:
-    def _install(self, store, subscription, input_hash=None):
-        deck = MagicMock()
-        deck.anki_dict = {"name": "Deck"}
+    def _install(self, store, subscription, input_hash=None, deck=None):
+        if deck is None:
+            deck = MagicMock()
+            deck.anki_dict = {"name": "Deck"}
+            deck_data = subscription.get("deck", {})
+            deck.notes = deck_data.get("notes", [])
+            deck.children = deck_data.get("children", [])
         manager = MagicMock()
         manager.__enter__.return_value = manager
         manager.get_by_hash.return_value = None
@@ -288,7 +326,26 @@ class TestPullUpdatesTheRecord:
 
         self._install(store, subscription, input_hash="deck1")
 
+        assert store.status("a", "deck1") is NoteStatus.ON_COLLAB
         assert store.status("other", "deck1") is NoteStatus.NOT_ON_COLLAB
+
+    def test_deck_object_with_notes_having_get_uuid(self, store, mw_mock):
+        note = SimpleNamespace(get_uuid=lambda: "note-uuid")
+        deck = SimpleNamespace(
+            anki_dict={"name": "Deck"},
+            notes=[note],
+            children=[],
+            on_success_wrapper=MagicMock(),
+        )
+        subscription = {
+            "deck_hash": "deck1",
+            "stats_enabled": False,
+            "deleted_notes": [],
+        }
+
+        self._install(store, subscription, deck=deck)
+
+        assert store.status("note-uuid", "deck1") is NoteStatus.ON_COLLAB
 
     def test_a_broken_record_does_not_break_the_import(self, mw_mock):
         broken = MagicMock()
@@ -558,3 +615,63 @@ class TestRefreshAndExportUpdates:
             export_manager._submit_deck_op(deck, 1, 10, "", [], {})
 
         assert store.status("n1", "deck1") is NoteStatus.ON_COLLAB
+
+    def test_profile_changed_listener_triggers_refresh(self, store, mw_mock):
+        with (
+            patch.object(
+                note_status.CollabNoteStore,
+                "for_current_profile",
+                return_value=store,
+            ),
+            patch("hooks.refresh_note_status_record") as mock_refresh,
+        ):
+            hooks._on_profile_changed_for_note_status("Medicine")
+            mock_refresh.assert_called_once()
+
+
+class TestDeleteSubscriptionRemovesNoteStatus:
+    def test_delete_subscription_calls_forget_deck_on_store(self, store, monkeypatch):
+        import menu
+        import config_manager
+
+        config_manager.write_config({"deck1": {"deckId": 1}})
+        monkeypatch.setattr("menu.askUser", lambda *args, **kwargs: True)
+        monkeypatch.setattr("menu.unsubscribe_from_deck", lambda deck_hash: None)
+
+        store.add_notes("deck1", ["note1"])
+        store.mark_complete("deck1")
+
+        with patch.object(
+            note_status.CollabNoteStore,
+            "for_current_profile",
+            return_value=store,
+        ):
+            success = menu.delete_subscription("deck1")
+
+        assert success is True
+        assert store.status("note1", "deck1") is NoteStatus.UNKNOWN
+        assert "deck1" not in store.complete_decks()
+
+    def test_delete_subscription_does_not_fail_if_store_raises_oserror(
+        self, monkeypatch
+    ):
+        import menu
+        import config_manager
+
+        config_manager.write_config({"deck1": {"deckId": 1}})
+        monkeypatch.setattr("menu.askUser", lambda *args, **kwargs: True)
+        monkeypatch.setattr("menu.unsubscribe_from_deck", lambda deck_hash: None)
+
+        broken_store = MagicMock()
+        broken_store.forget_deck.side_effect = OSError("disk failure")
+
+        with patch.object(
+            note_status.CollabNoteStore,
+            "for_current_profile",
+            return_value=broken_store,
+        ):
+            success = menu.delete_subscription("deck1")
+
+        assert success is True
+        assert "deck1" not in config_manager.get_stored_config()
+        broken_store.forget_deck.assert_called_once_with("deck1")

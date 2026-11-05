@@ -993,7 +993,7 @@ def onProfileLoaded():
     autoUpdate()
     refresh_notifications()
     retry_pending_erasures()
-    refresh_note_status_record()
+    # Note status record refresh is handled by config_manager's profile_changed listener
     patch_successful = patch_image_occlusion_enhanced()
     logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
 
@@ -1062,10 +1062,16 @@ def register_update_decks_shortcut() -> None:
     mw.addAction(action)
 
 
+def _on_profile_changed_for_note_status(_profile_name: str) -> None:
+    """Refresh the note status record whenever a profile is activated."""
+    refresh_note_status_record()
+
+
 # --- Hook Registration ---
 def hooks_init():
     """Registers all hooks. Internal checks within callbacks manage behavior."""
     gui_hooks.profile_did_open.append(onProfileLoaded)
+    config_manager.add_profile_changed_listener(_on_profile_changed_for_note_status)
     gui_hooks.profile_will_close.append(onProfileWillClose)
     register_sync_refresh_hook()
     register_update_decks_shortcut()

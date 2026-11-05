@@ -104,14 +104,28 @@ class CollabNoteStore:
         with closing(self._connect()) as conn:
             return {row[0] for row in conn.execute("SELECT deck_hash FROM decks")}
 
+    def forget_deck(self, deck_hash: str) -> None:
+        """Drops the record of one deck."""
+        with closing(self._connect()) as conn:
+            with conn:
+                c1 = conn.execute("DELETE FROM notes WHERE deck_hash = ?", (deck_hash,))
+                c2 = conn.execute("DELETE FROM decks WHERE deck_hash = ?", (deck_hash,))
+                deleted = (c1.rowcount or 0) + (c2.rowcount or 0)
+            if deleted > 0:
+                conn.execute("VACUUM")
+
     def forget_decks_except(self, deck_hashes: Iterable[str]) -> None:
         """Drops the record of every deck that is no longer subscribed."""
         keep = list(deck_hashes)
         placeholders = ",".join("?" for _ in keep)
         condition = f"deck_hash NOT IN ({placeholders})" if keep else "1"
-        with closing(self._connect()) as conn, conn:
-            conn.execute(f"DELETE FROM notes WHERE {condition}", keep)
-            conn.execute(f"DELETE FROM decks WHERE {condition}", keep)
+        with closing(self._connect()) as conn:
+            with conn:
+                c1 = conn.execute(f"DELETE FROM notes WHERE {condition}", keep)
+                c2 = conn.execute(f"DELETE FROM decks WHERE {condition}", keep)
+                deleted = (c1.rowcount or 0) + (c2.rowcount or 0)
+            if deleted > 0:
+                conn.execute("VACUUM")
 
     def status(self, guid: str, deck_hash: str) -> NoteStatus:
         with closing(self._connect()) as conn:
