@@ -679,7 +679,7 @@ def _on_deck_installed(
             note_status.record_pull(
                 store,
                 deck_hash,
-                subscription.get("deck", {}),
+                deck,
                 deleted_notes,
                 full_deck=bool(input_hash),
             )
