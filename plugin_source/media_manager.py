@@ -57,6 +57,7 @@ ALLOWED_EXTENSIONS = {
         ".tiff",
     },
     "audio": {".mp3", ".ogg", ".oga"},
+    "script": {".js"},
 }
 ALL_ALLOWED_EXTENSIONS = set().union(*ALLOWED_EXTENSIONS.values())
 
@@ -72,6 +73,7 @@ CONTENT_TYPE_MAP = {
     ".tiff": "image/tiff",
     ".mp3": "audio/mpeg",
     ".ogg": "audio/ogg",
+    ".js": "text/javascript",
 }
 
 

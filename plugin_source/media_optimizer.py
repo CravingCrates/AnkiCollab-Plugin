@@ -56,6 +56,7 @@ ALLOWED_EXTENSIONS = [
     "tiff",
     "mp3",
     "ogg",
+    "js",
 ]
 
 FORMAT_TO_EXTENSION = {  # the bugfix we use this for does not apply to audio files so we don't need to include them
