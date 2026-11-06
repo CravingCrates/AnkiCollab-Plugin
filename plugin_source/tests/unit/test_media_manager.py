@@ -77,6 +77,10 @@ class TestMediaConstants:
         assert ".png" in ALL_ALLOWED_EXTENSIONS
         assert ".mp3" in ALL_ALLOWED_EXTENSIONS
 
+    def test_allowed_extensions_contain_notetype_scripts(self):
+        assert ".js" in ALL_ALLOWED_EXTENSIONS
+        assert CONTENT_TYPE_MAP[".js"] == "text/javascript"
+
     def test_content_type_map_covers_extensions(self):
         # .oga is in ALLOWED_EXTENSIONS but intentionally absent from
         # CONTENT_TYPE_MAP — document as known gap rather than failing.
