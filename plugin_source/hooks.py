@@ -364,6 +364,13 @@ def context_menu_bulk_suggest(browser: Browser, context_menu: QMenu) -> None:
         "AnkiCollab: Protect fields of note(s)",
         lambda: protect_fields_handler(browser, nids=selected_nids),
     )
+    if len(selected_nids) == 1:
+        from .note_history import open_note_history_for_note_id
+
+        context_menu.addAction(
+            "AnkiCollab: Note History",
+            lambda: open_note_history_for_note_id(selected_nids[0], editor=None),
+        )
 
     # Conditionally add note link creation if deck is subscribed and linked to one or more base decks
     try:
@@ -643,8 +650,23 @@ def init_editor_card(buttons: List[str], editor):
         disables=False,
     )
 
+    from .note_history import open_note_history_for_note_id
+
+    b3 = editor.addButton(
+        icon=None,
+        cmd="AnkiCollab_NoteHistory",
+        func=lambda editor=editor: open_note_history_for_note_id(
+            editor.note.id, editor=editor
+        ),
+        tip="AnkiCollab: View history and commits for this note",
+        label="AC: History",
+        keys=None,
+        disables=False,
+    )
+
     buttons.append(b)
     buttons.append(b2)
+    buttons.append(b3)
 
 
 def init_add_card(addCardsDialog):
