@@ -285,6 +285,81 @@ class TestNoteModelFileProvider:
             for fname in probes:
                 assert _model_references(model, fname) is reference(model, fname)
 
+    def test_modern_path_existing_only_false_includes_non_existing(
+        self, monkeypatch, media_dir
+    ):
+        set_anki_version(monkeypatch, 250100)
+        static = {1: ["_logo.png", "_missing.png"], 2: ["_bg.jpg"]}
+        col = FakeCollection(MODELS, FakeMediaModern(media_dir, static))
+        # With existing_only=True (default), missing file on disk is excluded
+        assert NoteModelFileProvider(col, [1]).get_files(existing_only=True) == {
+            "_logo.png"
+        }
+        # With existing_only=False, missing file on disk is included
+        assert NoteModelFileProvider(col, [1]).get_files(existing_only=False) == {
+            "_logo.png",
+            "_missing.png",
+        }
+
+    def test_modern_path_filters_disallowed_filenames(self, monkeypatch, media_dir):
+        set_anki_version(monkeypatch, 250100)
+        static = {1: ["_logo.png", "_blank", "_self"]}
+        col = FakeCollection(MODELS, FakeMediaModern(media_dir, static))
+        assert NoteModelFileProvider(col, [1]).get_files(existing_only=False) == {
+            "_logo.png"
+        }
+
+    def test_legacy_path_existing_only_false_uses_regex(self, monkeypatch, media_dir):
+        set_anki_version(monkeypatch, 50)
+        empty_dir = media_dir / "empty_dir"
+        empty_dir.mkdir()
+        col = FakeCollection(MODELS, FakeMediaLegacy(empty_dir))
+        # With existing_only=True, returns empty set because nothing is on disk
+        assert NoteModelFileProvider(col, [1, 2]).get_files(existing_only=True) == set()
+        # With existing_only=False, extracts referenced files from templates & CSS via regex
+        assert NoteModelFileProvider(col, [1, 2]).get_files(existing_only=False) == {
+            "_logo.png",
+            "_bg.jpg",
+        }
+
+    def test_legacy_path_regex_extracts_imports_urls_sounds_and_filters_blank(
+        self, monkeypatch, media_dir
+    ):
+        set_anki_version(monkeypatch, 50)
+        complex_model = make_model(
+            3,
+            css=(
+                "@import \"_styles.css\"; @import '_extra.css'; "
+                '.card { background: url("_bg.png"); font-family: url("_font.woff2"); }'
+            ),
+            tmpls=[
+                {
+                    "name": "Card 1",
+                    "qfmt": (
+                        '<script src="_script.js"></script>'
+                        '<a target="_blank">link</a>[sound:_beep.mp3]'
+                    ),
+                    "afmt": '<div data="_data.svg"></div>"_self" "_top"',
+                }
+            ],
+        )
+        empty_dir = media_dir / "empty_regex"
+        empty_dir.mkdir()
+        col = FakeCollection([complex_model], FakeMediaLegacy(empty_dir))
+        files = NoteModelFileProvider(col, [3]).get_files(existing_only=False)
+        assert files == {
+            "_styles.css",
+            "_extra.css",
+            "_bg.png",
+            "_font.woff2",
+            "_script.js",
+            "_beep.mp3",
+            "_data.svg",
+        }
+        assert "_blank" not in files
+        assert "_self" not in files
+        assert "_top" not in files
+
 
 class TestDeckInitializer:
     def test_from_collection_returns_none_when_deck_missing(self):

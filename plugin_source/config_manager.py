@@ -652,14 +652,18 @@ def _is_main_thread() -> bool:
 
 
 def _profile_name_from_mw() -> Optional[str]:
-    """``mw.pm.name``, or ``None``.
+    """The open profile's ``mw.pm.name``, or ``None``.
 
     ``isinstance(name, str)`` matters: in the unit-test harness ``mw`` is a
     ``MagicMock``, so ``mw.pm.name`` is a truthy MagicMock rather than a name.
+    Anki can expose the selected profile name while the profile selector is
+    still open, so the collection must also exist before treating it as open.
     """
     try:
         from aqt import mw
 
+        if getattr(mw, "col", None) is None:
+            return None
         manager = getattr(getattr(mw, "pm", None), "name", None)
         if isinstance(manager, str) and manager:
             return manager

@@ -241,6 +241,19 @@ class TestGetMediaFileList:
             result = deck.get_media_file_list(data_from_models=True)
         assert result == {"tmpl.png"}
 
+    def test_data_from_models_calls_existing_only_false(self):
+        deck = _deck()
+        deck.collection = create_mock_collection()
+        deck.collection.media.files_in_str.return_value = []
+        deck.notes = []
+        deck.metadata = DeckMetadata(models={}, deck_configs={})
+        with patch.object(
+            Deck, "_get_media_from_models", return_value={"_missing_static.css"}
+        ) as mock_get_models:
+            result = deck.get_media_file_list(data_from_models=True)
+            mock_get_models.assert_called_once_with(existing_only=False)
+            assert result == {"_missing_static.css"}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # get_media_file_note_map
@@ -345,3 +358,77 @@ class TestUpdateDb:
         with patch.object(deck_module.utils, "add_column") as mock_add:
             deck._update_db()
         mock_add.assert_called_once_with(deck.collection.db, "notes", UUID_FIELD_NAME)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# get_notetype_media_file_map
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestGetNotetypeMediaFileMap:
+    def test_extracts_existing_static_files_sorted(self):
+        deck = _deck()
+        deck.collection = create_mock_collection()
+        model = make_notetype(name="Basic", model_uuid="m1", model_id=10)
+        deck.metadata = DeckMetadata(models={"m1": NoteModel(model)}, deck_configs={})
+
+        mock_provider = MagicMock()
+        mock_provider.get_files.return_value = {
+            "_style.css",
+            "_script.js",
+            "ignored_no_underscore.png",
+        }
+        deck.file_provider_supplier = MagicMock(return_value=mock_provider)
+
+        result = deck.get_notetype_media_file_map(include_children=False)
+        deck.file_provider_supplier.assert_called_once_with(deck.collection, [10])
+        mock_provider.get_files.assert_called_once_with(existing_only=True)
+        assert result == [("_script.js", "m1"), ("_style.css", "m1")]
+
+    def test_includes_children_and_deduplicates(self):
+        deck = _deck()
+        deck.collection = create_mock_collection()
+        m1 = make_notetype(name="ParentModel", model_uuid="m1", model_id=10)
+        deck.metadata = DeckMetadata(models={"m1": NoteModel(m1)}, deck_configs={})
+
+        p_provider = MagicMock()
+        p_provider.get_files.return_value = {"_parent.js"}
+        deck.file_provider_supplier = MagicMock(return_value=p_provider)
+
+        child = _deck(is_child=True)
+        child.collection = deck.collection
+        # Child has both m2 and duplicate m1
+        m2 = make_notetype(name="ChildModel", model_uuid="m2", model_id=20)
+        child.metadata = DeckMetadata(
+            models={"m1": NoteModel(m1), "m2": NoteModel(m2)}, deck_configs={}
+        )
+
+        def child_supplier(col, model_ids):
+            prov = MagicMock()
+            if model_ids == [10]:
+                prov.get_files.return_value = {"_parent.js"}
+            else:
+                prov.get_files.return_value = {"_child.css"}
+            return prov
+
+        child.file_provider_supplier = child_supplier
+        deck.children = [child]
+
+        result = deck.get_notetype_media_file_map(include_children=True)
+        assert result == [("_parent.js", "m1"), ("_child.css", "m2")]
+
+    def test_model_without_id_or_exception_is_handled_safely(self):
+        deck = _deck()
+        deck.collection = create_mock_collection()
+        m1 = make_notetype(name="NoId", model_uuid="m1", model_id=None)
+        m2 = make_notetype(name="ErrorModel", model_uuid="m2", model_id=20)
+        deck.metadata = DeckMetadata(
+            models={"m1": NoteModel(m1), "m2": NoteModel(m2)}, deck_configs={}
+        )
+
+        mock_provider = MagicMock()
+        mock_provider.get_files.side_effect = RuntimeError("disk error")
+        deck.file_provider_supplier = MagicMock(return_value=mock_provider)
+
+        result = deck.get_notetype_media_file_map(include_children=False)
+        assert result == []

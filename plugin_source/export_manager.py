@@ -885,6 +885,7 @@ def _sync_run_async(coro, *args, **kwargs):
 
 def _sync_optimize_media_and_update_refs(
     media_files: List[Tuple[str, str]],
+    notetype_media_files: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[Dict[str, str], List[Dict], Dict[str, str]]:
     """
     Synchronous wrapper to ONLY optimize media.
@@ -894,12 +895,13 @@ def _sync_optimize_media_and_update_refs(
     """
     check_collection_or_abort("media_optimization_start")
 
-    if not media_files:
+    if not media_files and not notetype_media_files:
         logger.info("No media files provided for optimization.")
         return {}, [], {}
 
+    total_count = len(media_files or []) + len(notetype_media_files or [])
     logger.info(
-        f"Starting media optimization for {len(media_files)} files in background task."
+        f"Starting media optimization for {total_count} files in background task."
     )
 
     def progress_callback(p: float):
@@ -919,7 +921,10 @@ def _sync_optimize_media_and_update_refs(
 
     try:
         filename_mapping, files_info, file_paths = _sync_run_async(
-            main.media_manager.optimize_media_for_upload, media_files, progress_callback
+            main.media_manager.optimize_media_for_upload,
+            media_files,
+            progress_callback,
+            notetype_media_files,
         )
         logger.info(
             f"Background media optimization finished. {len(filename_mapping)} files mapped."
@@ -1872,13 +1877,25 @@ def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
         # Media Preparation
         protected_fields = deck_repr.get_protected_fields(deck_hash)
         media_files = deck_repr.get_media_file_note_map(protected_fields)
+        notetype_media_files = deck_repr.get_notetype_media_file_map()
 
-        # remove all entries from media_files that are not in the missing_files list
+        # remove all entries that are not in the missing_files list
         media_files = [
             (filename, note_guid)
             for filename, note_guid in media_files
             if filename in missing_files
         ]
+        notetype_media_files = [
+            (filename, notetype_guid)
+            for filename, notetype_guid in notetype_media_files
+            if filename in missing_files
+        ]
+
+        if not media_files and not notetype_media_files:
+            aqt.utils.showInfo(
+                "No missing media files to upload.", parent=parent_widget
+            )
+            return
 
         # --- Start Background Operations ---
         logger.info("Starting media upload process...")
@@ -1886,7 +1903,9 @@ def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
         # Step 1: Optimize Media (Background Op)
         op_optimize = QueryOp(
             parent=parent_widget,
-            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
+            op=lambda col: _sync_optimize_media_and_update_refs(
+                media_files, notetype_media_files
+            ),
             success=lambda result: _on_suggest_media_only_optimized(result, deck_repr, media_files, did),  # type: ignore
         )
         op_optimize.with_progress("Optimizing media files...")
@@ -1969,6 +1988,7 @@ def handle_export(did: int):
         # --- Media Preparation (Main Thread) ---
         protected_fields = deck_repr.get_protected_fields(None)  # No hash yet
         media_files = deck_repr.get_media_file_note_map(protected_fields)
+        notetype_media_files = deck_repr.get_notetype_media_file_map()
 
         # --- Start Background Operations ---
         logger.info("Starting new deck export process...")
@@ -1986,7 +2006,9 @@ def handle_export(did: int):
         # Step 1: Optimize Media (Background Op)
         op_optimize = QueryOp(
             parent=parent_widget,
-            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
+            op=lambda col: _sync_optimize_media_and_update_refs(
+                media_files, notetype_media_files
+            ),
             success=lambda result: _on_export_media_optimized(
                 result, deck_repr, did, media_files
             ),

@@ -44,6 +44,34 @@ OPTIMIZABLE_INPUT_EXTENSIONS = [
     # SVG handled separately, audio files not optimized
 ]
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_STATIC_CODE_SIZE = 1 * 1024 * 1024  # 1 MB
+MAX_FONT_SIZE = 3 * 1024 * 1024  # 3 MB
+
+STATIC_ALLOWED_EXTENSIONS = {".js", ".css", ".ttf", ".otf", ".woff", ".woff2"}
+STATIC_CODE_EXTENSIONS = {".js", ".css"}
+STATIC_FONT_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2"}
+
+CONTENT_TYPE_MAP = {
+    ".webp": "image/webp",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
+
 ALLOWED_EXTENSIONS = [
     "jpg",
     "jpeg",
@@ -137,14 +165,24 @@ def sanitize_filename(filename):
         return False
 
     path = Path(filename)
-    ext = path.suffix.lower().lstrip(".")
+    suffix = path.suffix.lower()
+    ext = suffix.lstrip(".")
 
     if not ext:
         return False
 
-    # Check if extension is valid
-    if ext not in ALLOWED_EXTENSIONS:
+    # Check if extension is valid (standard media or static media)
+    is_static_ext = suffix in STATIC_ALLOWED_EXTENSIONS
+    if ext not in ALLOWED_EXTENSIONS and not is_static_ext:
         return None  # Invalid extension, can't sanitize
+
+    # Files starting with '_' (static media) are NEVER renamed
+    if filename.startswith("_"):
+        return filename
+
+    # Non-_ files cannot have static extensions (.js, .css, fonts)
+    if is_static_ext:
+        return None
 
     if is_allowed_filename(filename):
         return filename
@@ -376,6 +414,11 @@ async def optimize_media_file(filename, filepath_obj):
     Returns:
         Tuple of (optimized filepath string, new filename, whether optimization occurred)
     """
+    # Static media files starting with '_' are NEVER renamed and NEVER optimized
+    if filename.startswith("_"):
+        logger.debug(f"Skipping optimization and renaming for static file: {filename}")
+        return str(filepath_obj), filename, False
+
     sanitized_name = sanitize_filename(filename)
     if sanitized_name is None:
         logger.warning(f"Skipping file with invalid extension: {filename}")

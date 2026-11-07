@@ -21,10 +21,14 @@ from media_manager import (
     MediaDownloadError,
     MAX_REQUESTS_PER_MINUTE,
     MAX_FILE_SIZE,
+    MAX_STATIC_CODE_SIZE,
+    MAX_FONT_SIZE,
     UPLOAD_CONCURRENCY,
     ALLOWED_EXTENSIONS,
     ALL_ALLOWED_EXTENSIONS,
+    STATIC_ALLOWED_EXTENSIONS,
     CONTENT_TYPE_MAP,
+    max_file_size_for_filename,
 )
 
 # ──────────────────────────────────────────────────────────────────────
@@ -84,6 +88,35 @@ class TestMediaConstants:
         assert missing <= {
             ".oga"
         }, f"Unexpected missing content types: {missing - {'.oga'}}"
+
+    def test_static_allowed_extensions_and_content_type_map(self):
+        expected_static = {".js", ".css", ".ttf", ".otf", ".woff", ".woff2"}
+        assert STATIC_ALLOWED_EXTENSIONS == expected_static
+        assert CONTENT_TYPE_MAP[".js"] == "application/javascript"
+        assert CONTENT_TYPE_MAP[".css"] == "text/css"
+        assert CONTENT_TYPE_MAP[".ttf"] == "font/ttf"
+        assert CONTENT_TYPE_MAP[".otf"] == "font/otf"
+        assert CONTENT_TYPE_MAP[".woff"] == "font/woff"
+        assert CONTENT_TYPE_MAP[".woff2"] == "font/woff2"
+
+    def test_max_file_size_for_filename_enforces_limits(self):
+        # 1 MB for .js/.css when _-prefixed
+        assert max_file_size_for_filename("_test.js") == 1 * 1024 * 1024
+        assert max_file_size_for_filename("_style.css") == 1 * 1024 * 1024
+        # 3 MB for fonts when _-prefixed
+        assert max_file_size_for_filename("_font.ttf") == 3 * 1024 * 1024
+        assert max_file_size_for_filename("_font.otf") == 3 * 1024 * 1024
+        assert max_file_size_for_filename("_font.woff") == 3 * 1024 * 1024
+        assert max_file_size_for_filename("_font.woff2") == 3 * 1024 * 1024
+        # 10 MB for standard images and audio
+        assert max_file_size_for_filename("image.png") == 10 * 1024 * 1024
+        assert max_file_size_for_filename("_image.png") == 10 * 1024 * 1024
+        assert max_file_size_for_filename("sound.mp3") == 10 * 1024 * 1024
+        # Rejected (None) for non-_-prefixed code/fonts or unknown extensions
+        assert max_file_size_for_filename("test.js") is None
+        assert max_file_size_for_filename("style.css") is None
+        assert max_file_size_for_filename("font.woff2") is None
+        assert max_file_size_for_filename("_executable.exe") is None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -338,3 +371,156 @@ class TestDownloadFilePathTraversal:
         evil_path = evil_dir / "payload.txt"
         result = await mm.download_file("http://example.com/file.png", evil_path)
         assert result is False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# optimize_media_for_upload with notetype_file_pairs & static media
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestOptimizeMediaForUploadStaticFiles:
+    @pytest.fixture
+    def mm(self, tmp_media_dir, mw_mock):
+        mw_mock.col.media.dir.return_value = str(tmp_media_dir)
+        return MediaManager(
+            api_base_url="http://test.local", media_folder=str(tmp_media_dir)
+        )
+
+    @pytest.mark.asyncio
+    async def test_notetype_and_underscore_files_skip_optimization_and_renaming(
+        self, mm, tmp_media_dir
+    ):
+        js_file = tmp_media_dir / "_code.js"
+        js_file.write_bytes(b"console.log('hello');")
+
+        svg_file = tmp_media_dir / "_vector.svg"
+        svg_file.write_bytes(b"<svg></svg>")
+
+        png_file = tmp_media_dir / "_image.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        woff2_file = tmp_media_dir / "_font.woff2"
+        woff2_file.write_bytes(b"wOF2" + b"\x00" * 50)
+
+        notetype_pairs = [
+            ("_code.js", "nt-guid-1"),
+            ("_vector.svg", "nt-guid-1"),
+            ("_font.woff2", "nt-guid-1"),
+        ]
+        note_pairs = [
+            ("_image.png", "note-guid-1"),
+        ]
+
+        with (
+            patch("media_optimizer.optimize_svg_files") as mock_opt_svg,
+            patch("media_optimizer.optimize_media_file") as mock_opt_file,
+        ):
+            mapping, files_info, file_paths = await mm.optimize_media_for_upload(
+                file_note_pairs=note_pairs,
+                notetype_file_pairs=notetype_pairs,
+            )
+
+        # 1. _ files are NEVER renamed (mapping is empty)
+        assert mapping == {}
+
+        # 2. _ files are NEVER sent to optimize_svg_files or optimize_media_file
+        mock_opt_svg.assert_not_called()
+        mock_opt_file.assert_not_called()
+
+        # 3. All 4 static files are collected with on-disk hash and paths
+        filenames = {f["filename"] for f in files_info}
+        assert filenames == {"_code.js", "_vector.svg", "_font.woff2", "_image.png"}
+
+        # 4. Correct notetype_guid and note_guid fields
+        for f in files_info:
+            if f["filename"] in {"_code.js", "_vector.svg", "_font.woff2"}:
+                assert f["notetype_guid"] == "nt-guid-1"
+                assert f["note_guid"] == ""
+            elif f["filename"] == "_image.png":
+                assert f["note_guid"] == "note-guid-1"
+
+            assert f["hash"] in file_paths
+            assert os.path.exists(file_paths[f["hash"]])
+
+    @pytest.mark.asyncio
+    async def test_size_limits_and_rejections_enforced(self, mm, tmp_media_dir):
+        # 1. Over 1 MB .js is rejected
+        huge_js = tmp_media_dir / "_huge.js"
+        huge_js.write_bytes(b"x" * (1 * 1024 * 1024 + 10))
+
+        # 2. Under 1 MB .js is accepted
+        valid_js = tmp_media_dir / "_valid.js"
+        valid_js.write_bytes(b"x" * 500)
+
+        # 3. Over 3 MB font is rejected
+        huge_font = tmp_media_dir / "_huge.woff2"
+        huge_font.write_bytes(b"x" * (3 * 1024 * 1024 + 10))
+
+        # 4. Under 3 MB font is accepted
+        valid_font = tmp_media_dir / "_valid.woff2"
+        valid_font.write_bytes(b"x" * 500)
+
+        # 5. Non-_ static code/fonts are rejected
+        non_underscore_js = tmp_media_dir / "script.js"
+        non_underscore_js.write_bytes(b"x" * 100)
+
+        non_underscore_font = tmp_media_dir / "font.ttf"
+        non_underscore_font.write_bytes(b"x" * 100)
+
+        notetype_pairs = [
+            ("_huge.js", "nt-guid"),
+            ("_valid.js", "nt-guid"),
+            ("_huge.woff2", "nt-guid"),
+            ("_valid.woff2", "nt-guid"),
+            ("script.js", "nt-guid"),
+            ("font.ttf", "nt-guid"),
+        ]
+        note_pairs = [
+            ("script.js", "note-guid"),
+            ("font.ttf", "note-guid"),
+        ]
+
+        mapping, files_info, file_paths = await mm.optimize_media_for_upload(
+            file_note_pairs=note_pairs,
+            notetype_file_pairs=notetype_pairs,
+        )
+
+        accepted_names = {f["filename"] for f in files_info}
+        assert accepted_names == {"_valid.js", "_valid.woff2"}
+
+    @pytest.mark.asyncio
+    async def test_static_code_rejected_in_file_note_pairs_accepted_in_notetype_file_pairs(
+        self, mm, tmp_media_dir
+    ):
+        script_file = tmp_media_dir / "_script.js"
+        script_file.write_bytes(b"console.log('static test');")
+
+        # 1. When passed in file_note_pairs, _script.js is rejected
+        _, files_info_note, _ = await mm.optimize_media_for_upload(
+            file_note_pairs=[("_script.js", "note-guid-1")],
+            notetype_file_pairs=[],
+        )
+        assert len(files_info_note) == 0
+
+        # 2. When passed in notetype_file_pairs, _script.js is accepted
+        _, files_info_nt, _ = await mm.optimize_media_for_upload(
+            file_note_pairs=[],
+            notetype_file_pairs=[("_script.js", "nt-guid-1")],
+        )
+        assert len(files_info_nt) == 1
+        assert files_info_nt[0]["filename"] == "_script.js"
+        assert files_info_nt[0]["notetype_guid"] == "nt-guid-1"
+        assert files_info_nt[0]["note_guid"] == ""
+
+        # 3. When both are passed, only the notetype entry is accepted
+        _, files_info_both, _ = await mm.optimize_media_for_upload(
+            file_note_pairs=[("_script.js", "note-guid-1")],
+            notetype_file_pairs=[("_script.js", "nt-guid-1")],
+        )
+        assert len(files_info_both) == 1
+        assert files_info_both[0]["filename"] == "_script.js"
+        assert files_info_both[0]["notetype_guid"] == "nt-guid-1"
+        assert files_info_both[0]["note_guid"] == ""
+
+        # 4. Basic validation accepts authorized notetype static files
+        assert mm.validate_file_basic(script_file) is True

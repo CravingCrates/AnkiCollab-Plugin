@@ -1,5 +1,5 @@
 from collections import namedtuple, defaultdict
-from typing import Callable, Any, Iterable, List, Dict, Optional
+from typing import Callable, Any, Iterable, List, Dict, Optional, Tuple
 
 from .deck_config import DeckConfig
 from .json_serializable import JsonSerializableAnkiDict
@@ -176,7 +176,11 @@ class Deck(JsonSerializableAnkiDict):
             for child in self.children:
                 media |= child.get_media_file_list(False, include_children)
 
-        return media | (self._get_media_from_models() if data_from_models else set())
+        return media | (
+            self._get_media_from_models(existing_only=False)
+            if data_from_models
+            else set()
+        )
 
     def get_protected_fields(self, deckHash):
         # Create result structure with caches
@@ -271,7 +275,7 @@ class Deck(JsonSerializableAnkiDict):
         for child in self.children:
             child.refresh_notes(media_file_note_pairs)
 
-    def _get_media_from_models(self):
+    def _get_media_from_models(self, existing_only: bool = False):
         """Extract media files referenced in notetype templates."""
         if not self.metadata or not self.metadata.models:
             return set()
@@ -294,11 +298,51 @@ class Deck(JsonSerializableAnkiDict):
 
         try:
             file_provider = self.file_provider_supplier(self.collection, model_ids)
-            return file_provider.get_files()
+            return file_provider.get_files(existing_only=existing_only)
         except Exception as e:
             logger.error(f"Error getting media files from models: {e}", exc_info=True)
             _report_exception(e)
             return set()
+
+    def get_notetype_media_file_map(
+        self, include_children: bool = True
+    ) -> List[Tuple[str, str]]:
+        """Extract mapping of (filename, note_model_uuid) for existing local static files (_*)."""
+        result = []
+        seen = set()
+
+        if self.metadata and self.metadata.models:
+            for note_model_uuid, note_model in self.metadata.models.items():
+                model_id = note_model.anki_dict.get("id")
+                if model_id is None:
+                    continue
+                try:
+                    file_provider = self.file_provider_supplier(
+                        self.collection, [model_id]
+                    )
+                    files = file_provider.get_files(existing_only=True)
+                except Exception as e:
+                    logger.error(
+                        f"Error getting media files for model {note_model_uuid}: {e}",
+                        exc_info=True,
+                    )
+                    continue
+
+                for fname in sorted(files):
+                    if fname.startswith("_"):
+                        pair = (fname, note_model_uuid)
+                        if pair not in seen:
+                            seen.add(pair)
+                            result.append(pair)
+
+        if include_children:
+            for child in self.children:
+                for pair in child.get_notetype_media_file_map(include_children):
+                    if pair not in seen:
+                        seen.add(pair)
+                        result.append(pair)
+
+        return result
 
     # This is a little gadget i wrote, because in ankicollab the note_models are in the deck that use it, not in the topmost deck. So in the "OG" Deck we aggregate all notetypes
     def _add_models_from_children(self, json_dict, note_models_list):

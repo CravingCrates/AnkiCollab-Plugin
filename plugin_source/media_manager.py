@@ -36,6 +36,8 @@ logger = get_logger("ankicollab.media_manager")
 MAX_REQUESTS_PER_MINUTE = 1000
 REQUEST_TRACKING_WINDOW = 60
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_STATIC_CODE_SIZE = 1 * 1024 * 1024  # 1 MB (.js, .css)
+MAX_FONT_SIZE = 3 * 1024 * 1024  # 3 MB (.ttf, .otf, .woff, .woff2)
 CHUNK_SIZE = 131072  # 128KB
 REQUEST_TIMEOUT = 30
 VERIFY_SSL = True
@@ -60,6 +62,10 @@ ALLOWED_EXTENSIONS = {
 }
 ALL_ALLOWED_EXTENSIONS = set().union(*ALLOWED_EXTENSIONS.values())
 
+STATIC_ALLOWED_EXTENSIONS = {".js", ".css", ".ttf", ".otf", ".woff", ".woff2"}
+STATIC_CODE_EXTENSIONS = {".js", ".css"}
+STATIC_FONT_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2"}
+
 CONTENT_TYPE_MAP = {
     ".webp": "image/webp",
     ".jpg": "image/jpeg",
@@ -72,7 +78,28 @@ CONTENT_TYPE_MAP = {
     ".tiff": "image/tiff",
     ".mp3": "audio/mpeg",
     ".ogg": "audio/ogg",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
 }
+
+
+def max_file_size_for_filename(filename: Union[str, Path]) -> Optional[int]:
+    """Return max file size allowed for filename based on its type and whether it's a static file (_ prefix)."""
+    path = Path(filename)
+    name = path.name
+    ext = path.suffix.lower()
+    if ext in ALL_ALLOWED_EXTENSIONS:
+        return MAX_FILE_SIZE  # 10 MB
+    if name.startswith("_"):
+        if ext in STATIC_CODE_EXTENSIONS:
+            return MAX_STATIC_CODE_SIZE  # 1 MB
+        if ext in STATIC_FONT_EXTENSIONS:
+            return MAX_FONT_SIZE  # 3 MB
+    return None
 
 
 # --- Exception Classes  ---
@@ -692,9 +719,17 @@ class MediaManager:
 
         return await loop.run_in_executor(self.thread_executor, calculate_hash)
 
-    def _is_allowed_file_type(self, filename: Union[str, Path]) -> bool:
-        ext = Path(filename).suffix.lower()
-        return ext in ALL_ALLOWED_EXTENSIONS
+    def _is_allowed_file_type(
+        self, filename: Union[str, Path], is_static: bool = False
+    ) -> bool:
+        path = Path(filename)
+        name = path.name
+        ext = path.suffix.lower()
+        if ext in ALL_ALLOWED_EXTENSIONS:
+            return True
+        if ext in STATIC_ALLOWED_EXTENSIONS:
+            return is_static and name.startswith("_")
+        return False
 
     async def compute_file_hash_and_size(
         self, filepath: Union[str, Path], *, bypass_cache: bool = False
@@ -750,8 +785,9 @@ class MediaManager:
                 f"Unexpected error computing file hash for {filepath}: {str(e)}"
             ) from e
 
-    def validate_file_basic(self, filepath: Path) -> bool:
+    def validate_file_basic(self, filepath: Union[str, Path]) -> bool:
         try:
+            filepath = Path(filepath)
             if not filepath.exists() or not filepath.is_file():
                 logger.warning(f"File does not exist: {filepath}")
                 return False
@@ -766,8 +802,17 @@ class MediaManager:
                 logger.warning(f"File is empty: {filepath}")
                 return False
 
-            if not self._is_allowed_file_type(filepath):
+            if not self._is_allowed_file_type(
+                filepath, is_static=filepath.name.startswith("_")
+            ):
                 logger.warning(f"File type not allowed: {filepath.suffix}")
+                return False
+
+            max_size = max_file_size_for_filename(filepath)
+            if max_size is None or file_size > max_size:
+                logger.warning(
+                    f"File exceeds size limit ({file_size} > {max_size}): {filepath}"
+                )
                 return False
 
             # Server now performs content validation; keep only minimal local checks
@@ -798,7 +843,8 @@ class MediaManager:
         file_size = filepath.stat().st_size
         base_context["file_size"] = file_size
 
-        if file_size > MAX_FILE_SIZE:
+        max_size = max_file_size_for_filename(filepath)
+        if max_size is None or file_size > max_size:
             exc = MediaTypeError(f"File exceeds size limit: {file_size} bytes")
             self._raise_with_metadata(exc, {**base_context, "reason": "file_too_large"})
 
@@ -1516,7 +1562,10 @@ class MediaManager:
                 self._raise_with_metadata(exc, context, cause=e)
 
     async def optimize_media_for_upload(
-        self, file_note_pairs: List[Tuple[str, str]], progress_callback=None
+        self,
+        file_note_pairs: List[Tuple[str, str]],
+        progress_callback=None,
+        notetype_file_pairs: Optional[List[Tuple[str, str]]] = None,
     ) -> Tuple[Dict[str, str], List[Dict], Dict[str, str]]:
         # Ensure media_optimizer is available
         try:
@@ -1529,7 +1578,7 @@ class MediaManager:
         file_paths = {}
         filename_mapping = {}
 
-        if not file_note_pairs:
+        if not file_note_pairs and not notetype_file_pairs:
             return filename_mapping, files_info, file_paths
 
         base_dir = mw.col.media.dir() if mw.col else None
@@ -1537,27 +1586,102 @@ class MediaManager:
             logger.error("Anki media directory not found. Cannot process media.")
             return {}, [], {}
 
+        # Process notetype static files: skip optimization, skip renaming, directly compute hash and size
+        if notetype_file_pairs:
+            for filename, notetype_guid in notetype_file_pairs:
+                if not filename:
+                    continue
+                # Notetype static files MUST start with '_'
+                if not filename.startswith("_"):
+                    logger.warning(
+                        f"Skipping notetype static file without '_' prefix: {filename}"
+                    )
+                    continue
+                filepath = os.path.join(base_dir, filename)
+                filepath_obj = Path(filepath)
+                if not filepath_obj.exists() or not filepath_obj.is_file():
+                    continue
+                if not self._is_allowed_file_type(filepath_obj, is_static=True):
+                    continue
+                max_size = max_file_size_for_filename(filepath_obj)
+                if max_size is None:
+                    continue
+                try:
+                    file_size = filepath_obj.stat().st_size
+                except OSError:
+                    continue
+                if file_size <= 0 or file_size > max_size:
+                    continue
+
+                try:
+                    file_hash, file_size = await self.compute_file_hash_and_size(
+                        filepath_obj
+                    )
+                    files_info.append(
+                        {
+                            "hash": file_hash,
+                            "filename": filename,
+                            "note_guid": "",
+                            "notetype_guid": notetype_guid,
+                            "file_size": file_size,
+                        }
+                    )
+                    file_paths[file_hash] = str(filepath_obj)
+                except Exception as e:
+                    logger.error(
+                        f"Error processing notetype static file {filename}: {e}"
+                    )
+
         svg_files = []
         regular_files = []
 
-        # Simple file categorization - all files get sanitized filenames
-        logger.info(f"Starting file categorization for {len(file_note_pairs)} files...")
+        total_note_files = len(file_note_pairs) if file_note_pairs else 0
+        logger.info(f"Starting file categorization for {total_note_files} files...")
         if progress_callback:
             progress_callback(0.05)  # 5% - started categorization
 
-        for filename, note_guid in file_note_pairs:
+        for filename, note_guid in file_note_pairs or []:
             if not filename:
                 continue
 
             filepath = os.path.join(base_dir, filename)
             filepath_obj = Path(filepath)
 
-            if not filepath_obj.exists() or not self._is_allowed_file_type(filepath):
+            if not filepath_obj.exists() or not filepath_obj.is_file():
+                continue
+
+            if not self._is_allowed_file_type(filepath_obj):
+                continue
+
+            max_size = max_file_size_for_filename(filepath_obj)
+            if max_size is None:
                 continue
 
             try:
                 file_size = filepath_obj.stat().st_size
             except OSError:
+                continue
+
+            if file_size <= 0 or file_size > max_size:
+                continue
+
+            # Files starting with '_' (static files in notes) MUST skip optimization and renaming
+            if filename.startswith("_"):
+                try:
+                    file_hash, file_size = await self.compute_file_hash_and_size(
+                        filepath_obj
+                    )
+                    files_info.append(
+                        {
+                            "hash": file_hash,
+                            "filename": filename,
+                            "note_guid": note_guid,
+                            "file_size": file_size,
+                        }
+                    )
+                    file_paths[file_hash] = str(filepath_obj)
+                except Exception as e:
+                    logger.error(f"Error processing _-prefixed file {filename}: {e}")
                 continue
 
             # Categorize by type - all files get filename sanitization

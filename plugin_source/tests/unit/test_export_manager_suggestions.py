@@ -25,6 +25,7 @@ import export_manager
 from export_manager import (
     _on_suggest_deck_prepared,
     _submit_deck_op,
+    start_suggest_missing_media,
     suggest_notes,
 )
 from utils import OperationAbortedError
@@ -689,3 +690,113 @@ class TestOnSuggestDeckPrepared:
             _on_suggest_deck_prepared(("deck", []), 7, "hash", 5, None)
 
         show_exception.assert_called_once()
+
+    def test_suggest_deck_prepared_optimizes_only_note_media_without_notetype_media(
+        self, mw_mock
+    ):
+        with (
+            patch("export_manager.is_collection_available", return_value=True),
+            patch("export_manager.get_maintainer_data", return_value=("tok", False)),
+            patch("export_manager.get_commit_info", return_value=(5, "rationale")),
+            patch("export_manager.QueryOp") as query_op,
+            patch("export_manager._sync_optimize_media_and_update_refs") as optimize,
+        ):
+            media_files = [("note_pic.png", "guid-1")]
+            _on_suggest_deck_prepared(("deck", media_files), 7, "hash", 5, None)
+            query_op.call_args.kwargs["op"](None)
+
+        optimize.assert_called_once_with(media_files)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# start_suggest_missing_media
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestStartSuggestMissingMedia:
+    def test_passes_filtered_note_media_and_notetype_media_to_optimizer(self, mw_mock):
+        deck_hash = "deck_hash_123"
+        did = 42
+        missing_files = ["note1.png", "_script.js"]
+        webresult = (deck_hash, missing_files)
+
+        mw_mock.col.decks.get.return_value = {
+            "id": did,
+            "name": "TestDeck",
+            "dyn": False,
+        }
+        mw_mock.col.decks.name.return_value = "TestDeck"
+
+        deck_repr = MagicMock()
+        deck_repr.anki_dict = {}
+        deck_repr.get_protected_fields.return_value = set()
+        deck_repr.get_media_file_note_map.return_value = [
+            ("note1.png", "note-guid-1"),
+            ("note2.png", "note-guid-2"),
+        ]
+        deck_repr.get_notetype_media_file_map.return_value = [
+            ("_script.js", "model-uuid-1"),
+            ("_unused.css", "model-uuid-2"),
+        ]
+
+        with (
+            patch("export_manager.is_collection_available", return_value=True),
+            patch("export_manager.get_did_from_hash", return_value=did),
+            patch("export_manager.disambiguate_note_model_uuids"),
+            patch(
+                "export_manager.deck_initializer.from_collection",
+                return_value=deck_repr,
+            ),
+            patch("export_manager.deck_initializer.trim_empty_children"),
+            patch("export_manager.QueryOp") as query_op,
+            patch("export_manager._sync_optimize_media_and_update_refs") as optimize,
+        ):
+            start_suggest_missing_media(webresult)
+
+            assert query_op.called
+            query_op.call_args.kwargs["op"](None)
+
+            optimize.assert_called_once_with(
+                [("note1.png", "note-guid-1")],
+                [("_script.js", "model-uuid-1")],
+            )
+            query_op.return_value.run_in_background.assert_called_once()
+
+    def test_no_missing_media_shows_info_and_aborts_without_query_op(self, mw_mock):
+        deck_hash = "deck_hash_123"
+        did = 42
+        missing_files = ["unrelated.png"]
+        webresult = (deck_hash, missing_files)
+
+        mw_mock.col.decks.get.return_value = {
+            "id": did,
+            "name": "TestDeck",
+            "dyn": False,
+        }
+        mw_mock.col.decks.name.return_value = "TestDeck"
+
+        deck_repr = MagicMock()
+        deck_repr.anki_dict = {}
+        deck_repr.get_protected_fields.return_value = set()
+        deck_repr.get_media_file_note_map.return_value = [("note1.png", "note-guid-1")]
+        deck_repr.get_notetype_media_file_map.return_value = [
+            ("_script.js", "model-uuid-1")
+        ]
+
+        with (
+            patch("export_manager.is_collection_available", return_value=True),
+            patch("export_manager.get_did_from_hash", return_value=did),
+            patch("export_manager.disambiguate_note_model_uuids"),
+            patch(
+                "export_manager.deck_initializer.from_collection",
+                return_value=deck_repr,
+            ),
+            patch("export_manager.deck_initializer.trim_empty_children"),
+            patch("export_manager.QueryOp") as query_op,
+            patch("export_manager.aqt.utils.showInfo") as show_info,
+        ):
+            start_suggest_missing_media(webresult)
+
+            show_info.assert_called_once()
+            assert "No missing media files to upload." in show_info.call_args[0][0]
+            query_op.assert_not_called()
