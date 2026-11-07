@@ -595,6 +595,7 @@ _ADDON_MODULES_ORDERED = [
     "export_manager",
     "impact",
     "import_manager",
+    "update_review",
     "menu",
     "hooks",
     "gear_menu_setup",

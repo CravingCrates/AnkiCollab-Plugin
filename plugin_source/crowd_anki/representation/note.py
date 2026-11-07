@@ -558,6 +558,15 @@ class Note(JsonSerializableAnkiObject):
 
         logger.debug(f"Protected fields handled: {protected_fields}")
 
+        # Process permanent protections specified via import_config
+        if getattr(import_config, "permanent_protections", None):
+            permanent_fields = import_config.permanent_protections.get(self.get_uuid(), [])
+            for p_field in permanent_fields:
+                p_tag = f"{PREFIX_PROTECTED_FIELDS}::{p_field}"
+                if self.anki_object and hasattr(self.anki_object, "tags"):
+                    if p_tag not in self.anki_object.tags:
+                        self.anki_object.tags.append(p_tag)
+
         protected_fields_by_tag = []
         if self.anki_object and hasattr(self.anki_object, "tags"):
             protected_fields_by_tag = [
@@ -622,7 +631,79 @@ class Note(JsonSerializableAnkiObject):
                     f"User protected field '{protected_field}' (new_idx={field_idx}): preserved content"
                 )
 
-        logger.debug(f"Protected fields by tags handled")
+        # Handle transient protections (one-time choice, does NOT save tag)
+        transient_fields = []
+        if getattr(import_config, "transient_protections", None):
+            transient_fields = import_config.transient_protections.get(self.get_uuid(), [])
+
+        for protected_field in transient_fields:
+            if not self.anki_object:
+                continue
+
+            if protected_field == "Tags" and hasattr(self.anki_object, "tags"):
+                self.anki_object_dict["tags"] = list(self.anki_object.tags)
+                continue
+
+            if protected_field == "All":
+                if hasattr(self.anki_object, "fields"):
+                    if has_explicit_mapping:
+                        for new_idx, old_idx in enumerate(field_mapping):
+                            if (
+                                old_idx is not None
+                                and new_idx < len(self.anki_object_dict["fields"])
+                                and old_idx < len(self.anki_object.fields)
+                            ):
+                                self.anki_object_dict["fields"][new_idx] = self.anki_object.fields[old_idx]
+                    else:
+                        for new_idx, field in enumerate(note_model.anki_dict["flds"]):
+                            if new_idx >= len(self.anki_object_dict["fields"]):
+                                break
+                            field_name = field["name"]
+                            if field_name in old_field_name_to_index:
+                                old_field_idx = old_field_name_to_index[field_name]
+                                if old_field_idx < len(self.anki_object.fields):
+                                    self.anki_object_dict["fields"][new_idx] = self.anki_object.fields[old_field_idx]
+                if hasattr(self.anki_object, "tags"):
+                    self.anki_object_dict["tags"] = list(self.anki_object.tags)
+                break
+
+            field_idx = field_name_to_index.get(
+                protected_field
+            ) or field_name_to_index.get(protected_field.replace("_", " "))
+            if (
+                field_idx is not None
+                and self.anki_object
+                and hasattr(self.anki_object, "fields")
+            ):
+                if has_explicit_mapping:
+                    if field_idx < len(field_mapping):
+                        old_field_idx = field_mapping[field_idx]
+                        if (
+                            old_field_idx is not None
+                            and old_field_idx < len(self.anki_object.fields)
+                            and field_idx < len(self.anki_object_dict["fields"])
+                        ):
+                            self.anki_object_dict["fields"][field_idx] = self.anki_object.fields[old_field_idx]
+                            logger.debug(
+                                f"Transient protected field '{protected_field}' preserved content"
+                            )
+                else:
+                    for p_field_name in (
+                        protected_field,
+                        protected_field.replace("_", " "),
+                    ):
+                        if p_field_name in old_field_name_to_index:
+                            old_field_idx = old_field_name_to_index[p_field_name]
+                            if old_field_idx < len(
+                                self.anki_object.fields
+                            ) and field_idx < len(self.anki_object_dict["fields"]):
+                                self.anki_object_dict["fields"][field_idx] = self.anki_object.fields[old_field_idx]
+                                logger.debug(
+                                    f"Transient protected field '{protected_field}' preserved via name match"
+                                )
+                                break
+
+        logger.debug(f"Protected fields by tags and transient choices handled")
 
         protected_prefixes = import_config.personal_tags
         protected_prefixes_lower = {

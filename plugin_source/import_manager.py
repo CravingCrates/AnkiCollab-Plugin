@@ -716,6 +716,13 @@ def _on_deck_installed(
     if subscription["stats_enabled"]:
         _handle_stats_sharing_after_import(deck_hash, deck_name)
 
+    # Preserve user's explicit local early adoptions while still pending on server
+    try:
+        from .community_moderation import reconcile_early_adoptions
+        reconcile_early_adoptions()
+    except Exception as exc:
+        logger.warning("Failed to preserve early adoption choices: %s", exc)
+
     mw.reset()  # Reset the main window to reflect changes
 
     return deck_name
@@ -750,28 +757,38 @@ def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
             pass
 
 
-def install_update(subscription, input_hash=None, update_timestamp_after=False):
+def install_update(
+    subscription,
+    input_hash=None,
+    update_timestamp_after=False,
+    preloaded_deck=None,
+    preloaded_config=None,
+):
     logger.info(f"Installing update for deck: {subscription['deck_hash']}")
     deck_hash = subscription["deck_hash"]
     parent_widget = QApplication.focusWidget() or mw
 
-    if check_optional_tag_changes(deck_hash, subscription["optional_tags"]):
-        dialog = OptionalTagsDialog(
-            get_optional_tags(deck_hash), subscription["optional_tags"], parent=mw
+    if preloaded_deck and preloaded_config:
+        deck = preloaded_deck
+        config = preloaded_config
+    else:
+        if check_optional_tag_changes(deck_hash, subscription["optional_tags"]):
+            dialog = OptionalTagsDialog(
+                get_optional_tags(deck_hash), subscription["optional_tags"], parent=mw
+            )
+            dialog.exec()
+            update_optional_tag_config(deck_hash, dialog.get_selected_tags())
+        subscribed_tags = get_optional_tags(deck_hash)
+        logger.debug("Optional Tags done.")
+
+        deck = deck_initializer.from_json(subscription["deck"])
+        config = prep_config(
+            subscription["protected_fields"],
+            [tag for tag, value in subscribed_tags.items() if value],
+            True if subscription["optional_tags"] else False,
+            deck_hash,
         )
-        dialog.exec()
-        update_optional_tag_config(deck_hash, dialog.get_selected_tags())
-    subscribed_tags = get_optional_tags(deck_hash)
-    logger.debug("Optional Tags done.")
-    deck = deck_initializer.from_json(subscription["deck"])
-    logger.debug("Deck initialized.")
-    config = prep_config(
-        subscription["protected_fields"],
-        [tag for tag, value in subscribed_tags.items() if value],
-        True if subscription["optional_tags"] else False,
-        deck_hash,
-    )
-    logger.debug("Config prepared.")
+    logger.debug("Deck and config prepared.")
 
     map_cache = defaultdict(dict)
     note_type_data = {}
@@ -861,6 +878,89 @@ def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
     return config
 
 
+def should_review_updates_before_applying() -> bool:
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data and strings_data.get("settings"):
+        return bool(
+            strings_data["settings"].get(
+                "review_updates_before_applying", False
+            )
+        )
+    return False
+
+
+def should_review_unsuspended_only() -> bool:
+    strings_data = mw.addonManager.getConfig(__name__)
+    if strings_data and strings_data.get("settings"):
+        return bool(
+            strings_data["settings"].get("review_unsuspended_only", False)
+        )
+    return False
+
+
+def start_update_review(subscription, update_timestamp_after=True, auto_accept_suspended=True):
+    from .update_review import build_update_plan, UpdateReviewDialog
+
+    deck_hash = subscription["deck_hash"]
+    if check_optional_tag_changes(deck_hash, subscription["optional_tags"]):
+        dialog = OptionalTagsDialog(
+            get_optional_tags(deck_hash),
+            subscription["optional_tags"],
+            parent=mw,
+        )
+        dialog.exec()
+        update_optional_tag_config(deck_hash, dialog.get_selected_tags())
+    subscribed_tags = get_optional_tags(deck_hash)
+
+    deck = deck_initializer.from_json(subscription["deck"])
+    config = prep_config(
+        subscription["protected_fields"],
+        [tag for tag, value in subscribed_tags.items() if value],
+        True if subscription["optional_tags"] else False,
+        deck_hash,
+    )
+
+    only_unsuspended = should_review_unsuspended_only()
+    plan = build_update_plan(
+        deck,
+        mw.col,
+        config,
+        only_unsuspended=only_unsuspended,
+        auto_accept_suspended=auto_accept_suspended,
+    )
+
+    if not plan.items:
+        # No changed notes to review, install directly
+        install_update(
+            subscription,
+            update_timestamp_after=update_timestamp_after,
+            preloaded_deck=deck,
+            preloaded_config=config,
+        )
+        return
+
+    deck_name = deck.anki_dict.get("name", "AnkiCollab Deck")
+    dialog = UpdateReviewDialog(
+        plan=plan,
+        deck_name=deck_name,
+        parent=mw,
+        only_unsuspended_initial=only_unsuspended,
+        auto_accept_suspended_initial=auto_accept_suspended,
+    )
+    result = dialog.exec()
+
+    if result == QDialog.DialogCode.Accepted:
+        plan.apply_to_config(config)
+        install_update(
+            subscription,
+            update_timestamp_after=update_timestamp_after,
+            preloaded_deck=deck,
+            preloaded_config=config,
+        )
+    else:
+        postpone_update()
+
+
 def show_changelog_popup(subscription):
     changelog = subscription["changelog"]
     deck_hash = subscription["deck_hash"]
@@ -870,15 +970,32 @@ def show_changelog_popup(subscription):
     if changelog:
         dialog = ChangelogDialog(changelog, deck_hash, parent=mw)
         choice = dialog.exec()
+        auto_accept_suspended = getattr(dialog, "should_update_suspended", lambda: True)()
 
         if choice == QDialog.DialogCode.Accepted:
-            install_update(subscription, update_timestamp_after=True)
+            if should_review_updates_before_applying() or not auto_accept_suspended:
+                start_update_review(
+                    subscription,
+                    update_timestamp_after=True,
+                    auto_accept_suspended=auto_accept_suspended,
+                )
+            else:
+                install_update(subscription, update_timestamp_after=True)
+        elif choice == 3:  # Review Changes button clicked explicitly
+            start_update_review(
+                subscription,
+                update_timestamp_after=True,
+                auto_accept_suspended=auto_accept_suspended,
+            )
         elif choice == QDialog.DialogCode.Rejected:
             postpone_update()
         else:
             abort_update(deck_hash)
     else:  # Skip changelog window if there is no message for the user
-        install_update(subscription, update_timestamp_after=True)
+        if should_review_updates_before_applying():
+            start_update_review(subscription, update_timestamp_after=True)
+        else:
+            install_update(subscription, update_timestamp_after=True)
 
 
 def ask_for_rating():

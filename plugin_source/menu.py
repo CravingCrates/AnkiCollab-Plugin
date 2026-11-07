@@ -1030,12 +1030,32 @@ def show_global_settings_dialog(parent_dialog):
         "When enabled, the add-on will remember whether the 'Suggest on AnkiCollab' checkbox in the Add Cards dialog was last checked or not, even after restarting Anki."
     )
 
+    review_updates_cb = QCheckBox("Review deck updates before applying")
+    review_updates_cb.setStyleSheet(checkbox_style)
+    review_updates_cb.setChecked(
+        bool(settings.get("review_updates_before_applying", False))
+    )
+    review_updates_cb.setToolTip(
+        "Show an interactive Diff Import dialog to review changes note-by-note and field-by-field before applying them"
+    )
+
+    review_unsuspended_only_cb = QCheckBox("Only review unsuspended cards")
+    review_unsuspended_only_cb.setStyleSheet(checkbox_style)
+    review_unsuspended_only_cb.setChecked(
+        bool(settings.get("review_unsuspended_only", False))
+    )
+    review_unsuspended_only_cb.setToolTip(
+        "When reviewing deck updates, focus on active notes and filter out notes you have suspended"
+    )
+
     global_layout.addWidget(pull_on_startup_cb)
     global_layout.addWidget(suspend_new_cards_cb)
     global_layout.addWidget(move_cards_cb)
     global_layout.addWidget(keep_empty_subdecks_cb)
     global_layout.addWidget(auto_approve_cb)
     global_layout.addWidget(remember_suggest_state_cb)
+    global_layout.addWidget(review_updates_cb)
+    global_layout.addWidget(review_unsuspended_only_cb)
 
     # Add to group
     global_layout.addWidget(error_reporting_cb)
@@ -1239,6 +1259,12 @@ def show_global_settings_dialog(parent_dialog):
         )
         settings["error_reporting_enabled"] = error_reporting_cb.isChecked()
         settings["auto_approve"] = auto_approve_cb.isChecked()
+        settings["review_updates_before_applying"] = (
+            review_updates_cb.isChecked()
+        )
+        settings["review_unsuspended_only"] = (
+            review_unsuspended_only_cb.isChecked()
+        )
         settings["shortcut_update_decks"] = (
             update_seq.toString() if not update_seq.isEmpty() else ""
         )
@@ -1361,6 +1387,9 @@ def store_default_config():
         # "My Impact": gates only the once-a-day post-sync line; the menu view is always available.
         "impact_nudge_enabled": True,
         "last_impact_nudge": "",
+        # Diff Import Update Review
+        "review_updates_before_applying": False,
+        "review_unsuspended_only": False,
     }
 
     settings = config["settings"]

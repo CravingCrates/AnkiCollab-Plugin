@@ -83,6 +83,24 @@ class ChangelogDialog(QDialog):
         changelog_text.setPlainText(changelog)
         layout.addWidget(changelog_text)
 
+        # Suspended cards update policy
+        self.accept_suspended_cb = QCheckBox("Accept updates for suspended cards (accept all suspended)")
+        self.accept_suspended_cb.setChecked(True)
+        self.accept_suspended_cb.setStyleSheet(f"""
+            QCheckBox {{
+                color: {colors['text_primary']};
+                font-size: 13px;
+                font-weight: 500;
+                padding: 4px 0px;
+                margin-top: 2px;
+            }}
+        """)
+        self.accept_suspended_cb.setToolTip(
+            "When checked, notes containing suspended cards will also be updated.\n"
+            "When unchecked, suspended cards will remain untouched in your local collection."
+        )
+        layout.addWidget(self.accept_suspended_cb)
+
         # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -93,24 +111,42 @@ class ChangelogDialog(QDialog):
         later_button = QPushButton("Remind Me Later")
         later_button.setStyleSheet(get_button_style("neutral"))
 
-        install_button = QPushButton("Install Update")
-        install_button.setStyleSheet(get_button_style("success"))
+        review_button = QPushButton("Review Changes")
+        review_button.setStyleSheet(get_button_style("neutral"))
+
+        self.install_button = QPushButton("Install Update")
+        self.install_button.setStyleSheet(get_button_style("success"))
 
         button_layout.addWidget(skip_button)
         button_layout.addWidget(later_button)
-        button_layout.addWidget(install_button)
+        button_layout.addWidget(review_button)
+        button_layout.addWidget(self.install_button)
         layout.addLayout(button_layout)
 
         self.setLayout(layout)
 
-        install_button.clicked.connect(self.accept)
+        self.accept_suspended_cb.toggled.connect(self._on_suspended_toggled)
+        self.install_button.clicked.connect(self.accept)
         later_button.clicked.connect(self.reject)
         skip_button.clicked.connect(self.skip_update)
+        review_button.clicked.connect(self.review_update)
 
         self.adjustSize()
 
+    def _on_suspended_toggled(self, checked: bool) -> None:
+        if checked:
+            self.install_button.setText("Install Update")
+        else:
+            self.install_button.setText("Install Update (Active Only)")
+
+    def should_update_suspended(self) -> bool:
+        return self.accept_suspended_cb.isChecked()
+
     def skip_update(self):
         self.done(2)
+
+    def review_update(self):
+        self.done(3)
 
 
 class OptionalTagsDialog(QDialog):

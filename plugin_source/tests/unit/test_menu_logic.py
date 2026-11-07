@@ -28,6 +28,8 @@ _ALL_DEFAULTS = {
     "error_reporting_enabled": False,
     "impact_nudge_enabled": True,
     "last_impact_nudge": "",
+    "review_updates_before_applying": False,
+    "review_unsuspended_only": False,
 }
 
 

@@ -2068,6 +2068,9 @@ class Deck(JsonSerializableAnkiDict):
 
             # Categorize note by model and new/update status
             if note_uuid in existing_note_set:
+                if getattr(import_config, "skip_update_guids", None) and note_uuid in import_config.skip_update_guids:
+                    logger.debug(f"Skipping note update for {note_uuid} per skip_update_guids")
+                    continue
                 notes_by_model_update[note_model_uuid].append(note)
             else:
                 notes_by_model_new[note_model_uuid].append(note)

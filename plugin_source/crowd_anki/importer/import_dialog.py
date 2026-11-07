@@ -1,7 +1,7 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from aqt.qt import QDialog, QListWidgetItem, Qt, QFont, QSize
 
@@ -35,20 +35,23 @@ class PersonalFieldsHolder:
 
 @dataclass
 class ImportConfig(PersonalFieldsHolder):
-    optional_tags: List[str]
-    has_optional_tags: bool
-    personal_tags: List[str]
+    optional_tags: List[str] = field(default_factory=list)
+    has_optional_tags: bool = False
+    personal_tags: List[str] = field(default_factory=list)
 
-    use_notes: bool
-    use_media: bool
+    use_notes: bool = True
+    use_media: bool = False
 
-    ignore_deck_movement: bool
-    suspend_new_cards: bool
-    keep_empty_subdecks: bool
+    ignore_deck_movement: bool = False
+    suspend_new_cards: bool = False
+    keep_empty_subdecks: bool = False
 
     home_deck: Optional[str] = None
     deck_hash: Optional[str] = None
     new_notes_home_deck: Optional[str] = None
+    transient_protections: Dict[str, List[str]] = field(default_factory=dict)
+    skip_update_guids: Set[str] = field(default_factory=set)
+    permanent_protections: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass
