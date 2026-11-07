@@ -854,8 +854,71 @@ def onProfileLoaded():
 
     autoUpdate()
     refresh_notifications()
+    check_reviewer_invitations()
     patch_successful = patch_image_occlusion_enhanced()
     logger.info(f"Image Occlusion Enhanced patch: {patch_successful}")
+
+
+
+def check_reviewer_invitations():
+    """Check in background if the user is newly eligible for community moderation on any subscribed deck
+
+    and if the deck maintainer has enabled invitations.
+    """
+    if not auth_manager.is_logged_in() or not mw or not mw.pm:
+        return
+
+    def _bg_check():
+        from .utils import DeckManager
+        from .community_moderation import sync_reviewer_eligibility
+
+        manager = DeckManager()
+        subscribed = manager.get_subscribed_decks()
+        for deck_hash in subscribed:
+            prompt_key = f"ankicollab_mod_prompted_{deck_hash}"
+            if mw.pm.profile.get(prompt_key, False):
+                continue
+            elig_res = sync_reviewer_eligibility(deck_hash)
+            if elig_res.get("is_eligible") and elig_res.get("notifications_enabled"):
+                deck_name = manager.get_deck_name_by_hash(deck_hash) or deck_hash
+                return (deck_hash, deck_name)
+        return None
+
+    def _on_done(future):
+        try:
+            res = future.result()
+            if not res or not mw or not mw.pm:
+                return
+            deck_hash, deck_name = res
+            prompt_key = f"ankicollab_mod_prompted_{deck_hash}"
+            mw.pm.profile[prompt_key] = True
+            msg = (
+                f"You have reached the criteria to participate in community moderation "
+                f"for the deck '{deck_name}'.\n\n"
+                f"Would you like to open the moderation interface now?"
+            )
+            if askUser(msg, parent=mw):
+                from .moderation_dialog import ModerationDialog
+
+                dialog = ModerationDialog(mw)
+                dialog.exec()
+        except Exception as exc:
+            logger.warning("Error processing reviewer invitation: %s", exc)
+
+    try:
+        if hasattr(mw, "taskman") and hasattr(mw.taskman, "run_in_background"):
+            mw.taskman.run_in_background(_bg_check, _on_done)
+        else:
+            class MockFuture:
+                def __init__(self, val):
+                    self._val = val
+
+                def result(self):
+                    return self._val
+
+            _on_done(MockFuture(_bg_check()))
+    except Exception as exc:
+        logger.warning("Error launching reviewer invitation check: %s", exc)
 
 
 def onProfileWillClose():

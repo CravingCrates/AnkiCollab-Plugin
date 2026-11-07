@@ -66,6 +66,10 @@ links_menu = QMenu("Links", mw)
 # Main Actions
 edit_list_action = QAction("Manage Subscriptions", mw)
 push_deck_action = QAction("Publish New Deck", mw)
+moderation_action = QAction("Community Moderation", mw)
+moderation_action.setToolTip("Participate in community democratic moderation and card review")
+moderation_settings_action = QAction("Community Moderation Settings", mw)
+moderation_settings_action.setToolTip("Configure moderator qualification, tag specialization, and voting quota")
 pull_changes_action = QAction("Update Decks", mw)
 pull_changes_action.setToolTip(
     "Download updates from AnkiCollab (does NOT upload your changes)"
@@ -1434,6 +1438,8 @@ def menu_init():
     collab_menu.addSeparator()
     collab_menu.addAction(edit_list_action)
     collab_menu.addAction(push_deck_action)
+    collab_menu.addAction(moderation_action)
+    collab_menu.addAction(moderation_settings_action)
     collab_menu.addSeparator()
     init_notification_center(collab_menu)
     init_impact_menu(collab_menu)
@@ -1446,11 +1452,23 @@ def menu_init():
     links_menu.addAction(website_action)
     links_menu.addAction(donation_action)  # Review link
 
+    def on_moderation_action():
+        from .moderation_dialog import ModerationDialog
+        dialog = ModerationDialog(mw)
+        dialog.exec()
+
+    def on_moderation_settings_action():
+        from .moderation_settings_dialog import ModerationSettingsDialog
+        dialog = ModerationSettingsDialog(mw)
+        dialog.exec()
+
     edit_list_action.triggered.connect(on_edit_list)
     general_settings_action.triggered.connect(
         lambda: show_global_settings_dialog(parent_dialog=mw)
     )
     push_deck_action.triggered.connect(on_push_deck_action)
+    moderation_action.triggered.connect(on_moderation_action)
+    moderation_settings_action.triggered.connect(on_moderation_settings_action)
     pull_changes_action.triggered.connect(async_update)
     website_action.triggered.connect(open_website)
     donation_action.triggered.connect(open_support_site)

@@ -413,6 +413,25 @@ class DeckManager(AbstractContextManager):
     def get_by_hash(self, deck_hash: str) -> Optional[Dict]:
         return self._filtered_items.get(deck_hash)
 
+    def get_subscribed_decks(self) -> list[str]:
+        """Return list of subscribed deck hashes."""
+        return list(self._filtered_items.keys())
+
+    def get_deck_name_by_hash(self, deck_hash: str) -> Optional[str]:
+        """Return human-readable deck name for given hash."""
+        details = self.get_by_hash(deck_hash)
+        if not details:
+            return None
+        did = details.get("deckId")
+        if did and getattr(mw, "col", None) and getattr(mw.col, "decks", None):
+            try:
+                deck = mw.col.decks.get(did, default=False)
+                if deck:
+                    return deck.get("name")
+            except Exception:
+                pass
+        return details.get("deckName") or deck_hash
+
     def __iter__(self) -> Iterator[Tuple[str, Dict]]:
         return iter(self._filtered_items.items())
 

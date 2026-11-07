@@ -102,7 +102,17 @@ def get_button_style(variant: str = "primary", size: str = "medium") -> str:
             "bg_hover": colors["danger_hover"],
             "text": colors["text_on_accent"],
         },
+        "warning": {
+            "bg": colors["warning"],
+            "bg_hover": colors["warning_hover"],
+            "text": colors["text_on_accent"],
+        },
         "neutral": {
+            "bg": colors["neutral_bg"],
+            "bg_hover": colors["neutral_bg_hover"],
+            "text": colors["neutral_text"],
+        },
+        "default": {
             "bg": colors["neutral_bg"],
             "bg_hover": colors["neutral_bg_hover"],
             "text": colors["neutral_text"],
