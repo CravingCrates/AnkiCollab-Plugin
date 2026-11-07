@@ -22,7 +22,12 @@ No. AnkiCollab should not affect card scheduling. If you opt in, AnkiCollab will
 <summary><b>Does media get stored on AnkiCollab? How do subscribers get deck media?</b></summary>
 AnkiCollab automatically up- and downloads media files that are attached to your cards.
 
+Files that are imported by a notetype (such as scripts or CSS) are handled separately from note media. See *How do I include scripts, CSS or other static files in my notetype?* under Maintainer.
+
+Images that are used **only** in the deck description on the website are currently not uploaded or managed by AnkiCollab. To make sure such an image is uploaded, also reference it somewhere that is picked up by the media upload, such as a note or the notetype, and then click **Upload missing media**.
+
 For more information, see the <a href="https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/getting_started_maintainer.md">getting started maintainer</a> document.
+
 </details>
 
 <details close>
@@ -155,9 +160,22 @@ Anything below the marker in your own copy is treated as yours too: it is never 
 </details>
 
 <details close>
-<summary><b>How can I use Optional Tags on AnkiCollab?</b></summary>
-These are Work in progress and currently not recommended.
-Follow the [Discord](https://discord.com/invite/9x4DRxzqwM) for current information.
+<summary><b>How do I include scripts, CSS or other static files in my notetype?</b></summary>
+If your notetype's templates or styling import an external file (e.g. a `_script.js` or `_style.css`), AnkiCollab uploads it together with the notetype when you publish, and subscribers receive it on their next sync. There are two rules:
+
+- The filename must **start with an underscore** (`_`), like Anki's own convention for files that aren't tied to a specific note. Files without the leading underscore are not treated as notetype files.
+- Only the **deck owner** can upload new notetype files, since they are the only one who can edit notetypes on the website.
+
+*Note: this requires a plugin version that supports static notetype media (Beta 2026.11.08 or newer).*
+
+**How do I update a script or stylesheet that my notetype already imports?** AnkiCollab can't track content changes inside external files on your disk. If you edit `_script.js` in place, the change will **not** be uploaded or reach your subscribers. To publish a change, give the file a new name:
+
+1. Edit the file and **rename it**, keeping the leading underscore (e.g. `_script.js` → `_script_v2.js`).
+2. Update your local Anki templates so they reference the new filename.
+3. Go to the AnkiCollab website, paste in the updated template (including the new file reference) and save your changes.
+4. Back in Anki, click **Upload missing media** in the gear menu (⚙) on the deck overview.
+
+Subscribers then receive the new file and the updated notetype (which now imports `_script_v2.js` instead of the outdated file) on their next sync.
 </details>
 
 <details close>
