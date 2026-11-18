@@ -11,7 +11,8 @@ import re
 import pytest
 
 import config_manager
-from menu import validate_deck_hash, store_default_config
+import consent
+from menu import delete_subscription, validate_deck_hash, store_default_config
 from tests.mocks import spy_config_writes
 
 _ALL_DEFAULTS = {
@@ -145,3 +146,111 @@ class TestStoreDefaultConfig:
         stored = config_manager.get_stored_config()
         assert stored["settings"]["pull_on_startup"] is False
         assert "auth" not in stored
+
+
+class TestDeleteSubscription:
+    def test_cancelled_confirmation_keeps_subscription(self, monkeypatch):
+        config_manager.write_config({"alpha-beta-gamma": {"deckId": 1}})
+        monkeypatch.setattr("menu.askUser", lambda *args, **kwargs: False)
+
+        assert delete_subscription("alpha-beta-gamma") is False
+        assert "alpha-beta-gamma" in config_manager.get_stored_config()
+
+    def test_confirmed_deletion_removes_subscription(self, monkeypatch):
+        config_manager.write_config({"alpha-beta-gamma": {"deckId": 1}})
+        monkeypatch.setattr("menu.askUser", lambda *args, **kwargs: True)
+        monkeypatch.setattr("menu.unsubscribe_from_deck", lambda deck_hash: None)
+
+        assert delete_subscription("alpha-beta-gamma") is True
+        assert "alpha-beta-gamma" not in config_manager.get_stored_config()
+
+
+class TestDeleteSubscriptionReviewData:
+    """Unsubscribing must not strand uploaded review data on the server."""
+
+    @pytest.fixture
+    def granted(self, monkeypatch):
+        config_manager.write_config(
+            {
+                "settings": {},
+                "alpha-beta-gamma": {
+                    "deckId": 1,
+                    "stats_enabled": True,
+                    "review_data_consent": {
+                        "granted": True,
+                        "wording_version": consent.CURRENT_WORDING_VERSION,
+                        "decided_at": "2026-10-29T11:50:41+00:00",
+                        "account": "account-1",
+                    },
+                },
+            }
+        )
+        monkeypatch.setattr(consent, "current_account", lambda: "account-1")
+        monkeypatch.setattr("menu.unsubscribe_from_deck", lambda deck_hash: None)
+        monkeypatch.setattr("menu._erase_review_data", lambda deck_hash: None)
+
+    def test_consent_holder_is_asked_about_their_review_data(
+        self, granted, monkeypatch
+    ):
+        messages = []
+        answers = iter([True, False])  # delete the subscription, keep the data
+
+        def ask(message, **kwargs):
+            messages.append(message)
+            return next(answers)
+
+        monkeypatch.setattr("menu.askUser", ask)
+
+        delete_subscription("alpha-beta-gamma")
+
+        assert len(messages) == 2
+        assert "review statistics" in messages[1]
+
+    def test_declining_erasure_leaves_the_queue_empty(self, granted, monkeypatch):
+        answers = iter([True, False])  # delete the subscription, keep the data
+        monkeypatch.setattr("menu.askUser", lambda *a, **k: next(answers))
+
+        delete_subscription("alpha-beta-gamma")
+
+        assert consent.pending_erasures() == []
+
+    def test_accepting_erasure_queues_before_the_entry_is_dropped(
+        self, granted, monkeypatch
+    ):
+        # The queue is account-level, so it must survive the subscription pop.
+        monkeypatch.setattr("menu.askUser", lambda *a, **k: True)
+
+        delete_subscription("alpha-beta-gamma")
+
+        stored = config_manager.get_stored_config()
+        assert "alpha-beta-gamma" not in stored
+        assert consent.pending_erasures() == ["alpha-beta-gamma"]
+
+    def test_no_question_without_consent(self, monkeypatch):
+        config_manager.write_config(
+            {
+                "settings": {},
+                "alpha-beta-gamma": {
+                    "deckId": 1,
+                    "stats_enabled": True,
+                    "review_data_consent": {
+                        "granted": False,
+                        "wording_version": consent.CURRENT_WORDING_VERSION,
+                        "decided_at": "2026-10-29T11:50:41+00:00",
+                        "account": "account-1",
+                    },
+                },
+            }
+        )
+        monkeypatch.setattr(consent, "current_account", lambda: "account-1")
+        monkeypatch.setattr("menu.unsubscribe_from_deck", lambda deck_hash: None)
+        monkeypatch.setattr("menu._erase_review_data", lambda deck_hash: None)
+        questions = []
+        monkeypatch.setattr(
+            "menu.askUser", lambda message, **kwargs: questions.append(message) or True
+        )
+
+        delete_subscription("alpha-beta-gamma")
+
+        assert len(questions) == 1
+        assert consent.pending_erasures() == []

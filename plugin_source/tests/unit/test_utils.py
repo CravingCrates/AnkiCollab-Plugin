@@ -14,7 +14,6 @@ from utils import (
     is_collection_available,
     check_collection_or_abort,
     get_logger,
-    get_timestamp,
     get_hash_from_local_id,
     get_did_from_hash,
     get_local_deck_from_hash,
@@ -146,24 +145,6 @@ class TestLookupHelpers:
             "hash_b": {"deckId": 20, "timestamp": "2025-01-15 08:30:00"},
         }
         config_manager.write_config(config)
-
-    def test_get_timestamp_returns_float(self, mw_mock):
-        ts = get_timestamp("hash_a")
-        assert isinstance(ts, float)
-        assert ts > 0
-
-    def test_get_timestamp_missing_hash(self, mw_mock):
-        assert get_timestamp("nonexistent") is None
-
-    def test_get_timestamp_returns_none_implicitly(self, mw_mock):
-        """get_timestamp returns None when details exist but timestamp parsing fails."""
-        config = {
-            "settings": {},
-            "hash_bad": {"deckId": 99, "timestamp": "not-a-date"},
-        }
-        config_manager.write_config(config)
-        with pytest.raises(ValueError):
-            get_timestamp("hash_bad")
 
     def test_get_hash_from_local_id(self, mw_mock):
         assert get_hash_from_local_id(10) == "hash_a"

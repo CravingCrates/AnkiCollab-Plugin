@@ -113,11 +113,11 @@ def _as_int(value: Any) -> int:
 
 
 def reach_text(stats: Optional[Dict[str, Any]]) -> str:
-    """One line about how many learners the caller's accepted changes reach."""
+    """One line about how many impressions the caller's accepted changes reach."""
     reach = _as_int(((stats or {}).get("totals") or {}).get("reach"))
     if reach <= 0:
-        return "Your accepted suggestions will reach learners as soon as a deck has subscribers."
-    return f"Your accepted suggestions reach {reach:,} learners."
+        return "Your accepted suggestions will reach impressions as soon as a deck has subscribers."
+    return f"Your accepted suggestions reach {reach:,} impressions."
 
 
 def milestone_text(stats: Optional[Dict[str, Any]]) -> str:
@@ -244,7 +244,7 @@ def nudge_line(stats: Optional[Dict[str, Any]]) -> Optional[str]:
         return None
     decks = _as_int(((stats or {}).get("totals") or {}).get("decks_contributed_to"))
     suffix = f" across {decks} decks" if decks > 1 else ""
-    return f"Your suggestions now reach {reach:,} learners{suffix}."
+    return f"Your suggestions generated {reach:,} impressions{suffix}."
 
 
 def should_show_nudge(enabled: bool, now: datetime, last_shown: Optional[str]) -> bool:
@@ -631,7 +631,9 @@ class _ImpactMenu:
             return
 
         self._action = QAction("My Impact", mw)
-        self._action.setToolTip("See how many learners your suggestions have reached")
+        self._action.setToolTip(
+            "See how many impressions your suggestions have generated"
+        )
         self._action.triggered.connect(open_impact_dialog)
 
         if hasattr(parent_menu, "addAction"):

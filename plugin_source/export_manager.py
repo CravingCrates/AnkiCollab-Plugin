@@ -41,6 +41,7 @@ from typing import Callable, Tuple, Dict, List, Any, Optional, Set
 import os
 
 from . import config_manager
+from . import note_status
 from .ui.colors import get_colors, get_button_style, get_dialog_style, get_input_style
 
 from .utils import get_personal_tags
@@ -62,7 +63,6 @@ from .utils import (
     get_deck_hash_from_did,
     get_deck_hash_from_card,
     get_local_deck_from_hash,
-    get_timestamp,
     get_did_from_hash,
     create_backup,
     get_logger,
@@ -885,6 +885,7 @@ def _sync_run_async(coro, *args, **kwargs):
 
 def _sync_optimize_media_and_update_refs(
     media_files: List[Tuple[str, str]],
+    notetype_media_files: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[Dict[str, str], List[Dict], Dict[str, str]]:
     """
     Synchronous wrapper to ONLY optimize media.
@@ -894,12 +895,13 @@ def _sync_optimize_media_and_update_refs(
     """
     check_collection_or_abort("media_optimization_start")
 
-    if not media_files:
+    if not media_files and not notetype_media_files:
         logger.info("No media files provided for optimization.")
         return {}, [], {}
 
+    total_count = len(media_files or []) + len(notetype_media_files or [])
     logger.info(
-        f"Starting media optimization for {len(media_files)} files in background task."
+        f"Starting media optimization for {total_count} files in background task."
     )
 
     def progress_callback(p: float):
@@ -919,7 +921,10 @@ def _sync_optimize_media_and_update_refs(
 
     try:
         filename_mapping, files_info, file_paths = _sync_run_async(
-            main.media_manager.optimize_media_for_upload, media_files, progress_callback
+            main.media_manager.optimize_media_for_upload,
+            media_files,
+            progress_callback,
+            notetype_media_files,
         )
         logger.info(
             f"Background media optimization finished. {len(filename_mapping)} files mapped."
@@ -1089,6 +1094,13 @@ def _submit_deck_op(
         response.raise_for_status()
 
         logger.info(f"Deck submission response status: {response.status_code}")
+        if force_overwrite:
+            try:
+                store = note_status.CollabNoteStore.for_current_profile()
+                if store is not None:
+                    store.add_notes(deckHash, note_status._guids_in_deck_json(deck))
+            except Exception as exc:
+                logger.warning(f"Could not update the AnkiCollab note record: {exc}")
         # Return data needed for media upload if successful and media exists
         if media_files_info:
             bulk_operation_id = ""  # only used for new decks
@@ -1789,6 +1801,10 @@ def _on_suggest_deck_submitted(
     """Success callback after deck submission for suggestions."""
     # Runs on Main Thread
     logger.info("Deck submission complete. Starting media upload if needed.")
+    if editor is not None:
+        from .hooks import update_editor_note_status
+
+        update_editor_note_status(editor)
 
     # Step 3: Upload Media (Background Op, started by _start_media_upload)
     # The final success callback handles UI updates and rating request
@@ -1861,13 +1877,25 @@ def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
         # Media Preparation
         protected_fields = deck_repr.get_protected_fields(deck_hash)
         media_files = deck_repr.get_media_file_note_map(protected_fields)
+        notetype_media_files = deck_repr.get_notetype_media_file_map()
 
-        # remove all entries from media_files that are not in the missing_files list
+        # remove all entries that are not in the missing_files list
         media_files = [
             (filename, note_guid)
             for filename, note_guid in media_files
             if filename in missing_files
         ]
+        notetype_media_files = [
+            (filename, notetype_guid)
+            for filename, notetype_guid in notetype_media_files
+            if filename in missing_files
+        ]
+
+        if not media_files and not notetype_media_files:
+            aqt.utils.showInfo(
+                "No missing media files to upload.", parent=parent_widget
+            )
+            return
 
         # --- Start Background Operations ---
         logger.info("Starting media upload process...")
@@ -1875,7 +1903,9 @@ def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
         # Step 1: Optimize Media (Background Op)
         op_optimize = QueryOp(
             parent=parent_widget,
-            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
+            op=lambda col: _sync_optimize_media_and_update_refs(
+                media_files, notetype_media_files
+            ),
             success=lambda result: _on_suggest_media_only_optimized(result, deck_repr, media_files, did),  # type: ignore
         )
         op_optimize.with_progress("Optimizing media files...")
@@ -1899,75 +1929,6 @@ def start_suggest_missing_media(webresult: Tuple[str, List[str]]):
                 ),
             },
         )
-        show_exception(parent=parent_widget, exception=e)
-
-
-def suggest_subdeck(did: int):
-    """Suggest an entire subdeck."""
-    parent_widget = QApplication.focusWidget() or mw
-
-    # Check collection availability with user-friendly message
-    if not is_collection_available():
-        aqt.utils.showWarning(
-            "Cannot suggest subdeck: Anki collection is not available. "
-            "Please ensure a profile is loaded and try again.",
-            parent=parent_widget,
-        )
-        return
-
-    try:
-        deck_obj = mw.col.decks.get(did, default=False)  # type: ignore
-        if not deck_obj or deck_obj.get("dyn", False):
-            aqt.utils.showInfo(
-                "Filtered decks are not supported for suggestions.",
-                parent=parent_widget,
-            )
-            return
-
-        deck_name = mw.col.decks.name(did)  # type: ignore
-        deckHash = get_deck_hash_from_did(did)
-        if deckHash is None:
-            aqt.utils.showWarning(
-                "Config Error: Could not find the cloud deck hash for this local deck. Please check the Subscriptions window.",
-                parent=parent_widget,
-            )
-            return
-
-        # --- Start Background Operations ---
-        logger.info("Starting subdeck suggestion process...")
-
-        def _on_subdeck_suggest_failure(e: Exception):
-            if isinstance(e, ApiConnectionError):
-                aqt.utils.showWarning(
-                    str(e), title="AnkiCollab - Connection Error", parent=parent_widget
-                )
-                return
-            if not _handle_operation_aborted(e, "Subdeck Suggestion"):
-                logger.error(f"Subdeck suggestion failed: {e}")
-                raise e
-
-        # Step 1: Deck Preparation (Background Op)
-        op_prepare = QueryOp(
-            parent=parent_widget,
-            op=lambda col: _prepare_subdeck_for_suggestion(did, deck_name, deckHash),
-            success=lambda result: QTimer.singleShot(
-                0,
-                lambda result=result: _on_suggest_subdeck_prepared(
-                    result, did, deckHash
-                ),
-            ),
-        ).failure(_on_subdeck_suggest_failure)
-        op_prepare.with_progress("Preparing subdeck data...")
-        op_prepare.run_in_background()
-
-    except Exception as e:
-        if isinstance(e, ApiConnectionError):
-            aqt.utils.showWarning(
-                str(e), title="AnkiCollab - Connection Error", parent=parent_widget
-            )
-            return
-        logger.error(f"Error preparing subdeck suggestion: {e}")
-        logger.error(traceback.format_exc())
         show_exception(parent=parent_widget, exception=e)
 
 
@@ -2027,6 +1988,7 @@ def handle_export(did: int):
         # --- Media Preparation (Main Thread) ---
         protected_fields = deck_repr.get_protected_fields(None)  # No hash yet
         media_files = deck_repr.get_media_file_note_map(protected_fields)
+        notetype_media_files = deck_repr.get_notetype_media_file_map()
 
         # --- Start Background Operations ---
         logger.info("Starting new deck export process...")
@@ -2044,7 +2006,9 @@ def handle_export(did: int):
         # Step 1: Optimize Media (Background Op)
         op_optimize = QueryOp(
             parent=parent_widget,
-            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
+            op=lambda col: _sync_optimize_media_and_update_refs(
+                media_files, notetype_media_files
+            ),
             success=lambda result: _on_export_media_optimized(
                 result, deck_repr, did, media_files
             ),
@@ -2144,7 +2108,21 @@ def _create_deck_op(
         response.raise_for_status()  # Check for HTTP errors
 
         logger.info(f"Create deck response status: {response.status_code}")
-        return response.json()  # Return parsed JSON response
+        result = response.json()  # Return parsed JSON response
+        if isinstance(result, dict) and result.get("status") == 1:
+            deck_hash = result.get("message")
+            if isinstance(deck_hash, str) and deck_hash:
+                try:
+                    store = note_status.CollabNoteStore.for_current_profile()
+                    if store is not None:
+                        note_status.record_pull(
+                            store, deck_hash, deck_repr, [], full_deck=True
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        f"Could not update the AnkiCollab note record: {exc}"
+                    )
+        return result
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error during deck creation: {e}")
@@ -2469,8 +2447,8 @@ def _on_suggest_deck_prepared(
             return
 
         if (
-            rationale_id != 6 and not force_overwrite
-        ):  # Skip dialog for 'New Card' unless maintainer
+            rationale_id != 6 or editor is not None
+        ) and not force_overwrite:  # Skip dialog for automatic 'New Card' unless from editor or maintainer
             result = get_commit_info(rationale_id, parent=parent_widget)
             if result is None or result[0] is None:
                 aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
@@ -2508,119 +2486,5 @@ def _on_suggest_deck_prepared(
             )
             return
         logger.error(f"Error in deck preparation callback: {e}")
-        logger.error(traceback.format_exc())
-        show_exception(parent=parent_widget, exception=e)
-
-
-def _prepare_subdeck_for_suggestion(
-    did: Any, deck_name: str, deckHash: str
-) -> Tuple[Deck, List[Tuple[str, str]]]:
-    """
-    Background operation to prepare subdeck representation for suggestion.
-    Returns (deck_repr, media_files).
-    Raises OperationAbortedError if collection becomes unavailable.
-    """
-    # Initial check
-    col = check_collection_or_abort("subdeck_suggestion_preparation_start")
-
-    # --- Preparation (Background Thread) ---
-    disambiguate_note_model_uuids(col)
-
-    # Check after potentially heavy operation
-    check_collection_or_abort("after_subdeck_uuid_disambiguation")
-
-    deck_repr = deck_initializer.from_collection(col, deck_name)  # Export whole deck
-
-    # Get deck timestamp and remove unchanged notes
-    try:
-        from .api_client import api_client
-
-        response = api_client.get(f"/GetDeckTimestamp/{deckHash}", timeout=15)
-        response.raise_for_status()
-        last_updated = float(response.text)
-        last_pulled = get_timestamp(deckHash) or 0.0
-        deck_initializer.remove_unchanged_notes(deck_repr, last_updated, last_pulled)
-    except requests.exceptions.RequestException as e:
-        logger.warning(
-            f"Could not get deck timestamp: {e}. Proceeding with full deck suggestion."
-        )
-    except Exception as e:
-        logger.error(f"Error processing deck timestamps: {e}")
-        # Re-raise to be caught by QueryOp error handler
-        raise RuntimeError(f"Failed to process deck timestamps: {e}") from e
-
-    # Check again after network call
-    check_collection_or_abort("after_subdeck_timestamp_fetch")
-
-    deck_initializer.trim_empty_children(deck_repr)
-
-    # Fix name to be relative
-    deck_repr.anki_dict["name"] = deck_name.split("::")[-1]
-
-    # --- Media Preparation (Background Thread) ---
-    protected_fields = deck_repr.get_protected_fields(deckHash)
-    media_files = deck_repr.get_media_file_note_map(protected_fields)
-
-    return deck_repr, media_files
-
-
-def _on_suggest_subdeck_prepared(
-    prepare_result: Tuple[Deck, List[Tuple[str, str]]], did: Any, deckHash: str
-):
-    """Success callback after subdeck preparation for suggestions."""
-    # Runs on Main Thread
-    parent_widget = QApplication.focusWidget() or mw
-
-    # Re-check collection availability after background operation
-    if not is_collection_available():
-        logger.warning("Collection became unavailable during subdeck preparation")
-        aqt.utils.showWarning(
-            "Suggestion aborted: Anki collection became unavailable during the operation.",
-            parent=parent_widget,
-        )
-        return
-
-    deck_repr, media_files = prepare_result  # Unpack result
-
-    try:
-        # --- Get Commit Info (Main Thread - UI Interaction) ---
-        token, force_overwrite = get_maintainer_data(deckHash)  # Check login status
-        if not token:
-            aqt.utils.showWarning(
-                "You must be logged in to make this suggestion. Please login under AnkiCollab > Login in the menu bar and try again.",
-                parent=parent_widget,
-            )
-            return
-
-        if not force_overwrite:
-            result = get_commit_info(
-                9, parent=parent_widget
-            )  # Default to Bulk Suggestion
-            if result is None or result[0] is None:
-                aqt.utils.tooltip("Suggestion cancelled.", parent=parent_widget)
-                return
-            rationale_id, commit_text = result
-        else:
-            rationale_id = 10
-            commit_text = ""
-
-        # Step 2: Optimize Media (Background Op)
-        op_optimize = QueryOp(
-            parent=parent_widget,
-            op=lambda col: _sync_optimize_media_and_update_refs(media_files),
-            success=lambda result: _on_suggest_media_optimized(
-                result, deck_repr, media_files, did, rationale_id, commit_text, None
-            ),  # No editor for subdeck
-        )
-        op_optimize.with_progress("Optimizing media files...")
-        op_optimize.run_in_background()
-
-    except Exception as e:
-        if isinstance(e, ApiConnectionError):
-            aqt.utils.showWarning(
-                str(e), title="AnkiCollab - Connection Error", parent=parent_widget
-            )
-            return
-        logger.error(f"Error in subdeck preparation callback: {e}")
         logger.error(traceback.format_exc())
         show_exception(parent=parent_widget, exception=e)

@@ -6,6 +6,7 @@ import os
 import zipfile
 import pytest
 import config_manager
+import consent
 import import_manager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -265,7 +266,9 @@ class TestWantsToShareStats:
         assert enabled is False
         assert ts == 0
 
-    def test_enabled_deck(self, mw_mock):
+    def test_legacy_share_stats_flag_no_longer_grants(self, mw_mock, monkeypatch):
+        # Consent granted under the old "Remember my decision" wording is stale:
+        # it pauses uploads until the user confirms the new text.
         config = {
             "settings": {},
             "hash_s": {
@@ -276,6 +279,28 @@ class TestWantsToShareStats:
             },
         }
         config_manager.write_config(config)
+        monkeypatch.setattr(consent, "current_account", lambda: "account-1")
+        enabled, ts = wants_to_share_stats("hash_s")
+        assert enabled is False
+        assert ts == 12345
+
+    def test_current_consent_grants(self, mw_mock, monkeypatch):
+        config = {
+            "settings": {},
+            "hash_s": {
+                "deckId": 1,
+                "timestamp": "2025-01-01 00:00:00",
+                "last_stats_timestamp": 12345,
+                "review_data_consent": {
+                    "granted": True,
+                    "wording_version": consent.CURRENT_WORDING_VERSION,
+                    "decided_at": "2026-10-29T11:50:41+00:00",
+                    "account": "account-1",
+                },
+            },
+        }
+        config_manager.write_config(config)
+        monkeypatch.setattr(consent, "current_account", lambda: "account-1")
         enabled, ts = wants_to_share_stats("hash_s")
         assert enabled is True
         assert ts == 12345
@@ -385,6 +410,50 @@ class TestCollectionMutatingImportOperations:
         assert "timestamp" in config["hash1"]
         update_timestamp.assert_called_once_with("hash1")
         mw_mock.reset.assert_called_once()
+
+    def _install_existing_entry(self, mw_mock, stored_entry):
+        deck = MagicMock()
+        deck.anki_dict = {"name": "Imported"}
+        subscription = {
+            "deck_hash": "hash1",
+            "stats_enabled": True,
+            "deleted_notes": [],
+        }
+        config = {"hash1": stored_entry}
+        mw_mock.col.decks.id.return_value = 44
+
+        manager = MagicMock()
+        manager.__enter__.return_value = manager
+        manager.__iter__.return_value = iter([])
+        manager.get_by_hash.return_value = config["hash1"]
+
+        with (
+            patch("import_manager.is_collection_available", return_value=True),
+            patch("import_manager.DeckManager", return_value=manager),
+            patch("import_manager.ask_for_rating"),
+            patch("import_manager._handle_stats_sharing_after_import"),
+        ):
+            _on_deck_installed(
+                (1, {"success": True}), deck, subscription, input_hash="hash1"
+            )
+
+        return config["hash1"]
+
+    def test_first_install_of_a_subscription_starts_stats_from_zero(self, mw_mock):
+        # The user may have owned the deck before and already have review
+        # history, so the first upload has to cover everything.
+        entry = self._install_existing_entry(
+            mw_mock, {"deckId": 0, "last_stats_timestamp": 1793283241}
+        )
+
+        assert entry["last_stats_timestamp"] == 0
+
+    def test_updating_an_existing_subscription_keeps_the_watermark(self, mw_mock):
+        entry = self._install_existing_entry(
+            mw_mock, {"deckId": 44, "last_stats_timestamp": 1793283241}
+        )
+
+        assert entry["last_stats_timestamp"] == 1793283241
 
     def test_on_deck_installed_deletes_only_after_dialog_accepts(self, mw_mock):
         deck = MagicMock()

@@ -21,6 +21,7 @@ import pytest
 import requests_mock as rmock
 
 import config_manager
+import consent
 from auth_manager import auth_manager
 from api_client import _ApiClient
 from dialogs import AddChangelogDialog
@@ -49,7 +50,11 @@ SUBMIT_CHANGELOG_FIELDS = {"deck_hash", "changelog"}  # SubmitChangelog
 CREATE_DECK_LINK_FIELDS = {"subscriber_deck_hash", "base_deck_hash"}
 CREATE_NOTE_LINK_FIELDS = {"subscriber_deck_hash", "base_deck_hash", "note_guids"}
 NOTE_REMOVAL_FIELDS = {"remote_deck", "note_guids", "commit_text", "force_overwrite"}
-STATS_INFO_FIELDS = {"deck_hash", "review_history"}  # StatsInfo (gzip)
+STATS_INFO_FIELDS = {
+    "deck_hash",
+    "review_history",
+    "consent_version",
+}  # StatsInfo (gzip)
 SUBMIT_CARD_FIELDS = {  # SubmitCardReq (gzip)
     "remote_deck",
     "deck_path",
@@ -307,10 +312,11 @@ class TestUploadDeckStats:
         }
         config_manager.write_config(config)
         mw_mock.col.decks.children.return_value = []
-        mw_mock.col.db.execute.return_value = [(100, 5, 1, "guid", 1)]
+        mw_mock.col.db.execute.return_value = [(100, 5, 1, "guid", 1, 0)]
         mw_mock.col.decks.name.return_value = "Deck"
-        mw_mock.col.db.first.return_value = (0, 10)  # 100% retention
-        ReviewHistory("hash_up").upload_review_history(0)
+        mw_mock.col.db.first.return_value = (0, 10, 0, 10)  # 100% retention
+        with patch("stats.consent.has_granted_consent", return_value=True):
+            ReviewHistory("hash_up").upload_review_history(0)
 
     def test_decompressed_payload_matches_backend_struct(self, mw_mock, auth_token):
         with rmock.Mocker() as m:
@@ -319,6 +325,29 @@ class TestUploadDeckStats:
             body = _decode_gzip_body(m.last_request.text)
             assert set(body.keys()) == STATS_INFO_FIELDS
             assert body["deck_hash"] == "hash_up"
+
+    def test_consent_version_is_reported(self, mw_mock, auth_token):
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, text="ok")
+            self._upload(mw_mock)
+            body = _decode_gzip_body(m.last_request.text)
+            assert body["consent_version"] == consent.CURRENT_WORDING_VERSION
+
+    def test_nothing_is_sent_without_consent(self, mw_mock, auth_token):
+        config = {
+            "settings": {},
+            "hash_up": {"deckId": 1, "timestamp": "2025-01-01 00:00:00"},
+        }
+        config_manager.write_config(config)
+        mw_mock.col.decks.children.return_value = []
+        mw_mock.col.db.execute.return_value = [(100, 5, 1, "guid", 1, 0)]
+        mw_mock.col.decks.name.return_value = "Deck"
+        mw_mock.col.db.first.return_value = (0, 10, 0, 10)
+
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, text="ok")
+            ReviewHistory("hash_up").upload_review_history(0)
+            assert m.last_request is None
 
     def test_no_user_hash_in_payload(self, mw_mock, auth_token):
         with rmock.Mocker() as m:
@@ -332,6 +361,48 @@ class TestUploadDeckStats:
             m.post(rmock.ANY, text="ok")
             self._upload(mw_mock)
             assert m.last_request.headers["Content-Type"] == "text/plain"
+
+
+class TestDeleteDeckStats:
+    """POST /DeleteDeckStats — the withdrawal path consent.request_erasure()."""
+
+    def test_request_shape(self, mw_mock, auth_token):
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, json={"status": "scheduled"}, status_code=202)
+            assert consent.request_erasure("hash_up") is True
+            assert m.last_request.json() == {"deck_hash": "hash_up"}
+            assert m.last_request.headers["Authorization"].startswith("Bearer ")
+
+    def test_scheduled_is_accepted(self, mw_mock, auth_token):
+        # Deletion runs asynchronously on the server; 202 is the normal answer.
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, json={"status": "scheduled"}, status_code=202)
+            assert consent.request_erasure("hash_up") is True
+
+    def test_never_sends_a_user_id(self, mw_mock, auth_token):
+        # The server derives the user from the token; the client must not name one.
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, json={"status": "nothing_to_delete"}, status_code=200)
+            consent.request_erasure("hash_up")
+            body = m.last_request.json()
+            assert set(body.keys()) == {"deck_hash"}
+
+    def test_nothing_to_delete_is_a_success(self, mw_mock, auth_token):
+        # Must not leave the item stuck in the retry queue.
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, json={"status": "nothing_to_delete"}, status_code=200)
+            assert consent.request_erasure("gone") is True
+
+    def test_server_error_is_not_success(self, mw_mock, auth_token):
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, status_code=500)
+            assert consent.request_erasure("hash_up") is False
+
+    def test_missing_route_is_not_success(self, mw_mock, auth_token):
+        # An older server has no route: keep the request queued.
+        with rmock.Mocker() as m:
+            m.post(rmock.ANY, status_code=404)
+            assert consent.request_erasure("hash_up") is False
 
 
 class TestSubmitCard:

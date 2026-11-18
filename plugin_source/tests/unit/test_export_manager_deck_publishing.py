@@ -200,6 +200,7 @@ class TestHandleExportPreparation:
         deck_repr = MagicMock()
         deck_repr.get_protected_fields.return_value = ["F1"]
         deck_repr.get_media_file_note_map.return_value = [("a.mp3", "g")]
+        deck_repr.get_notetype_media_file_map.return_value = [("_style.css", "uuid-1")]
         with (
             patch("export_manager.is_collection_available", return_value=True),
             patch("export_manager.get_maintainer_data", return_value=("tok", False)),
@@ -216,7 +217,7 @@ class TestHandleExportPreparation:
             optimize.return_value = "opt"
             assert query_op.call_args.kwargs["op"](None) == "opt"
 
-        optimize.assert_called_once_with([("a.mp3", "g")])
+        optimize.assert_called_once_with([("a.mp3", "g")], [("_style.css", "uuid-1")])
 
     def test_the_success_callback_continues_with_the_prepared_deck(self, mw_mock):
         env = self._run(mw_mock)

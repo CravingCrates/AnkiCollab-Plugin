@@ -22,7 +22,12 @@ No. AnkiCollab should not affect card scheduling. If you opt in, AnkiCollab will
 <summary><b>Does media get stored on AnkiCollab? How do subscribers get deck media?</b></summary>
 AnkiCollab automatically up- and downloads media files that are attached to your cards.
 
+Files that are imported by a notetype (such as scripts or CSS) are handled separately from note media. See *How do I include scripts, CSS or other static files in my notetype?* under Maintainer.
+
+Images that are used **only** in the deck description on the website are currently not uploaded or managed by AnkiCollab. To make sure such an image is uploaded, also reference it somewhere that is picked up by the media upload, such as a note or the notetype, and then click **Upload missing media**.
+
 For more information, see the <a href="https://github.com/CravingCrates/AnkiCollab-Plugin/blob/main/getting_started_maintainer.md">getting started maintainer</a> document.
+
 </details>
 
 <details close>
@@ -64,6 +69,31 @@ Yes, you can safeguard specific fields within individual notes to prevent them f
 - If you want to protect specific tags only, you need to add them to the AnkiCollab addon configuration (case sensitive). Tags that are routinely added to notes by Anki automatically (`marked`, `missing-media` and `leech`) are present there by default.
 
 Additionally, it's worth noting that certain fields may already be protected by the maintainers on the website. This is often the case for "personal" fields designed for individual customization. If you're unsure whether a field is protected, or if you're a maintainer looking to protect fields for all users, you can check and adjust these settings in the Deck Settings on the website.
+</details>
+<details close>
+<summary><b>Can I customise a notetype's styling or card templates without updates overwriting it?</b></summary>
+Yes. When a deck updates, AnkiCollab replaces the notetype's Styling and card templates with the deck's version, but anything you put below a <code>USER_CUSTOMISATION</code> marker is kept.<br><br>
+
+- In the Styling, the marker is a CSS comment:
+
+```css
+/*
+USER_CUSTOMISATION
+Anything below this comment is yours and won't be changed by deck updates.
+*/
+```
+
+- In the Front and Back templates, it's an HTML comment:
+
+```html
+<!--
+USER_CUSTOMISATION
+Anything below this comment is yours and won't be changed by deck updates.
+-->
+```
+
+Put your own CSS or template additions below the marker and leave the comment itself in place. The American spelling <code>USER_CUSTOMIZATION</code> works too. Anything above the marker belongs to the deck and will be updated as usual.<br><br>
+If the deck already ships a marker, put your content below that one rather than adding a second. If it doesn't, you can add the marker yourself at the very end of the Styling or template, and AnkiCollab will keep it and your content at the end after each update.
 </details>
 <details close>
 <summary><b>I get this Error: "Please only use notetypes that the maintainer added"!?</b></summary>
@@ -124,9 +154,28 @@ Keep in mind that when you change the deck name on AnkiCollab, you will also hav
 </details>
 
 <details close>
-<summary><b>How can I use Optional Tags on AnkiCollab?</b></summary>
-These are Work in progress and currently not recommended.
-Follow the [Discord](https://discord.com/invite/9x4DRxzqwM) for current information.
+<summary><b>How can I let subscribers customise my notetype's styling or templates?</b></summary>
+Add a <code>USER_CUSTOMISATION</code> comment at the end of the notetype's Styling (<code>/* USER_CUSTOMISATION */</code>) and of each card template (<code>&lt;!-- USER_CUSTOMISATION --&gt;</code>), then publish the change. Subscribers can then add their own CSS and template content below the marker and it will survive deck updates. See <i>Can I customise a notetype's styling or card templates without updates overwriting it?</i> under Subscriber.<br><br>
+Anything below the marker in your own copy is treated as yours too: it is never uploaded when you publish or suggest changes, so you can keep personal tweaks there without them reaching your subscribers. Changes you want subscribers to receive need to go above the marker.
+</details>
+
+<details close>
+<summary><b>How do I include scripts, CSS or other static files in my notetype?</b></summary>
+If your notetype's templates or styling import an external file (e.g. a `_script.js` or `_style.css`), AnkiCollab uploads it together with the notetype when you publish, and subscribers receive it on their next sync. There are two rules:
+
+- The filename must **start with an underscore** (`_`), like Anki's own convention for files that aren't tied to a specific note. Files without the leading underscore are not treated as notetype files.
+- Only the **deck owner** can upload new notetype files, since they are the only one who can edit notetypes on the website.
+
+*Note: this requires a plugin version that supports static notetype media (Beta 2026.11.08 or newer).*
+
+**How do I update a script or stylesheet that my notetype already imports?** AnkiCollab can't track content changes inside external files on your disk. If you edit `_script.js` in place, the change will **not** be uploaded or reach your subscribers. To publish a change, give the file a new name:
+
+1. Edit the file and **rename it**, keeping the leading underscore (e.g. `_script.js` → `_script_v2.js`).
+2. Update your local Anki templates so they reference the new filename.
+3. Go to the AnkiCollab website, paste in the updated template (including the new file reference) and save your changes.
+4. Back in Anki, click **Upload missing media** in the gear menu (⚙) on the deck overview.
+
+Subscribers then receive the new file and the updated notetype (which now imports `_script_v2.js` instead of the outdated file) on their next sync.
 </details>
 
 <details close>
