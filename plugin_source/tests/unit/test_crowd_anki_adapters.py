@@ -6,7 +6,7 @@ file exercises their real logic.
 """
 
 import os
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -381,3 +381,138 @@ class TestDeckInitializer:
         # Query must reference the deck ids list
         query = fake_self.col.db.list.call_args[0][0]
         assert "cards" in query and "did" in query
+
+    def test_get_note_ids_builds_direct_query(self):
+        fake_self = MagicMock()
+        fake_self.children.return_value = [("Child", 2)]
+        fake_self.col.db.list.return_value = [10, 20]
+        result = deck_initializer.get_note_ids(
+            fake_self, 1, children=True, include_from_dynamic=True
+        )
+        assert result == [10, 20]
+        query = fake_self.col.db.list.call_args[0][0]
+        assert "SELECT DISTINCT nid FROM cards WHERE" in query
+        assert "did IN" in query and "odid IN" in query
+
+    def test_from_collection_with_note_ids_skips_irrelevant_subdecks(self):
+        col = MagicMock()
+        decks_data = {
+            "Root": {"id": 1, "name": "Root", "dyn": False},
+            "Root::Irrelevant 1": {"id": 2, "name": "Root::Irrelevant 1", "dyn": False},
+            "Root::Irrelevant 2": {"id": 3, "name": "Root::Irrelevant 2", "dyn": False},
+            "Root::A": {"id": 10, "name": "Root::A", "dyn": False},
+            "Root::A::B": {"id": 11, "name": "Root::A::B", "dyn": False},
+            "Root::A::B::Target": {
+                "id": 12,
+                "name": "Root::A::B::Target",
+                "dyn": False,
+            },
+        }
+        col.decks.by_name.side_effect = lambda name: decks_data.get(name)
+        col.decks.name.side_effect = lambda did: next(
+            (d["name"] for d in decks_data.values() if d["id"] == did), None
+        )
+
+        def mock_children(did):
+            parent_name = col.decks.name(did)
+            if not parent_name:
+                return []
+            prefix = parent_name + "::"
+            return [
+                (d["name"], d["id"])
+                for d in decks_data.values()
+                if d["name"].startswith(prefix)
+            ]
+
+        col.decks.children.side_effect = mock_children
+        # Mock database cards query returning note 999 in deck 12
+        col.db.all.return_value = [(999, 12, 0)]
+        col.models.get.return_value = {
+            "id": 1,
+            "name": "Basic",
+            "flds": [{"name": "Front"}],
+        }
+
+        fake_note = MagicMock()
+        fake_note.anki_object.mid = 1
+        fake_note.get_uuid.return_value = "note-uuid"
+
+        with patch(
+            "crowd_anki.representation.deck_initializer.Note.get_notes_from_nids",
+            return_value=[fake_note],
+        ):
+            deck = deck_initializer.from_collection(col, "Root", note_ids=[999])
+
+        assert deck is not None
+        # Root only has 'Root::A' as direct child; 'Irrelevant 1' and 'Irrelevant 2' are completely skipped
+        child_names = [c.anki_dict["name"] for c in deck.children]
+        assert child_names == ["Root::A"]
+
+        # Traverse down to Target
+        a_deck = deck.children[0]
+        assert [c.anki_dict["name"] for c in a_deck.children] == ["Root::A::B"]
+        b_deck = a_deck.children[0]
+        assert [c.anki_dict["name"] for c in b_deck.children] == ["Root::A::B::Target"]
+        target_deck = b_deck.children[0]
+        assert len(target_deck.notes) == 1
+
+    def test_from_collection_falls_back_cleanly_when_db_is_unconfigured_mock(self):
+        col = MagicMock()
+        col.decks.by_name.return_value = {"id": 1, "name": "Root", "dyn": False}
+        col.decks.name.return_value = "Root"
+        col.decks.children.return_value = []
+        col.decks.get_note_ids.return_value = [42]
+
+        fake_note = MagicMock()
+        fake_note.get_uuid.return_value = "note-42"
+
+        with patch(
+            "crowd_anki.representation.deck_initializer.Note.get_notes_from_nids",
+            return_value=[fake_note],
+        ):
+            deck = deck_initializer.from_collection(col, "Root", note_ids=[42])
+
+        assert deck is not None
+        assert len(deck.notes) == 1
+        col.decks.get_note_ids.assert_called_once_with(1, include_from_dynamic=True)
+
+    def test_from_collection_skips_dynamic_deck_branch_when_card_in_filtered_deck(self):
+        col = MagicMock()
+        decks_data = {
+            "Root": {"id": 1, "name": "Root", "dyn": False},
+            "Root::CramBranch": {"id": 20, "name": "Root::CramBranch", "dyn": False},
+            "Root::CramBranch::Filtered": {
+                "id": 50,
+                "name": "Root::CramBranch::Filtered",
+                "dyn": True,
+            },
+            "Root::HomeBranch": {"id": 10, "name": "Root::HomeBranch", "dyn": False},
+            "Root::HomeBranch::Leaf": {
+                "id": 12,
+                "name": "Root::HomeBranch::Leaf",
+                "dyn": False,
+            },
+        }
+        col.decks.by_name.side_effect = lambda name: decks_data.get(name)
+        col.decks.name.side_effect = lambda did: next(
+            (d["name"] for d in decks_data.values() if d["id"] == did), None
+        )
+        col.decks.children.side_effect = lambda did: [
+            (d["name"], d["id"])
+            for d in decks_data.values()
+            if d["name"].startswith((col.decks.name(did) or "") + "::")
+        ]
+        # Card is currently in filtered deck 50 with original home deck 12
+        col.db.all.return_value = [(999, 50, 12)]
+
+        fake_note = MagicMock()
+        fake_note.get_uuid.return_value = "note-999"
+
+        with patch(
+            "crowd_anki.representation.deck_initializer.Note.get_notes_from_nids",
+            return_value=[fake_note],
+        ):
+            deck = deck_initializer.from_collection(col, "Root", note_ids=[999])
+
+        assert [c.anki_dict["name"] for c in deck.children] == ["Root::HomeBranch"]
+        assert len(deck.children[0].children[0].notes) == 1

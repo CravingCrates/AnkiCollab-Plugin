@@ -76,7 +76,7 @@ class TestReachText:
         stats["totals"]["reach"] = 0
         text = impact.reach_text(stats)
         assert "0" not in text
-        assert "reach learners" in text
+        assert "reach impressions" in text
 
     @pytest.mark.parametrize("stats", [None, {}, {"totals": None}])
     def test_survives_a_missing_payload(self, stats):
