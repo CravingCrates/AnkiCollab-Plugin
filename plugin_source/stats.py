@@ -22,6 +22,17 @@ class ReviewHistory:
         self.deck_ids = get_deck_and_subdecks(self.deck_id)
 
     def get_card_data(self, last_upload_date: int) -> defaultdict:
+        notes_by_deck_and_note_guid = defaultdict(
+            lambda: defaultdict(lambda: {"retention": [], "lapses": [], "reps": []})
+        )
+        if (
+            not self.deck_ids
+            or mw is None
+            or getattr(mw, "col", None) is None
+            or getattr(mw.col, "db", None) is None
+        ):
+            return notes_by_deck_and_note_guid
+
         # Query to get the card data of the given decks.
         #
         # A card borrowed by a filtered deck keeps its home deck in `odid` and
@@ -41,9 +52,6 @@ class ReviewHistory:
         )
 
         tracked_deck_ids = set(self.deck_ids)
-        notes_by_deck_and_note_guid = defaultdict(
-            lambda: defaultdict(lambda: {"retention": [], "lapses": [], "reps": []})
-        )
 
         for card_id, reps, lapses, note_guid, deck_id, original_deck_id in card_data:
             # Report the card under the deck it belongs to, not under the
@@ -134,11 +142,22 @@ class ReviewHistory:
         if not consent.has_granted_consent(self.deck_hash):
             return None
 
+        if (
+            not self.deck_ids
+            or mw is None
+            or getattr(mw, "col", None) is None
+            or getattr(mw.col, "db", None) is None
+        ):
+            return None
+
         # Captured before querying, so answers given while the request is in
         # flight are still picked up by the next upload.
         covered_until = int(datetime.now(timezone.utc).timestamp())
 
-        review_history = self.get_card_data(last_upload_date)
+        try:
+            review_history = self.get_card_data(last_upload_date)
+        except Exception:
+            return None
 
         if not any(review_history.values()):
             return covered_until
@@ -184,8 +203,11 @@ def update_stats_timestamp(deck_hash: str, timestamp: Optional[int] = None) -> N
             )
 
 
-def on_stats_upload_done(done, deck_hash: Optional[str] = None) -> None:
-    mw.progress.finish()
+def on_stats_upload_done(
+    done, deck_hash: Optional[str] = None, finish_progress: bool = True
+) -> None:
+    if finish_progress:
+        mw.progress.finish()
 
     # Only move the watermark once the server has the data, otherwise the
     # reviews that were just collected would never be sent.

@@ -34,6 +34,7 @@ import webbrowser
 from . import config_manager
 from . import consent
 from . import note_status
+from . import startup_sync
 from .identifier import subscribe_to_deck, unsubscribe_from_deck
 from .var_defs import DEFAULT_PROTECTED_TAGS
 from .utils import get_local_deck_from_hash, DeckManager
@@ -219,6 +220,13 @@ def add_to_table(line_edit, table, dialog):
                 f"You're already subscribed to this deck.\n\nUse 'Update Decks' to get the latest changes."
             )
             line_edit.setText("")
+            return
+
+        if startup_sync.is_pull_in_progress():
+            showInfo(
+                "AnkiCollab is currently checking for updates. Please wait a moment and try again.",
+                parent=dialog,
+            )
             return
 
         strings_data[string] = {
@@ -1166,7 +1174,7 @@ def show_global_settings_dialog(parent_dialog):
     pull_on_startup_cb.setStyleSheet(checkbox_style)
     pull_on_startup_cb.setChecked(bool(settings.get("pull_on_startup", False)))
     pull_on_startup_cb.setToolTip(
-        "Automatically fetch updates when Anki opens (may slow startup)"
+        "Automatically check for AnkiCollab updates in the background when Anki opens"
     )
 
     suspend_new_cards_cb = QCheckBox("Automatically suspend new Cards")
@@ -1470,7 +1478,7 @@ def open_website():
 
 
 def on_login_manager_btn():
-    if auth_manager.is_logged_in():
+    if auth_manager.has_stored_token():
         force_logout(False)
         showInfo(
             "You've been logged out successfully.\n\nYour subscriptions are still saved locally."
@@ -1479,7 +1487,7 @@ def on_login_manager_btn():
         # Show Login Dialog
         dialog = LoginDialog(mw)
         result = dialog.exec()
-        if auth_manager.is_logged_in():  # Verify login status *after* dialog closes
+        if auth_manager.has_stored_token():  # Verify login status *after* dialog closes
             showInfo("Welcome back! You're now logged in.")
             update_ui_for_login_state()  # Update UI after successful login
             refresh_note_status_record()
@@ -1505,13 +1513,19 @@ def store_default_config():
     if config_manager.current_profile_name() is None:
         return
 
-    config = config_manager.get_config()
+    stored = config_manager.get_stored_config()
+    auth = config_manager.get_auth()
+    is_new_profile = not stored and not auth
 
-    if "settings" not in config:
+    config = stored if isinstance(stored, dict) else {}
+
+    updated = False
+    if not isinstance(config.get("settings"), dict):
         config["settings"] = {}
+        updated = True
 
     defaults = {
-        "pull_on_startup": False,
+        "pull_on_startup": is_new_profile,
         "suspend_new_cards": False,
         "auto_move_cards": False,  # Note: Action text is "Do not move", so False means "Do move"
         "keep_empty_subdecks": False,
@@ -1530,7 +1544,6 @@ def store_default_config():
     }
 
     settings = config["settings"]
-    updated = False
     for key, value in defaults.items():
         if key not in settings:
             settings[key] = value
@@ -1541,7 +1554,7 @@ def store_default_config():
 
 
 def update_ui_for_login_state():
-    logged_in = auth_manager.is_logged_in()
+    logged_in = auth_manager.has_stored_token()
     config = config_manager.get_config()
     settings = config.get("settings", {})
 

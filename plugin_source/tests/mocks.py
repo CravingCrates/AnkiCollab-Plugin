@@ -163,6 +163,7 @@ class FakeCol:
         self.add_notes = MagicMock()
         self.set_deck = MagicMock()
         self.sched = MagicMock()
+        self.sync_status = MagicMock(return_value=MagicMock(required=0))
 
     def close(self):
         pass
@@ -253,6 +254,10 @@ def create_mock_mw(
     # reviewer / state ----------------------------------------------------
     mw.reviewer = MagicMock()
     mw.state = "overview"
+    mw.safeMode = False
+    mw.restoring_backup = False
+    mw.media_syncer = MagicMock()
+    mw.media_syncer.is_syncing.return_value = False
 
     return mw
 

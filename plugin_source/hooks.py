@@ -24,6 +24,7 @@ from typing import Sequence, List, Tuple, Optional
 from . import config_manager
 from . import consent
 from . import note_status
+from . import startup_sync
 from .media_manager import MediaManager  # Import List
 
 from .export_manager import *
@@ -748,7 +749,6 @@ def refresh_note_status_record() -> None:
         if store is None:
             return
         deck_hashes = [deck_hash for deck_hash, _details in DeckManager()]
-        logged_in = auth_manager.is_logged_in()
     except Exception as e:
         logger.warning(f"Could not prepare the AnkiCollab note record: {e}")
         return
@@ -760,7 +760,7 @@ def refresh_note_status_record() -> None:
 
     def fill():
         try:
-            if not logged_in:
+            if not auth_manager.is_logged_in():
                 store.forget_decks_except(deck_hashes)
                 return
             note_status.fill_missing_decks(store, deck_hashes, post)
@@ -863,60 +863,21 @@ def make_new_card(note: NoteId):
 
 
 def request_update(silent) -> None:
-    if not auth_manager.is_logged_in():
-        aqt.utils.tooltip("Log in to AnkiCollab to check for updates.")
+    if not auth_manager.has_stored_token():
+        if not silent:
+            aqt.utils.tooltip("Log in to AnkiCollab to check for updates.")
         return
 
-    # Validate token with server before starting the pull
-    try:
-        from .api_client import api_client
-
-        check = api_client.post_empty("/CheckUserToken", timeout=5)
-        if check.status_code != 200 or check.text != "true":
-            # api_client already called handle_auth_failure() for 401
-            if check.status_code != 401:
-                auth_manager.handle_auth_failure()
-            return
-    except RuntimeError:
-        # "Not logged in" — already handled by api_client
-        return
-    except Exception:
-        pass  # Network error — proceed and let pull handle it
-
-    handle_pull(None, silent)
+    handle_pull(None, silent, validate_token=True)
 
 
 def async_update(silent: bool = False) -> None:
     """Asynchronous update check. This is called when the user clicks the update button."""
-    if not auth_manager.is_logged_in():
-        aqt.utils.tooltip("Log in to AnkiCollab to check for updates.")
-        return
-
     request_update(silent)
 
 
 def autoUpdate():
-    config = config_manager.get_config()
-    settings = config.get("settings", {})
-    startup_check_enabled = bool(settings.get("pull_on_startup", False))
-
-    if startup_check_enabled:
-        # Run the update once the ankiweb sync is done
-        if mw.pm.auto_syncing_enabled() and mw.pm.sync_auth() and not mw.safeMode:
-
-            def on_sync_finished_hk():
-                # run reload_data AFTER sync is finished
-                async_update(True)
-
-                try:
-                    gui_hooks.sync_did_finish.remove(on_sync_finished_hk)
-                except ValueError:
-                    pass  # Hook wasn't registered, ignore
-
-            gui_hooks.sync_did_finish.append(on_sync_finished_hk)
-        else:
-            # No auto-sync or not configured for sync, run immediately
-            async_update(True)
+    startup_sync.on_profile_opened()
 
 
 import struct
@@ -1000,6 +961,8 @@ def onProfileLoaded():
 
 def onProfileWillClose():
     """Called when the Anki profile is about to close."""
+    startup_sync.on_profile_will_close()
+
     import asyncio
     from . import main
 
@@ -1070,6 +1033,7 @@ def _on_profile_changed_for_note_status(_profile_name: str) -> None:
 # --- Hook Registration ---
 def hooks_init():
     """Registers all hooks. Internal checks within callbacks manage behavior."""
+    startup_sync.register_hooks()
     gui_hooks.profile_did_open.append(onProfileLoaded)
     config_manager.add_profile_changed_listener(_on_profile_changed_for_note_status)
     gui_hooks.profile_will_close.append(onProfileWillClose)

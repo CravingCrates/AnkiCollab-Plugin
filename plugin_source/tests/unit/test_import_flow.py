@@ -20,6 +20,9 @@ from utils import BackupFailedError
 
 
 class TestImportWebresult:
+    def test_none_data_returns_quietly(self, mw_mock):
+        assert import_manager.import_webresult(None) is None
+
     def test_none_webresult_returns(self, mw_mock):
         assert import_manager.import_webresult((None, None, False)) is None
 
@@ -28,23 +31,28 @@ class TestImportWebresult:
             import_manager.import_webresult(([{"deck_hash": "h1"}], None, False))
         m_warn.assert_called_once()
 
-    def test_empty_webresult_silent_tooltip(self, mw_mock):
+    def test_no_collection_available_silent_skips_warning(self, mw_mock, mw_no_col):
+        with patch("import_manager.aqt.utils.showWarning") as m_warn:
+            import_manager.import_webresult(([{"deck_hash": "h1"}], None, True))
+        m_warn.assert_not_called()
+
+    def test_empty_webresult_silent_is_quiet(self, mw_mock):
         with (
             patch("import_manager.aqt.utils.tooltip") as m_tip,
             patch("import_manager.update_stats") as m_stats,
         ):
             import_manager.import_webresult(([], None, True))
-        m_tip.assert_called_once()
-        assert "synced" in m_tip.call_args.args[0]
-        m_stats.assert_called_once()
+        m_tip.assert_not_called()
+        m_stats.assert_called_once_with(silent=True)
 
     def test_empty_webresult_non_silent(self, mw_mock):
         with (
             patch("import_manager.aqt.utils.tooltip") as m_tip,
-            patch("import_manager.update_stats"),
+            patch("import_manager.update_stats") as m_stats,
         ):
             import_manager.import_webresult(([], None, False))
         assert "up to date" in m_tip.call_args.args[0]
+        m_stats.assert_called_once_with(silent=False)
 
     def test_backup_failure_aborts(self, mw_mock):
         with (

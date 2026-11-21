@@ -337,6 +337,15 @@ class TestOnStatsUploadDone:
 
         mw_mock.progress.finish.assert_called_once()
 
+    def test_skips_progress_finish_when_finish_progress_false(self, mw_mock):
+        self._config()
+
+        on_stats_upload_done(4242, "hash_done", finish_progress=False)
+
+        mw_mock.progress.finish.assert_not_called()
+        stored = config_manager.get_stored_config()
+        assert stored["hash_done"]["last_stats_timestamp"] == 4242
+
 
 class TestUpdateStatsTimestamp:
     def test_updates_timestamp(self, mw_mock):
@@ -354,3 +363,25 @@ class TestUpdateStatsTimestamp:
 
         stored = config_manager.get_stored_config()
         assert stored["hash_ts"]["last_stats_timestamp"] > 0
+
+    def test_upload_and_card_data_abort_safely_when_deck_ids_empty_or_col_closed(
+        self, mw_mock
+    ):
+        config_manager.write_config(
+            {
+                "settings": {},
+                "hash_zero": {
+                    "deckId": 0,
+                    "timestamp": "2025-01-01 00:00:00",
+                    "last_stats_timestamp": 0,
+                },
+            }
+        )
+        rh = ReviewHistory("hash_zero")
+        assert rh.deck_ids == []
+        assert len(rh.get_card_data(0)) == 0
+        mw_mock.col.db.execute.assert_not_called()
+
+        with patch("stats.consent.has_granted_consent", return_value=True):
+            assert rh.upload_review_history(0) is None
+        mw_mock.col.db.execute.assert_not_called()

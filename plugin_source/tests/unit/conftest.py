@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
+import startup_sync
 from tests.mocks import create_mock_mw
 
 # Dynamically determine addon package name from directory
@@ -26,6 +27,7 @@ _MW_MODULES = [
     "auth_manager",
     "stats",
     "import_manager",
+    "startup_sync",
     "export_manager",
     "media_manager",
     "notifications_center",
@@ -61,10 +63,13 @@ def mw_mock(sample_config):
         p.start()
     sys.modules["aqt"].mw = mock
 
-    yield mock
-
-    for p in patchers:
-        p.stop()
+    startup_sync.reset_state()
+    try:
+        yield mock
+    finally:
+        startup_sync.reset_state()
+        for p in patchers:
+            p.stop()
 
 
 @pytest.fixture

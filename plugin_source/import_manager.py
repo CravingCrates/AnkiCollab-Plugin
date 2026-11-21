@@ -6,7 +6,7 @@ import os
 import time
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 import sentry_sdk
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import aqt
 import aqt.utils
+from anki.utils import point_version
 from aqt.operations import QueryOp
 
 from aqt.qt import *
@@ -73,10 +74,139 @@ class CacheArchiveRefreshError(CacheBootstrapError):
     """Raised when a fresh cache archive URL is required."""
 
 
+class CacheBootstrapDeferredError(RuntimeError):
+    """Raised when silent cache bootstrap is deferred during AnkiWeb media sync."""
+
+
 def _notify_cache_bootstrap_failure() -> None:
     aqt.utils.showCritical(
         "AnkiCollab could not download deck. Please try again later. If the problem persists, please contact support."
     )
+
+
+def _tooltip_on_main(message: str, period: int = 3000) -> None:
+    """Show a non-blocking tooltip on the main thread when collection is open."""
+
+    def _show() -> None:
+        if not is_collection_available():
+            return
+        try:
+            aqt.utils.tooltip(
+                message,
+                parent=QApplication.focusWidget() or mw,
+                period=period,
+            )
+        except Exception:
+            pass
+
+    try:
+        if aqt.mw and getattr(aqt.mw, "taskman", None):
+            aqt.mw.taskman.run_on_main(_show)
+    except Exception:
+        pass
+
+
+def _is_network_cause(exc: Optional[BaseException]) -> bool:
+    cause = getattr(exc, "__cause__", None) if exc is not None else None
+    return isinstance(
+        cause, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+    )
+
+
+def _handle_cache_bootstrap_error(
+    exc: Optional[BaseException],
+    *,
+    silent: bool,
+    notify: Optional[Callable[[str], None]] = None,
+) -> None:
+    notify_fn = notify if notify is not None else _tooltip_on_main
+    if silent:
+        if _is_network_cause(exc):
+            logger.info("Cache bootstrap interrupted while offline: %s", exc)
+            return
+        notify_fn("AnkiCollab could not download deck. Please try again later.")
+        return
+    if aqt.mw and getattr(aqt.mw, "taskman", None):
+        aqt.mw.taskman.run_on_main(_notify_cache_bootstrap_failure)
+
+
+def validate_user_token(
+    silent: bool = False,
+    *,
+    can_notify: Optional[Callable[[], bool]] = None,
+    notify: Optional[Callable[[str], None]] = None,
+    api: Any = None,
+    auth: Any = None,
+) -> bool:
+    """Validate stored AnkiCollab credentials on a background thread.
+
+    Preserves credentials on offline errors and HTTP 5xx responses, clearing
+    auth data only on explicit 401/403 or invalid-token responses.
+    """
+    auth_obj = auth if auth is not None else auth_manager
+    api_obj = api if api is not None else api_client
+    notify_fn = notify if notify is not None else _tooltip_on_main
+    initial_profile = config_manager.current_profile_name()
+
+    def _session_valid() -> bool:
+        if can_notify is not None:
+            return can_notify()
+        return (
+            initial_profile is None
+            or config_manager.current_profile_name() == initial_profile
+        )
+
+    def _allowed_to_notify() -> bool:
+        return _session_valid() and is_collection_available()
+
+    token = auth_obj.get_token()
+    if not token:
+        if not silent and _allowed_to_notify():
+            if getattr(auth_obj, "_last_refresh_transient_error", False):
+                notify_fn(
+                    "Unable to connect to AnkiCollab. Please check your internet connection."
+                )
+            else:
+                notify_fn("Log in to AnkiCollab to check for updates.")
+        return False
+
+    try:
+        check = api_obj.post_empty("/CheckUserToken", timeout=5)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        logger.info("Token validation skipped while offline: %s", exc)
+        if not silent and _allowed_to_notify():
+            notify_fn(
+                "Unable to connect to AnkiCollab. Please check your internet connection."
+            )
+        return False
+    except RuntimeError:
+        if not silent and _allowed_to_notify():
+            notify_fn("Log in to AnkiCollab to check for updates.")
+        return False
+    except requests.exceptions.RequestException as exc:
+        logger.warning("Token validation request failed: %s", exc)
+        if not silent and _allowed_to_notify():
+            notify_fn("Could not verify your AnkiCollab session.")
+        return False
+
+    if check.status_code == 401:
+        return False
+
+    if check.status_code == 403 or (check.status_code == 200 and check.text != "true"):
+        if _session_valid():
+            auth_obj.handle_auth_failure()
+        return False
+
+    if check.status_code >= 500 or check.status_code != 200:
+        logger.warning(
+            "AnkiCollab token check returned HTTP %s; keeping credentials",
+            check.status_code,
+        )
+        if _allowed_to_notify():
+            notify_fn("AnkiCollab server error while checking for updates.")
+        return False
+
+    return True
 
 
 def _fetch_manifest(manifest_url: str) -> Dict[str, Any]:
@@ -176,6 +306,8 @@ def _subscription_from_manifest(
     deck_hash: str,
     manifest: Dict[str, Any],
     archive_url: Optional[str] = None,
+    *,
+    silent: bool = False,
 ) -> Dict[str, Any]:
     if not archive_url:
         raise CacheBootstrapError("Cache manifest missing archive URL")
@@ -217,7 +349,11 @@ def _subscription_from_manifest(
                 def update_progress(
                     dl_bytes: int, tot_bytes: int, speed_bps: float, elapsed: float
                 ) -> None:
-                    if not getattr(aqt.mw, "progress", None):
+                    progress = getattr(aqt.mw, "progress", None)
+                    if not progress:
+                        return
+                    busy_fn = getattr(progress, "busy", None)
+                    if callable(busy_fn) and not busy_fn():
                         return
                     if tot_bytes > 0:
                         bar_value = min(1000, int((dl_bytes / tot_bytes) * 1000))
@@ -227,9 +363,9 @@ def _subscription_from_manifest(
                             eta = _format_eta(remaining_seconds)
                             if eta:
                                 label = f"Downloading deck... {eta}"
-                        aqt.mw.progress.update(label=label, value=bar_value, max=1000)
+                        progress.update(label=label, value=bar_value, max=1000)
                     else:
-                        aqt.mw.progress.update(label="Downloading deck...")
+                        progress.update(label="Downloading deck...")
 
                 for attempt in range(MAX_DOWNLOAD_ATTEMPTS):
                     headers = {"Range": f"bytes={downloaded}-"} if downloaded else {}
@@ -301,10 +437,10 @@ def _subscription_from_manifest(
                         for chunk in response.iter_content(
                             chunk_size=DOWNLOAD_CHUNK_SIZE
                         ):
-                            if (
-                                getattr(aqt.mw, "progress", None)
-                                and aqt.mw.progress.want_cancel()
-                            ):
+                            progress = (
+                                None if silent else getattr(aqt.mw, "progress", None)
+                            )
+                            if progress and progress.want_cancel():
                                 cancelled = True
                                 break
 
@@ -342,7 +478,7 @@ def _subscription_from_manifest(
                                 if total_size > 0 and downloaded >= total_size:
                                     should_update = True
 
-                                if should_update:
+                                if not silent and should_update:
                                     aqt.mw.taskman.run_on_main(
                                         lambda d=downloaded, t=total_size, s=smoothed_bps, e=(
                                             now - started_at
@@ -362,7 +498,7 @@ def _subscription_from_manifest(
                                 "Cache archive transfer ended before Content-Length"
                             )
 
-                        if downloaded > 0:
+                        if not silent and downloaded > 0:
                             aqt.mw.taskman.run_on_main(
                                 lambda d=downloaded, t=total_size, s=smoothed_bps, e=(
                                     time.monotonic() - started_at
@@ -456,7 +592,12 @@ def _subscription_from_manifest(
                 pass
 
 
-def _resolve_cache_bootstrap_entries(entries: List[Any]) -> List[Any]:
+def _resolve_cache_bootstrap_entries(
+    entries: List[Any],
+    *,
+    silent: bool = False,
+    defer_cache_bootstrap: bool = False,
+) -> List[Any]:
     if not isinstance(entries, list):
         return entries
 
@@ -464,6 +605,8 @@ def _resolve_cache_bootstrap_entries(entries: List[Any]) -> List[Any]:
     for idx, entry in enumerate(entries):
         try:
             if isinstance(entry, dict) and entry.get("mode") == CACHE_BOOTSTRAP_MODE:
+                if silent and defer_cache_bootstrap:
+                    raise CacheBootstrapDeferredError("AnkiWeb media sync is active")
                 manifest_meta = entry.get("manifest") or {}
                 manifest_url = manifest_meta.get("manifest_presigned_url")
                 deck_hash = entry.get("deck_hash")
@@ -478,11 +621,13 @@ def _resolve_cache_bootstrap_entries(entries: List[Any]) -> List[Any]:
 
                 archive_url = manifest_meta.get("archive_presigned_url")
                 subscription = _subscription_from_manifest(
-                    deck_hash, manifest, archive_url
+                    deck_hash, manifest, archive_url, silent=silent
                 )
                 resolved.append(subscription)
             else:
                 resolved.append(entry)
+        except CacheBootstrapDeferredError:
+            raise
         except CacheBootstrapError as cbe:
             logger.exception(
                 "CacheBootstrapError while resolving cache bootstrap entry: %s", cbe
@@ -566,8 +711,11 @@ def open_browser_with_nids(nids):
     browser.onSearchActivated()
 
 
-def update_stats() -> None:
+def update_stats(silent: bool = False) -> None:
     """Update stats for decks where stats sharing is already enabled."""
+    if not is_collection_available():
+        return
+
     decks = DeckManager()
 
     for deck_hash, details in decks:
@@ -581,11 +729,17 @@ def update_stats() -> None:
         op = QueryOp(
             parent=mw,
             op=lambda _, rh=rh: rh.upload_review_history(last_stats_timestamp),
-            success=lambda done, deck_hash=deck_hash: on_stats_upload_done(
-                done, deck_hash
+            success=lambda done, deck_hash=deck_hash, silent=silent: on_stats_upload_done(
+                done, deck_hash, finish_progress=not silent
             ),
         )
-        op.with_progress("Uploading Review History...").run_in_background()
+        if silent:
+            op = op.failure(lambda err: logger.warning("Stats upload failed: %s", err))
+            if point_version() >= 231000:
+                op.without_collection()
+            op.run_in_background()
+        else:
+            op.with_progress("Uploading Review History...").run_in_background()
 
     _retry_pending_erasures()
 
@@ -653,7 +807,12 @@ def _install_deck_op(deck, config, map_cache=None, note_type_data=None):
 
 
 def _on_deck_installed(
-    install_result, deck, subscription, input_hash=None, update_timestamp_after=False
+    install_result,
+    deck,
+    subscription,
+    input_hash=None,
+    update_timestamp_after=False,
+    silent=False,
 ):
     """Success callback after deck installation."""
     # Runs on Main Thread
@@ -672,6 +831,14 @@ def _on_deck_installed(
     deleted_notes = subscription.get("deleted_notes", [])
     deck_name = deck.anki_dict["name"]
     deck_hash = subscription["deck_hash"]
+    target_hash = input_hash or deck_hash
+    is_initial_install = bool(input_hash)
+    if not is_initial_install and target_hash:
+        stored_cfg = config_manager.get_stored_config()
+        if isinstance(stored_cfg, dict):
+            stored_entry = stored_cfg.get(target_hash)
+            if isinstance(stored_entry, dict) and stored_entry.get("deckId", 0) == 0:
+                is_initial_install = True
 
     try:
         store = note_status.CollabNoteStore.for_current_profile()
@@ -681,7 +848,7 @@ def _on_deck_installed(
                 deck_hash,
                 deck,
                 deleted_notes,
-                full_deck=bool(input_hash),
+                full_deck=is_initial_install,
             )
     except Exception as e:
         # Only the editor hint depends on this record; never fail an import for it
@@ -702,12 +869,12 @@ def _on_deck_installed(
             elif del_notes_choice == QDialog.DialogCode.Rejected:
                 open_browser_with_nids(deleted_nids)
 
-    # Handle new deck registration if input_hash is provided
-    if input_hash:
+    # Handle new deck registration if input_hash is provided or subscription is still unlinked (deckId == 0)
+    if is_initial_install and target_hash:
         with DeckManager() as decks:
-            details = decks.get_by_hash(input_hash)
+            details = decks.get_by_hash(target_hash)
             if (
-                details and details["deckId"] == 0 and mw.col
+                details and details.get("deckId", 0) == 0 and mw.col
             ):  # should only be the case once when they add a new subscription and never ambiguous
                 details["deckId"] = aqt.mw.col.decks.id(deck_name)  # type: ignore
                 # large decks use cached data that may be a day old, so we need to update the timestamp to force a refresh
@@ -716,8 +883,8 @@ def _on_deck_installed(
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 details["stats_enabled"] = subscription["stats_enabled"]
                 details["last_stats_timestamp"] = 0
-    else:
-        # Only ask for a rating if they are updating a deck and not adding a new deck to avoid spam popups
+    elif not silent:
+        # Only ask for a rating if they are manually updating a deck and not adding a new deck to avoid spam popups
         ask_for_rating()
 
     # Update timestamp if requested (for changelog updates)
@@ -776,7 +943,9 @@ def _handle_stats_sharing_after_import(deck_hash, deck_name=None):
         sentry_sdk.capture_exception(e)
 
 
-def install_update(subscription, input_hash=None, update_timestamp_after=False):
+def install_update(
+    subscription, input_hash=None, update_timestamp_after=False, silent=False
+):
     logger.info(f"Installing update for deck: {subscription['deck_hash']}")
     deck_hash = subscription["deck_hash"]
     parent_widget = QApplication.focusWidget() or mw
@@ -841,7 +1010,12 @@ def install_update(subscription, input_hash=None, update_timestamp_after=False):
         parent=parent_widget,
         op=lambda col: _install_deck_op(deck, config, map_cache, note_type_data),
         success=lambda res: _on_deck_installed(
-            res, deck, subscription, input_hash, update_timestamp_after
+            res,
+            deck,
+            subscription,
+            input_hash,
+            update_timestamp_after,
+            silent=silent,
         ),
     ).failure(_on_install_failure)
     op.with_progress("Installing/Updating deck...")
@@ -887,7 +1061,7 @@ def prep_config(protected_fields, optional_tags, has_optional_tags, deck_hash):
     return config
 
 
-def show_changelog_popup(subscription):
+def show_changelog_popup(subscription, silent=False):
     changelog = subscription["changelog"]
     deck_hash = subscription["deck_hash"]
 
@@ -898,13 +1072,19 @@ def show_changelog_popup(subscription):
         choice = dialog.exec()
 
         if choice == QDialog.DialogCode.Accepted:
-            install_update(subscription, update_timestamp_after=True)
+            if silent:
+                install_update(subscription, update_timestamp_after=True, silent=True)
+            else:
+                install_update(subscription, update_timestamp_after=True)
         elif choice == QDialog.DialogCode.Rejected:
             postpone_update()
         else:
             abort_update(deck_hash)
     else:  # Skip changelog window if there is no message for the user
-        install_update(subscription, update_timestamp_after=True)
+        if silent:
+            install_update(subscription, update_timestamp_after=True, silent=True)
+        else:
+            install_update(subscription, update_timestamp_after=True)
 
 
 def ask_for_rating():
@@ -931,6 +1111,9 @@ def ask_for_rating():
 
 
 def import_webresult(data):
+    if data is None:
+        return
+
     webresult, input_hash, silent = data  # gotta unpack the tuple
 
     # None indicates an error or cancellation path where a dedicated message
@@ -940,21 +1123,22 @@ def import_webresult(data):
 
     # Ensure collection is available before proceeding
     if not is_collection_available():
-        aqt.utils.showWarning(
-            "Cannot import: Anki collection is not available. "
-            "Please ensure a profile is loaded and try again.",
-            parent=mw,
-        )
+        if silent:
+            logger.warning("Skipping silent import: collection is unavailable")
+        else:
+            aqt.utils.showWarning(
+                "Cannot import: Anki collection is not available. "
+                "Please ensure a profile is loaded and try again.",
+                parent=mw,
+            )
         return
 
     # if webresult is empty, tell user that there are no updates
     if not webresult:
-        if silent:
-            aqt.utils.tooltip("All synced.", parent=mw, period=1500)
-        else:
+        if not silent:
             aqt.utils.tooltip("Your deck is up to date.", parent=mw, period=2000)
 
-        update_stats()
+        update_stats(silent=silent)
         # At most one friendly line per day, and only for people who reached somebody.
         impact.maybe_show_nudge()
         return
@@ -975,13 +1159,34 @@ def import_webresult(data):
         )
         return
 
+    stored_cfg = config_manager.get_stored_config()
     for subscription in webresult:
-        if input_hash:  # New deck
-            install_update(subscription, input_hash)
+        sub_hash = (
+            subscription.get("deck_hash") if isinstance(subscription, dict) else None
+        )
+        sub_entry = (
+            stored_cfg.get(sub_hash)
+            if isinstance(stored_cfg, dict) and sub_hash
+            else None
+        )
+        is_pending_new_deck = bool(
+            not input_hash
+            and isinstance(sub_entry, dict)
+            and sub_entry.get("deckId", -1) == 0
+        )
+        if input_hash or is_pending_new_deck:  # New deck
+            target_input_hash = input_hash or sub_hash
+            if silent:
+                install_update(subscription, target_input_hash, silent=True)
+            else:
+                install_update(subscription, target_input_hash)
         else:  # Update deck
-            show_changelog_popup(subscription)
+            if silent:
+                show_changelog_popup(subscription, silent=True)
+            else:
+                show_changelog_popup(subscription)
 
-    update_stats()
+    update_stats(silent=silent)
     impact.maybe_show_nudge()
 
 
@@ -1042,7 +1247,9 @@ def get_new_notes_home_deck(given_deck_hash):
     return None
 
 
-def remove_nonexistent_decks():
+def remove_nonexistent_decks(
+    silent: bool = False, *, notify: Optional[Callable[[str], None]] = None
+):
     strings_data = config_manager.get_stored_config()
 
     if strings_data is not None and len(strings_data) > 0:
@@ -1056,35 +1263,53 @@ def remove_nonexistent_decks():
         if "auth" in strings_data_copy:
             del strings_data_copy["auth"]
 
-        # Only include the specific hash if it exists
-        strings_data_to_send = strings_data_copy
+        deck_hashes = list(strings_data_copy.keys())
+        if not deck_hashes:
+            return
 
-        payload = {"deck_hashes": list(strings_data_to_send.keys())}
+        notify_fn = notify if notify is not None else _tooltip_on_main
+        profile_name = config_manager.current_profile_name()
+        payload = {"deck_hashes": deck_hashes}
+        check_auth = auth_manager.has_stored_token() and bool(auth_manager.get_token())
         try:
             response = api_client.post_json(
-                "/CheckDeckAlive", payload, auth=False, timeout=30
+                "/CheckDeckAlive", payload, auth=check_auth, timeout=30
             )
             if response.status_code == 200:
                 if response.content == "Error":
-                    infot = "A Server Error occurred. Please notify us!"
-                    aqt.mw.taskman.run_on_main(
-                        lambda: aqt.utils.tooltip(
-                            infot, parent=QApplication.focusWidget()
-                        )
-                    )
+                    notify_fn("A Server Error occurred. Please notify us!")
                 else:
                     webresult = json.loads(response.content)  # type: ignore
+                    if not webresult:
+                        return
+                    if (
+                        profile_name is None
+                        or config_manager.current_profile_name() != profile_name
+                    ):
+                        logger.info(
+                            "Skipping CheckDeckAlive write: active profile changed"
+                        )
+                        return
                     # we need to remove all the decks that don't exist anymore from the strings_data
                     strings_data = config_manager.get_stored_config()
                     if strings_data is not None and len(strings_data) > 0:
+                        removed = False
                         for deck_hash in webresult:
                             if deck_hash in strings_data:
                                 del strings_data[deck_hash]
+                                removed = True
                             else:
                                 logger.debug("deck_hash not found in strings_data")
-                        config_manager.write_config(strings_data)
+                        if removed:
+                            config_manager.write_config(strings_data)
                     else:
                         logger.debug("strings_data is None or empty")
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if silent:
+                logger.info(f"Offline while checking deck alive: {e}")
+            else:
+                logger.error(f"Network error checking deck alive: {e}")
+                sentry_sdk.capture_exception(e)
         except requests.exceptions.RequestException as e:
             logger.error(f"Network error checking deck alive: {e}")
             sentry_sdk.capture_exception(e)
@@ -1108,8 +1333,18 @@ def _remove_subscription_from_config(deck_hash: str) -> None:
 
 
 # Kinda ugly, but for backwards compatibility we need to handle both the old and new format
-def async_start_pull(input_hash, silent=False):
-    remove_nonexistent_decks()
+def async_start_pull(
+    input_hash,
+    silent=False,
+    *,
+    notify: Optional[Callable[[str], None]] = None,
+    defer_cache_bootstrap: bool = False,
+):
+    notify_fn = notify if notify is not None else _tooltip_on_main
+    if notify is not None:
+        remove_nonexistent_decks(silent=silent, notify=notify)
+    else:
+        remove_nonexistent_decks(silent=silent)
     strings_data = config_manager.get_config()
     if strings_data is not None and len(strings_data) > 0:
         # Create a copy of the config data
@@ -1121,6 +1356,11 @@ def async_start_pull(input_hash, silent=False):
 
         if "auth" in strings_data_copy:
             del strings_data_copy["auth"]
+
+        if input_hash is None and not strings_data_copy:
+            if not silent:
+                notify_fn("Your deck is up to date.")
+            return None
 
         # Create the data to send based on whether input_hash is provided
         if input_hash is None:
@@ -1148,7 +1388,11 @@ def async_start_pull(input_hash, silent=False):
                 webresult = json.loads(decompressed_data.decode("utf-8"))
 
                 try:
-                    webresult = _resolve_cache_bootstrap_entries(webresult)
+                    webresult = _resolve_cache_bootstrap_entries(
+                        webresult,
+                        silent=silent,
+                        defer_cache_bootstrap=defer_cache_bootstrap,
+                    )
                 except CacheArchiveRefreshError as exc:
                     logger.warning(
                         "Cache archive URL rejected; requesting a fresh cache URL: %s",
@@ -1162,69 +1406,148 @@ def async_start_pull(input_hash, silent=False):
                         decompressed_data = gzip.decompress(compressed_data)
                         webresult = json.loads(decompressed_data.decode("utf-8"))
                         try:
-                            webresult = _resolve_cache_bootstrap_entries(webresult)
+                            webresult = _resolve_cache_bootstrap_entries(
+                                webresult,
+                                silent=silent,
+                                defer_cache_bootstrap=defer_cache_bootstrap,
+                            )
                         except CacheBootstrapError as refresh_exc:
                             logger.error(
                                 "Cache bootstrap failed after refreshing archive URL: %s",
                                 refresh_exc,
                             )
-                            aqt.mw.taskman.run_on_main(_notify_cache_bootstrap_failure)
+                            _handle_cache_bootstrap_error(
+                                refresh_exc, silent=silent, notify=notify_fn
+                            )
                             return (None, None, silent)
                     else:
                         logger.error(
                             "Unable to refresh cache archive URL (HTTP %s)",
                             response.status_code,
                         )
-                        aqt.mw.taskman.run_on_main(_notify_cache_bootstrap_failure)
+                        _handle_cache_bootstrap_error(
+                            None, silent=silent, notify=notify_fn
+                        )
                         return (None, None, silent)
                 except CacheBootstrapError as exc:
                     logger.error("Cache bootstrap failed: %s", exc)
-                    # Surface a user-visible error on the main thread.
-                    aqt.mw.taskman.run_on_main(_notify_cache_bootstrap_failure)
+                    _handle_cache_bootstrap_error(exc, silent=silent, notify=notify_fn)
                     return (None, None, silent)
 
                 return (webresult, input_hash, silent)
             elif response.status_code == 401:
                 return (None, None, silent)
             else:
-                infot = "A Server Error occurred. Please notify us!"
-                aqt.mw.taskman.run_on_main(
-                    lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
-                )
+                notify_fn("A Server Error occurred. Please notify us!")
                 return (None, None, silent)
+        except CacheBootstrapDeferredError as e:
+            logger.info("Deferring cache bootstrap: %s", e)
+            notify_fn(
+                "AnkiCollab updates available. Use AnkiCollab → Update Decks once AnkiWeb media sync finishes."
+            )
+            return (None, None, silent)
         except OperationAbortedError as e:
             logger.info("Pull cancelled: %s", e)
             if input_hash:
                 _remove_subscription_from_config(input_hash)
-            aqt.mw.taskman.run_on_main(
-                lambda: aqt.utils.tooltip(
-                    "Download cancelled.",
-                    parent=QApplication.focusWidget(),
-                    period=2000,
-                )
-            )
+            if notify is None:
+                _tooltip_on_main("Download cancelled.", period=2000)
+            else:
+                notify_fn("Download cancelled.")
             return (None, None, True)
-        except (requests.exceptions.RequestException, OSError, ValueError, gzip.BadGzipFile, base64.binascii.Error) as e:  # type: ignore
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if silent:
+                logger.info(f"Offline while pulling changes: {e}")
+            else:
+                logger.error(f"Error pulling changes: {e}")
+                sentry_sdk.capture_exception(e)
+                notify_fn("A Network Error occurred while fetching changes.")
+            return (None, None, silent)
+        except (
+            requests.exceptions.RequestException,
+            OSError,
+            ValueError,
+            gzip.BadGzipFile,
+            base64.binascii.Error,
+        ) as e:  # type: ignore
             logger.error(f"Error pulling changes: {e}")
             sentry_sdk.capture_exception(e)
-            infot = "A Network Error occurred while fetching changes."
-            aqt.mw.taskman.run_on_main(
-                lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
-            )
+            notify_fn("An error occurred while fetching AnkiCollab updates.")
             return (None, None, silent)
         except Exception as e:
             logger.exception(f"Unexpected error pulling changes: {e}")
             sentry_sdk.capture_exception(e)
-            infot = "An unexpected error occurred while fetching changes."
-            aqt.mw.taskman.run_on_main(
-                lambda: aqt.utils.tooltip(infot, parent=QApplication.focusWidget())
-            )
+            notify_fn("An unexpected error occurred while fetching changes.")
             return (None, None, silent)
 
 
-def handle_pull(input_hash, silent=False):
-    QueryOp(
-        parent=mw,
-        op=lambda _: async_start_pull(input_hash, silent),
-        success=import_webresult,
-    ).with_progress("Fetching Changes from AnkiCollab...").run_in_background()
+def handle_pull(input_hash, silent=False, validate_token=False):
+    from . import startup_sync
+
+    slot_token = startup_sync.acquire_pull_slot()
+    if slot_token is None:
+        if input_hash:
+            _remove_subscription_from_config(input_hash)
+        if not silent:
+            aqt.utils.tooltip("AnkiCollab is already checking for updates.", parent=mw)
+        return
+
+    expected_profile = config_manager.current_profile_name()
+
+    def _can_notify() -> bool:
+        return (
+            expected_profile is None
+            or config_manager.current_profile_name() == expected_profile
+        )
+
+    def _op(_col):
+        if validate_token and not validate_user_token(
+            silent=silent, can_notify=_can_notify
+        ):
+            return (None, None, silent)
+        return async_start_pull(input_hash, silent)
+
+    def _on_success(data):
+        try:
+            import_webresult(data)
+        finally:
+            startup_sync.release_pull_slot(slot_token)
+
+    def _on_failure(exc):
+        startup_sync.release_pull_slot(slot_token)
+        if isinstance(
+            exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+        ):
+            logger.info("Pull failed while offline: %s", exc)
+            if not silent and _can_notify() and is_collection_available():
+                aqt.utils.tooltip(
+                    "Unable to connect to AnkiCollab. Please check your internet connection.",
+                    parent=mw,
+                )
+            return
+        logger.exception("Pull operation failed: %s", exc)
+        try:
+            sentry_sdk.capture_exception(exc)
+        except Exception:
+            pass
+        if _can_notify() and is_collection_available():
+            aqt.utils.tooltip(
+                "An unexpected error occurred while checking for AnkiCollab updates.",
+                parent=mw,
+            )
+
+    try:
+        op = QueryOp(
+            parent=mw,
+            op=_op,
+            success=_on_success,
+        ).failure(_on_failure)
+        if silent:
+            if point_version() >= 231000:
+                op = op.without_collection()
+        else:
+            op = op.with_progress("Fetching Changes from AnkiCollab...")
+        op.run_in_background()
+    except Exception as exc:
+        startup_sync.release_pull_slot(slot_token)
+        logger.warning("Failed to start AnkiCollab pull: %s", exc)

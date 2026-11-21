@@ -7,16 +7,24 @@ user-visible regression with no UI to catch it.
 """
 
 import re
+from unittest.mock import MagicMock
 
 import pytest
 
 import config_manager
 import consent
-from menu import delete_subscription, validate_deck_hash, store_default_config
+from menu import (
+    add_to_table,
+    delete_subscription,
+    on_login_manager_btn,
+    store_default_config,
+    update_ui_for_login_state,
+    validate_deck_hash,
+)
 from tests.mocks import spy_config_writes
 
 _ALL_DEFAULTS = {
-    "pull_on_startup": False,
+    "pull_on_startup": True,
     "suspend_new_cards": False,
     "auto_move_cards": False,
     "keep_empty_subdecks": False,
@@ -144,8 +152,139 @@ class TestStoreDefaultConfig:
         store_default_config()
 
         stored = config_manager.get_stored_config()
-        assert stored["settings"]["pull_on_startup"] is False
+        assert stored["settings"]["pull_on_startup"] is True
         assert "auth" not in stored
+
+    def test_existing_profile_with_pull_on_startup_false_stays_false(self, mw_mock):
+        self._seed({"settings": {"pull_on_startup": False}})
+
+        store_default_config()
+
+        assert (
+            config_manager.get_stored_config()["settings"]["pull_on_startup"] is False
+        )
+
+    def test_existing_profile_with_pull_on_startup_true_stays_true(self, mw_mock):
+        self._seed({"settings": {"pull_on_startup": True}})
+
+        store_default_config()
+
+        assert config_manager.get_stored_config()["settings"]["pull_on_startup"] is True
+
+    def test_existing_profile_with_partial_settings_seeds_pull_on_startup_false(
+        self, mw_mock
+    ):
+        self._seed({"settings": {"rated_addon": True}})
+
+        store_default_config()
+
+        settings = config_manager.get_stored_config()["settings"]
+        assert settings["pull_on_startup"] is False
+        assert settings["rated_addon"] is True
+
+    def test_existing_profile_with_subscriptions_only_seeds_pull_on_startup_false(
+        self, mw_mock
+    ):
+        self._seed({"alpha-beta-gamma": {"deckId": 1}})
+
+        store_default_config()
+
+        stored = config_manager.get_stored_config()
+        assert stored["settings"]["pull_on_startup"] is False
+        assert stored["alpha-beta-gamma"] == {"deckId": 1}
+
+    def test_existing_profile_with_empty_config_and_auth_seeds_pull_on_startup_false(
+        self, mw_mock
+    ):
+        self._seed({})
+        config_manager.write_auth({"token": "t"})
+
+        store_default_config()
+
+        assert (
+            config_manager.get_stored_config()["settings"]["pull_on_startup"] is False
+        )
+
+    def test_brand_new_profile_with_empty_config_and_auth_seeds_pull_on_startup_true(
+        self, tmp_path, mw_mock
+    ):
+        config_manager.reset_for_tests(tmp_path / "user_files")
+        config_manager.activate_for_tests("BrandNewProfile")
+
+        store_default_config()
+
+        stored = config_manager.get_stored_config()
+        assert config_manager.get_auth() == {}
+        assert stored["settings"]["pull_on_startup"] is True
+
+    def test_non_dict_settings_is_repaired_preserving_existing_profile_status(
+        self, mw_mock
+    ):
+        self._seed({"settings": "corrupt"})
+
+        store_default_config()
+
+        settings = config_manager.get_stored_config()["settings"]
+        assert isinstance(settings, dict)
+        assert settings["pull_on_startup"] is False
+
+    def test_store_default_config_ignores_shipped_defaults_and_does_not_bake_them(
+        self, tmp_path, mw_mock, monkeypatch
+    ):
+        config_manager.reset_for_tests(tmp_path / "user_files")
+        config_manager.activate_for_tests("FreshWithShippedDefaults")
+        monkeypatch.setattr(
+            config_manager,
+            "_defaults_cache",
+            {
+                "settings": {"pull_on_startup": False, "shipped_setting": "ignored"},
+                "shipped_top_level": True,
+            },
+        )
+
+        store_default_config()
+
+        stored = config_manager.get_stored_config()
+        assert stored["settings"]["pull_on_startup"] is True
+        assert "shipped_setting" not in stored["settings"]
+        assert "shipped_top_level" not in stored
+
+        # Subsequent call with complete stored settings performs zero writes
+        writes = spy_config_writes(monkeypatch)
+        store_default_config()
+        assert writes == []
+
+
+class TestAddToTable:
+    def test_blocks_new_subscription_when_startup_pull_is_in_progress(
+        self, mw_mock, monkeypatch
+    ):
+        config_manager.write_config({"settings": {}})
+        line_edit = MagicMock()
+        line_edit.text.return_value = "alpha-beta-gamma"
+        table = MagicMock()
+        dialog = MagicMock()
+        info_calls = []
+
+        monkeypatch.setattr("menu.askUser", lambda *args, **kwargs: True)
+        monkeypatch.setattr(
+            "menu.showInfo",
+            lambda msg, **kwargs: info_calls.append((msg, kwargs)),
+        )
+        subscribe_mock = MagicMock()
+        handle_pull_mock = MagicMock()
+        monkeypatch.setattr("menu.subscribe_to_deck", subscribe_mock)
+        monkeypatch.setattr("menu.handle_pull", handle_pull_mock)
+        monkeypatch.setattr("menu.startup_sync.is_pull_in_progress", lambda: True)
+
+        add_to_table(line_edit, table, dialog)
+
+        assert "alpha-beta-gamma" not in config_manager.get_stored_config()
+        subscribe_mock.assert_not_called()
+        handle_pull_mock.assert_not_called()
+        assert len(info_calls) == 1
+        assert "checking for updates" in info_calls[0][0].lower()
+        assert info_calls[0][1]["parent"] is dialog
 
 
 class TestDeleteSubscription:
@@ -254,3 +393,49 @@ class TestDeleteSubscriptionReviewData:
 
         assert len(questions) == 1
         assert consent.pending_erasures() == []
+
+
+class TestMainThreadLoginUiSafety:
+    """UI login state updates and the Login/Logout button must never perform
+    synchronous network token refresh on the main thread."""
+
+    def test_update_ui_for_login_state_uses_has_stored_token_without_network(
+        self, mw_mock, monkeypatch
+    ):
+        config_manager.write_auth(
+            {
+                "token": "expired_tok",
+                "refresh_token": "valid_ref",
+                "expires_timestamp": 1.0,
+            }
+        )
+        monkeypatch.setattr("menu.refresh_notifications", lambda: None)
+        get_token_mock = MagicMock()
+        monkeypatch.setattr("menu.auth_manager.get_token", get_token_mock)
+        monkeypatch.setattr("menu.auth_manager._loaded", False)
+
+        update_ui_for_login_state()
+
+        get_token_mock.assert_not_called()
+
+    def test_login_button_with_stored_token_logs_out_without_refreshing_first(
+        self, mw_mock, monkeypatch
+    ):
+        config_manager.write_auth(
+            {
+                "token": "expired_tok",
+                "refresh_token": "valid_ref",
+                "expires_timestamp": 1.0,
+            }
+        )
+        monkeypatch.setattr("menu.auth_manager._loaded", False)
+        get_token_mock = MagicMock()
+        logout_mock = MagicMock()
+        monkeypatch.setattr("menu.auth_manager.get_token", get_token_mock)
+        monkeypatch.setattr("menu.force_logout", logout_mock)
+        monkeypatch.setattr("menu.showInfo", lambda *_a, **_kw: None)
+
+        on_login_manager_btn()
+
+        get_token_mock.assert_not_called()
+        logout_mock.assert_called_once_with(False)

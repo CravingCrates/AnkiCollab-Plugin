@@ -26,6 +26,7 @@ CORE_MODULES = [
     "identifier",
     "export_manager",
     "import_manager",
+    "startup_sync",
     "media_manager",
     "media_export",
     "media_import",

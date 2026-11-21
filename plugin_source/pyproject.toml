@@ -37,6 +37,7 @@ source_paths = [
     "dialogs.py",
     "export_manager.py",
     "import_manager.py",
+    "startup_sync.py",
     "menu.py",
     "hooks.py",
     "gear_menu_setup.py",
