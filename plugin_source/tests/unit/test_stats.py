@@ -1,5 +1,6 @@
 """Tests for stats.py — ReviewHistory, retention calculation, timestamps."""
 
+import sqlite3
 import pytest
 from unittest.mock import MagicMock, patch
 from collections import defaultdict
@@ -7,7 +8,12 @@ from datetime import datetime, timezone
 
 import config_manager
 import consent
-from stats import ReviewHistory, on_stats_upload_done, update_stats_timestamp
+from stats import (
+    DECK_ID_CHUNK_SIZE,
+    ReviewHistory,
+    on_stats_upload_done,
+    update_stats_timestamp,
+)
 
 
 class TestReviewHistoryInit:
@@ -186,6 +192,120 @@ class TestGetCardData:
         result = rh.get_card_data(0)
 
         assert result["TestDeck"] == {}
+
+    def test_empty_deck_ids_skips_query(self, rh, mw_mock):
+        rh.deck_ids = []
+
+        result = rh.get_card_data(0)
+
+        assert result == {}
+        mw_mock.col.db.execute.assert_not_called()
+
+    def test_chunks_large_deck_id_lists_within_sqlite_limit(self, rh, mw_mock):
+        rh.deck_ids = list(range(1, DECK_ID_CHUNK_SIZE * 2 + 2))
+        mw_mock.col.db.execute.side_effect = [
+            [(101, 4, 0, "guid_1", 1, 0)],
+            [(102, 6, 1, "guid_2", DECK_ID_CHUNK_SIZE + 1, 0)],
+            [(103, 8, 2, "guid_3", DECK_ID_CHUNK_SIZE * 2 + 1, 0)],
+        ]
+        mw_mock.col.decks.name.side_effect = lambda did: f"Deck_{did}"
+        mw_mock.col.db.first.return_value = (0, 10, 0, 10)
+
+        result = rh.get_card_data(1234)
+
+        assert mw_mock.col.db.execute.call_count == 3
+        chunk_sizes = []
+        for call in mw_mock.col.db.execute.call_args_list:
+            query, *args = call.args
+            assert len(args) <= 999
+            assert args[-1] == 1234
+            chunk_len = (len(args) - 1) // 2
+            assert args[:chunk_len] == args[chunk_len:-1]
+            chunk_sizes.append(chunk_len)
+
+        assert chunk_sizes == [DECK_ID_CHUNK_SIZE, DECK_ID_CHUNK_SIZE, 1]
+        assert result["Deck_1"]["guid_1"]["reps"] == 4
+        assert result[f"Deck_{DECK_ID_CHUNK_SIZE + 1}"]["guid_2"]["reps"] == 6
+        assert result[f"Deck_{DECK_ID_CHUNK_SIZE * 2 + 1}"]["guid_3"]["reps"] == 8
+
+    def test_deduplicates_card_matching_across_chunks(self, rh, mw_mock):
+        home_did = DECK_ID_CHUNK_SIZE + 1
+        rh.deck_ids = list(range(1, home_did + 1))
+        shared_card = (100, 10, 2, "guid_dup", 1, home_did)
+        other_card = (101, 2, 0, "guid_dup", home_did, 0)
+        mw_mock.col.db.execute.side_effect = [
+            [shared_card],
+            [shared_card, other_card],
+        ]
+        mw_mock.col.decks.name.side_effect = lambda did: f"Deck_{did}"
+
+        with patch.object(rh, "calc_retention", side_effect=[100, 40]) as mock_ret:
+            result = rh.get_card_data(0)
+
+        assert mock_ret.call_count == 2
+        assert mock_ret.call_args_list[0].args == (100,)
+        assert mock_ret.call_args_list[1].args == (101,)
+        assert result[f"Deck_{home_did}"]["guid_dup"] == {
+            "retention": 70,
+            "lapses": 1,
+            "reps": 6,
+        }
+
+    def test_large_subdeck_tree_executes_against_real_sqlite(self, rh, mw_mock):
+        total_decks = 1200
+        rh.deck_ids = list(range(1, total_decks + 1))
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("""
+                CREATE TABLE notes (
+                    id INTEGER PRIMARY KEY,
+                    guid TEXT NOT NULL
+                )
+                """)
+            conn.execute("""
+                CREATE TABLE cards (
+                    id INTEGER PRIMARY KEY,
+                    nid INTEGER NOT NULL,
+                    did INTEGER NOT NULL,
+                    odid INTEGER NOT NULL,
+                    mod INTEGER NOT NULL,
+                    type INTEGER NOT NULL,
+                    reps INTEGER NOT NULL,
+                    lapses INTEGER NOT NULL
+                )
+                """)
+            conn.executemany(
+                "INSERT INTO notes (id, guid) VALUES (?, ?)",
+                [(1, "guid_c1"), (2, "guid_c2"), (3, "guid_cross")],
+            )
+            conn.executemany(
+                """
+                INSERT INTO cards (id, nid, did, odid, mod, type, reps, lapses)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (10, 1, 1, 0, 500, 2, 4, 1),
+                    (20, 2, 500, 0, 500, 2, 6, 0),
+                    (30, 3, 2, 1100, 500, 2, 8, 2),
+                ],
+            )
+
+            def real_execute(sql, *params):
+                # Enforce SQLite's conservative pre-3.32 variable limit.
+                assert len(params) <= 999
+                return conn.execute(sql, params).fetchall()
+
+            mw_mock.col.db.execute.side_effect = real_execute
+            mw_mock.col.decks.name.side_effect = lambda did: f"Deck_{did}"
+            mw_mock.col.db.first.return_value = (0, 10, 0, 10)
+
+            result = rh.get_card_data(100)
+        finally:
+            conn.close()
+
+        assert result["Deck_1"]["guid_c1"]["reps"] == 4
+        assert result["Deck_500"]["guid_c2"]["reps"] == 6
+        assert result["Deck_1100"]["guid_cross"]["reps"] == 8
 
 
 class TestUploadReviewHistory:

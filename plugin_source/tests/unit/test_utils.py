@@ -260,6 +260,20 @@ class TestGetDeckAndSubdecks:
         assert 2 in result
         assert 3 in result
 
+    def test_does_not_duplicate_nested_subdecks(self, mw_mock):
+        children_by_deck = {
+            1: [("A::B", 2), ("A::B::C", 3), ("A::B::C::D", 4)],
+            2: [("A::B::C", 3), ("A::B::C::D", 4)],
+            3: [("A::B::C::D", 4)],
+            4: [],
+        }
+        mw_mock.col.decks.children.side_effect = lambda did: children_by_deck[did]
+
+        result = get_deck_and_subdecks(1)
+
+        assert result == [1, 2, 3, 4]
+        mw_mock.col.decks.children.assert_called_once_with(1)
+
 
 # ──────────────────────────────────────────────────────────────────────
 # get_logger
