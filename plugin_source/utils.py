@@ -407,12 +407,18 @@ def get_deck_and_subdecks(deck_id):
     if deck_id is None or deck_id == -1 or deck_id == 0:
         return []
     deck_ids = [deck_id]
+    seen = {deck_id}
     try:
+        # Anki's decks.children() already returns every descendant subdeck;
+        # recursing on each entry would duplicate deep subdecks exponentially.
         for subdeck in mw.col.decks.children(deck_id):
-            deck_ids.extend(get_deck_and_subdecks(subdeck[1]))
+            subdeck_id = subdeck[1]
+            if subdeck_id not in seen:
+                seen.add(subdeck_id)
+                deck_ids.append(subdeck_id)
     except NotFoundError:
         return deck_ids
-    except Exception as e:
+    except Exception:
         return deck_ids
     return deck_ids
 

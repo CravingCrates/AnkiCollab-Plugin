@@ -14,6 +14,11 @@ from .auth_manager import auth_manager
 from .identifier import get_user_hash
 from .var_defs import API_BASE_URL
 
+# Each deck ID is bound twice (for cards.did and cards.odid), plus one
+# parameter for cards.mod > ?, so 450 deck IDs stay at 901 variables — safely
+# below SQLite's conservative 999-variable limit.
+DECK_ID_CHUNK_SIZE = 450
+
 
 class ReviewHistory:
     def __init__(self, deck_hash):
@@ -22,28 +27,38 @@ class ReviewHistory:
         self.deck_ids = get_deck_and_subdecks(self.deck_id)
 
     def get_card_data(self, last_upload_date: int) -> defaultdict:
+        notes_by_deck_and_note_guid = defaultdict(
+            lambda: defaultdict(lambda: {"retention": [], "lapses": [], "reps": []})
+        )
+        unique_deck_ids = list(dict.fromkeys(self.deck_ids))
+        if not unique_deck_ids:
+            return notes_by_deck_and_note_guid
+
         # Query to get the card data of the given decks.
         #
         # A card borrowed by a filtered deck keeps its home deck in `odid` and
         # points `did` at the filtered deck, so both columns must be matched -
         # otherwise studying through a filtered deck uploads nothing.
-        placeholders = ", ".join("?" for _ in self.deck_ids)
-        query = f"""
-            SELECT cards.id, cards.reps, cards.lapses, notes.guid, cards.did, cards.odid
-            FROM cards
-            JOIN notes ON cards.nid = notes.id
-            WHERE (cards.did IN ({placeholders}) OR cards.odid IN ({placeholders}))
-            AND cards.mod > ?
-            AND cards.type > 1
-        """
-        card_data = list(
-            mw.col.db.execute(query, *self.deck_ids, *self.deck_ids, last_upload_date)
-        )
+        card_data = []
+        seen_card_ids = set()
+        for i in range(0, len(unique_deck_ids), DECK_ID_CHUNK_SIZE):
+            chunk = unique_deck_ids[i : i + DECK_ID_CHUNK_SIZE]
+            placeholders = ", ".join("?" for _ in chunk)
+            query = f"""
+                SELECT cards.id, cards.reps, cards.lapses, notes.guid, cards.did, cards.odid
+                FROM cards
+                JOIN notes ON cards.nid = notes.id
+                WHERE (cards.did IN ({placeholders}) OR cards.odid IN ({placeholders}))
+                AND cards.mod > ?
+                AND cards.type > 1
+            """
+            for row in mw.col.db.execute(query, *chunk, *chunk, last_upload_date):
+                card_id = row[0]
+                if card_id not in seen_card_ids:
+                    seen_card_ids.add(card_id)
+                    card_data.append(row)
 
-        tracked_deck_ids = set(self.deck_ids)
-        notes_by_deck_and_note_guid = defaultdict(
-            lambda: defaultdict(lambda: {"retention": [], "lapses": [], "reps": []})
-        )
+        tracked_deck_ids = set(unique_deck_ids)
 
         for card_id, reps, lapses, note_guid, deck_id, original_deck_id in card_data:
             # Report the card under the deck it belongs to, not under the

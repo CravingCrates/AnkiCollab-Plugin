@@ -19,7 +19,7 @@ $env:SKIP_INIT="1"; python -m pytest tests/
 python -m pytest tests/real_anki -c tests/real_anki/pytest.ini
 ```
 
-**Current test count: 1595.** This includes `tests/test_real_anki.py` (6
+**Current test count: 1600.** This includes `tests/test_real_anki.py` (6
 per-file subprocess runners plus a discovery guard). The 44 real-Anki scenarios
 run inside those runners when a real Anki installation is importable; otherwise
 the runners skip with a clear reason. CI verifies the collected count against
@@ -193,7 +193,7 @@ Core utility layer — the most critical file:
 - **Lookup chain**: `get_hash_from_local_id()` → `get_did_from_hash()` →
   `get_local_deck_from_hash()` → `get_deck_hash_from_did()` with parent fallback
   → `get_deck_hash_from_card()` with odid + dynamic deck.
-- **`get_deck_and_subdecks()`**: Recursive child traversal, invalid ID guards.
+- **`get_deck_and_subdecks()`**: Non-recursive descendant collection (no duplicate subdecks), invalid ID guards.
 - **Backup**: Input validation (`bg+critical`), no-collection paths.
 
 ### `test_auth_manager.py` (26 tests)
