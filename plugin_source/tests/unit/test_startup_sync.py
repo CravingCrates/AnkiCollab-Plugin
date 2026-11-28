@@ -1678,3 +1678,522 @@ class TestCollectionReadinessAndEndpointAndMediaSync:
             startup_sync._updates_require_full_sync(webresult_same, mw_mock.col)
             is False
         )
+
+
+class _FakeSignal:
+    def __init__(self) -> None:
+        self._slots: list = []
+
+    def connect(self, fn) -> None:
+        self._slots.append(fn)
+
+    def emit(self, *args) -> None:
+        for fn in list(self._slots):
+            fn(*args)
+
+
+class _FakeAddonHarness:
+    """Simulates Anki's ``aqt.addons`` and ``mw.check_for_addon_updates`` flow."""
+
+    def __init__(self, mw_mock) -> None:
+        self.mw_mock = mw_mock
+        self.top_level_widgets: list = []
+        self.last_dialog = None
+        self.pending_on_updates_done = None
+        self.pending_download_finish = None
+        self.orig_on_done_calls: list = []
+        self.on_updates_installed_calls: list = []
+        self.addon_update_enabled: dict[str, bool] = {}
+
+        harness = self
+
+        class InstallOk:
+            pass
+
+        class DownloadError:
+            pass
+
+        class ChooseAddonsToUpdateDialog:
+            def __init__(self, parent, mgr, updated_addons) -> None:
+                self.parent = parent
+                self.mgr = mgr
+                self.updated_addons = updated_addons
+                self.finished = _FakeSignal()
+                self.destroyed = _FakeSignal()
+                self._visible = False
+                self._on_done = None
+                harness.last_dialog = self
+
+            def ask(self, on_done) -> None:
+                self._on_done = on_done
+                self._visible = True
+                if self not in harness.top_level_widgets:
+                    harness.top_level_widgets.append(self)
+
+            def isVisible(self) -> bool:
+                return self._visible
+
+            def accept_with_ids(self, ids: list[int]) -> None:
+                if self._on_done is not None:
+                    self._on_done(ids)
+                self._visible = False
+                self.finished.emit(1)
+
+            def reject(self) -> None:
+                self._visible = False
+                self.finished.emit(0)
+
+        def prompt_to_update(
+            parent,
+            mgr,
+            updated_addons,
+            on_done,
+            requested_by_user: bool = True,
+        ) -> None:
+            if not requested_by_user:
+                if not any(
+                    harness.addon_update_enabled.get(str(a.id), True)
+                    for a in updated_addons
+                ):
+                    return
+
+            def after_choosing(ids: list[int]) -> None:
+                if ids:
+                    harness.pending_download_finish = lambda log: on_done(log)
+
+            ChooseAddonsToUpdateDialog(parent, mgr, updated_addons).ask(after_choosing)
+
+        def check_for_addon_updates(by_user: bool, on_done=None) -> None:
+            def wrap_on_updates_installed(log) -> None:
+                if log:
+                    harness.on_updates_installed_calls.append(log)
+                if on_done is not None:
+                    on_done(log)
+
+            harness.pending_on_updates_done = wrap_on_updates_installed
+
+        self.InstallOk = InstallOk
+        self.DownloadError = DownloadError
+        self.ChooseAddonsToUpdateDialog = ChooseAddonsToUpdateDialog
+        self.prompt_to_update = prompt_to_update
+        self.check_for_addon_updates = check_for_addon_updates
+        self.addons_module = SimpleNamespace(
+            InstallOk=InstallOk,
+            DownloadError=DownloadError,
+            ChooseAddonsToUpdateDialog=ChooseAddonsToUpdateDialog,
+            prompt_to_update=prompt_to_update,
+        )
+        mw_mock.check_for_addon_updates = check_for_addon_updates
+
+
+class TestAddonUpdateDialogCoordination:
+    def _run_with_harness(
+        self, mw_mock, *, profile_name="TestProfile", sync_auth=None, auto_sync=False
+    ):
+        harness = _FakeAddonHarness(mw_mock)
+        _setup_ready_profile(
+            mw_mock,
+            profile_name=profile_name,
+            sync_auth=sync_auth,
+            auto_sync=auto_sync,
+        )
+        fake_hooks = _make_gui_hooks()
+        _SyncQueryOp.last_instance = None
+        return harness, fake_hooks
+
+    def test_no_addon_updates_waits_for_check_then_runs_startup_pull(self, mw_mock):
+        for sync_auth, auto_sync in [(None, False), ("auth", True)]:
+            startup_sync.reset_state()
+            harness, fake_hooks = self._run_with_harness(
+                mw_mock, sync_auth=sync_auth, auto_sync=auto_sync
+            )
+            scheduled: list = []
+
+            with (
+                patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+                patch.object(startup_sync, "gui_hooks", fake_hooks),
+                patch.object(
+                    startup_sync.QTimer,
+                    "singleShot",
+                    side_effect=lambda _ms, fn: scheduled.append(fn),
+                ),
+                patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+                patch.object(startup_sync, "point_version", return_value=240000),
+            ):
+                startup_sync.register_hooks()
+                startup_sync.on_profile_opened()
+                if auto_sync:
+                    fake_hooks.sync_did_finish()
+
+                # Simulate Anki starting its background add-on update check right after
+                mw_mock.check_for_addon_updates(
+                    by_user=False,
+                    on_done=lambda log: harness.orig_on_done_calls.append(log),
+                )
+
+                # Event loop fires the startup pull tick while add-on check is in flight
+                while scheduled:
+                    scheduled.pop(0)()
+                assert _SyncQueryOp.last_instance is None
+                assert startup_sync.can_apply_startup_updates_now() is False
+
+                # Anki finishes add-on check with no updates -> on_done([]) unblocks pull
+                harness.pending_on_updates_done([])
+                assert harness.orig_on_done_calls == [[]]
+                assert len(scheduled) == 1
+                scheduled.pop(0)()
+
+            assert _SyncQueryOp.last_instance is not None
+            assert _SyncQueryOp.last_instance.run_called is True
+
+    def test_updates_all_disabled_prompt_returns_early_and_unblocks_pull(self, mw_mock):
+        harness, fake_hooks = self._run_with_harness(mw_mock)
+        scheduled: list = []
+        harness.addon_update_enabled["999"] = False
+
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks),
+            patch.object(
+                startup_sync.QTimer,
+                "singleShot",
+                side_effect=lambda _ms, fn: scheduled.append(fn),
+            ),
+            patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+            patch.object(startup_sync, "point_version", return_value=240000),
+        ):
+            startup_sync.register_hooks()
+            startup_sync.on_profile_opened()
+            mw_mock.check_for_addon_updates(by_user=False, on_done=lambda _log: None)
+
+            while scheduled:
+                scheduled.pop(0)()
+            assert _SyncQueryOp.last_instance is None
+
+            # Anki calls prompt_to_update(requested_by_user=False), which returns early
+            # without creating a dialog and without invoking on_done.
+            harness.addons_module.prompt_to_update(
+                mw_mock,
+                mw_mock.addonManager,
+                [SimpleNamespace(id=999)],
+                harness.pending_on_updates_done,
+                requested_by_user=False,
+            )
+            assert harness.last_dialog is None
+            assert len(scheduled) == 1
+            scheduled.pop(0)()
+
+        assert _SyncQueryOp.last_instance is not None
+        assert _SyncQueryOp.last_instance.run_called is True
+
+    def test_dialog_shown_and_cancelled_defers_until_reject(self, mw_mock):
+        harness, fake_hooks = self._run_with_harness(mw_mock)
+        scheduled: list = []
+
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks),
+            patch.object(
+                startup_sync.QTimer,
+                "singleShot",
+                side_effect=lambda _ms, fn: scheduled.append(fn),
+            ),
+            patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+            patch.object(startup_sync, "point_version", return_value=240000),
+        ):
+            startup_sync.register_hooks()
+            startup_sync.on_profile_opened()
+            mw_mock.check_for_addon_updates(by_user=False, on_done=lambda _log: None)
+            harness.addons_module.prompt_to_update(
+                mw_mock,
+                mw_mock.addonManager,
+                [SimpleNamespace(id=999)],
+                harness.pending_on_updates_done,
+                requested_by_user=False,
+            )
+
+            assert harness.last_dialog is not None
+            while scheduled:
+                scheduled.pop(0)()
+            assert _SyncQueryOp.last_instance is None
+            assert startup_sync.can_apply_startup_updates_now() is False
+
+            # User clicks Cancel -> dialog closes -> deferred startup pull starts
+            harness.last_dialog.reject()
+            assert len(scheduled) == 1
+            scheduled.pop(0)()
+
+        assert _SyncQueryOp.last_instance is not None
+        assert _SyncQueryOp.last_instance.run_called is True
+
+    def test_dialog_accepted_with_empty_selection_unblocks_pull(self, mw_mock):
+        harness, fake_hooks = self._run_with_harness(mw_mock)
+        scheduled: list = []
+
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks),
+            patch.object(
+                startup_sync.QTimer,
+                "singleShot",
+                side_effect=lambda _ms, fn: scheduled.append(fn),
+            ),
+            patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+            patch.object(startup_sync, "point_version", return_value=240000),
+        ):
+            startup_sync.register_hooks()
+            startup_sync.on_profile_opened()
+            mw_mock.check_for_addon_updates(by_user=False, on_done=lambda _log: None)
+            harness.addons_module.prompt_to_update(
+                mw_mock,
+                mw_mock.addonManager,
+                [SimpleNamespace(id=999)],
+                harness.pending_on_updates_done,
+                requested_by_user=False,
+            )
+            while scheduled:
+                scheduled.pop(0)()
+            assert _SyncQueryOp.last_instance is None
+
+            harness.last_dialog.accept_with_ids([])
+            assert harness.pending_download_finish is None
+            assert len(scheduled) == 1
+            scheduled.pop(0)()
+
+        assert _SyncQueryOp.last_instance is not None
+        assert _SyncQueryOp.last_instance.run_called is True
+
+    def test_installing_other_addon_keeps_pull_deferred_until_download_finishes(
+        self, mw_mock
+    ):
+        harness, fake_hooks = self._run_with_harness(mw_mock)
+        scheduled: list = []
+
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks),
+            patch.object(
+                startup_sync.QTimer,
+                "singleShot",
+                side_effect=lambda _ms, fn: scheduled.append(fn),
+            ),
+            patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+            patch.object(startup_sync, "point_version", return_value=240000),
+        ):
+            startup_sync.register_hooks()
+            startup_sync.on_profile_opened()
+            mw_mock.check_for_addon_updates(
+                by_user=False,
+                on_done=lambda log: harness.orig_on_done_calls.append(log),
+            )
+            harness.addons_module.prompt_to_update(
+                mw_mock,
+                mw_mock.addonManager,
+                [SimpleNamespace(id=999)],
+                harness.pending_on_updates_done,
+                requested_by_user=False,
+            )
+            while scheduled:
+                scheduled.pop(0)()
+            assert _SyncQueryOp.last_instance is None
+
+            # User clicks OK with another add-on selected -> dialog closes, download starts
+            harness.last_dialog.accept_with_ids([999])
+            assert callable(harness.pending_download_finish)
+            assert scheduled == []
+            assert _SyncQueryOp.last_instance is None
+            assert startup_sync.can_apply_startup_updates_now() is False
+
+            # Download finishes and user dismisses restart prompt -> pull now starts
+            log = [(999, harness.InstallOk())]
+            harness.pending_download_finish(log)
+            assert harness.orig_on_done_calls == [log]
+            assert len(scheduled) == 1
+            scheduled.pop(0)()
+
+        assert _SyncQueryOp.last_instance is not None
+        assert _SyncQueryOp.last_instance.run_called is True
+
+    def test_installing_self_addon_skips_pull_unless_download_failed(self, mw_mock):
+        self_id = startup_sync._current_addon_id()
+        assert self_id is not None
+
+        # InstallOk for AnkiCollab itself -> skips startup pull
+        harness, fake_hooks = self._run_with_harness(mw_mock)
+        scheduled: list = []
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks),
+            patch.object(
+                startup_sync.QTimer,
+                "singleShot",
+                side_effect=lambda _ms, fn: scheduled.append(fn),
+            ),
+            patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+            patch.object(startup_sync, "point_version", return_value=240000),
+        ):
+            startup_sync.register_hooks()
+            startup_sync.on_profile_opened()
+            mw_mock.check_for_addon_updates(by_user=False, on_done=lambda _log: None)
+            harness.addons_module.prompt_to_update(
+                mw_mock,
+                mw_mock.addonManager,
+                [SimpleNamespace(id=self_id)],
+                harness.pending_on_updates_done,
+                requested_by_user=False,
+            )
+            while scheduled:
+                scheduled.pop(0)()
+            harness.last_dialog.accept_with_ids([self_id])
+            harness.pending_download_finish([(self_id, harness.InstallOk())])
+
+        assert scheduled == []
+        assert _SyncQueryOp.last_instance is None
+
+        # DownloadError for AnkiCollab itself -> still runs startup pull
+        startup_sync.reset_state()
+        harness2, fake_hooks2 = self._run_with_harness(mw_mock, profile_name="RetryErr")
+        scheduled2: list = []
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness2.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks2),
+            patch.object(
+                startup_sync.QTimer,
+                "singleShot",
+                side_effect=lambda _ms, fn: scheduled2.append(fn),
+            ),
+            patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+            patch.object(startup_sync, "point_version", return_value=240000),
+        ):
+            startup_sync.register_hooks()
+            startup_sync.on_profile_opened()
+            mw_mock.check_for_addon_updates(by_user=False, on_done=lambda _log: None)
+            harness2.addons_module.prompt_to_update(
+                mw_mock,
+                mw_mock.addonManager,
+                [SimpleNamespace(id=self_id)],
+                harness2.pending_on_updates_done,
+                requested_by_user=False,
+            )
+            while scheduled2:
+                scheduled2.pop(0)()
+            harness2.last_dialog.accept_with_ids([self_id])
+            harness2.pending_download_finish([(self_id, harness2.DownloadError())])
+            assert len(scheduled2) == 1
+            scheduled2.pop(0)()
+
+        assert _SyncQueryOp.last_instance is not None
+        assert _SyncQueryOp.last_instance.run_called is True
+
+    def test_profile_close_discards_pending_post_addon_pull(self, mw_mock):
+        harness, fake_hooks = self._run_with_harness(mw_mock)
+        scheduled: list = []
+
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks),
+            patch.object(
+                startup_sync.QTimer,
+                "singleShot",
+                side_effect=lambda _ms, fn: scheduled.append(fn),
+            ),
+            patch.object(startup_sync, "QueryOp", _SyncQueryOp),
+            patch.object(startup_sync, "point_version", return_value=240000),
+        ):
+            startup_sync.register_hooks()
+            startup_sync.on_profile_opened()
+            mw_mock.check_for_addon_updates(by_user=False, on_done=lambda _log: None)
+            harness.addons_module.prompt_to_update(
+                mw_mock,
+                mw_mock.addonManager,
+                [SimpleNamespace(id=999)],
+                harness.pending_on_updates_done,
+                requested_by_user=False,
+            )
+            while scheduled:
+                scheduled.pop(0)()
+            assert startup_sync._pending_post_addon_update_pull is not None
+
+            startup_sync.on_profile_will_close()
+            assert startup_sync._pending_post_addon_update_pull is None
+
+            harness.last_dialog.reject()
+
+        assert scheduled == []
+        assert _SyncQueryOp.last_instance is None
+
+    def test_reload_safe_hooks_and_check_exception_cleanup(self, mw_mock):
+        harness, fake_hooks = self._run_with_harness(mw_mock)
+        orig_check = mw_mock.check_for_addon_updates
+        orig_prompt = harness.addons_module.prompt_to_update
+        orig_ask = harness.ChooseAddonsToUpdateDialog.ask
+
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(startup_sync, "gui_hooks", fake_hooks),
+        ):
+            startup_sync.register_hooks()
+            wrapped_check = mw_mock.check_for_addon_updates
+            wrapped_prompt = harness.addons_module.prompt_to_update
+            wrapped_ask = harness.ChooseAddonsToUpdateDialog.ask
+            assert wrapped_check is not orig_check
+            assert wrapped_prompt is not orig_prompt
+            assert wrapped_ask is not orig_ask
+
+            # Second call does not stack wrappers
+            startup_sync.register_hooks()
+            assert mw_mock.check_for_addon_updates is wrapped_check
+            assert harness.addons_module.prompt_to_update is wrapped_prompt
+            assert harness.ChooseAddonsToUpdateDialog.ask is wrapped_ask
+
+            # Synchronous failure in check_for_addon_updates cleans up blocking state
+            def _boom(*_args, **_kwargs):
+                raise RuntimeError("boom")
+
+            startup_sync.reset_state()
+            mw_mock.check_for_addon_updates = _boom
+            startup_sync.register_hooks()
+            with pytest.raises(RuntimeError, match="boom"):
+                mw_mock.check_for_addon_updates(by_user=False)
+            assert startup_sync._is_addon_update_blocking() is False
+
+            startup_sync.reset_state()
+            assert mw_mock.check_for_addon_updates is _boom
+            assert harness.addons_module.prompt_to_update is orig_prompt
+            assert harness.ChooseAddonsToUpdateDialog.ask is orig_ask
+
+    def test_can_apply_startup_updates_now_guards_visible_dialog_and_progress_busy(
+        self, mw_mock
+    ):
+        harness, _fake_hooks = self._run_with_harness(mw_mock)
+        with (
+            patch.dict(sys.modules, {"aqt.addons": harness.addons_module}),
+            patch.object(
+                startup_sync.QApplication, "activeModalWidget", return_value=None
+            ),
+            patch.object(
+                startup_sync.QApplication,
+                "topLevelWidgets",
+                return_value=harness.top_level_widgets,
+            ),
+        ):
+            # Default MagicMock progress.busy() does NOT false-positive
+            assert startup_sync.can_apply_startup_updates_now() is True
+
+            mw_mock.progress.busy.return_value = 0
+            assert startup_sync.can_apply_startup_updates_now() is True
+
+            mw_mock.progress.busy.return_value = 1
+            assert startup_sync.can_apply_startup_updates_now() is False
+            mw_mock.progress.busy.return_value = 0
+
+            # Visible ChooseAddonsToUpdateDialog blocks even without startup wrapper
+            dlg = harness.ChooseAddonsToUpdateDialog(
+                mw_mock, mw_mock.addonManager, [SimpleNamespace(id=999)]
+            )
+            dlg._visible = True
+            harness.top_level_widgets.append(dlg)
+            assert startup_sync.can_apply_startup_updates_now() is False
+
+            dlg._visible = False
+            assert startup_sync.can_apply_startup_updates_now() is True

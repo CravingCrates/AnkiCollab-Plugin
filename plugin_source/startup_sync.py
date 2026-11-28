@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 import threading
+import types
 from typing import Any, Callable, Optional
 
 import requests
@@ -24,6 +26,7 @@ from .utils import DeckManager, get_logger, is_collection_available
 logger = get_logger("ankicollab.startup_sync")
 
 _HOOK_MARKER = "_ankicollab_startup_sync_hook"
+_ORIG_ATTR = "_ankicollab_startup_sync_orig"
 _SKIPPED = object()
 
 _lock = threading.RLock()
@@ -35,6 +38,13 @@ _ankiweb_sync_active: bool = False
 _collection_temporarily_closed: bool = False
 _pull_slot_owner: Optional[int] = None
 _next_pull_slot_token: int = 0
+_next_addon_check_id: int = 0
+_active_startup_addon_checks: set[int] = set()
+_awaiting_prompt_addon_checks: set[int] = set()
+_open_addon_update_dialogs: dict[int, tuple[Any, dict[str, Any]]] = {}
+_prompt_dialog_capture_stack: list[list[tuple[Any, dict[str, Any]]]] = []
+_pending_post_addon_update_pull: Optional[tuple[int, str, bool]] = None
+_installed_addon_update_hooks: list[tuple[Any, str, bool, Any, Any]] = []
 
 
 def reset_state() -> None:
@@ -42,7 +52,9 @@ def reset_state() -> None:
     global _session_generation, _profile_closing, _pending_sync_hook
     global _ankiweb_sync_active, _collection_temporarily_closed
     global _pull_slot_owner, _next_pull_slot_token
+    global _next_addon_check_id, _pending_post_addon_update_pull
     _detach_pending_sync_hook()
+    _uninstall_addon_update_hooks()
     with _lock:
         _session_generation = 0
         _profile_closing = False
@@ -52,6 +64,13 @@ def reset_state() -> None:
         _collection_temporarily_closed = False
         _pull_slot_owner = None
         _next_pull_slot_token = 0
+        _next_addon_check_id = 0
+        _active_startup_addon_checks.clear()
+        _awaiting_prompt_addon_checks.clear()
+        _open_addon_update_dialogs.clear()
+        _prompt_dialog_capture_stack.clear()
+        _pending_post_addon_update_pull = None
+        _installed_addon_update_hooks.clear()
 
 
 def is_pull_in_progress() -> bool:
@@ -119,6 +138,364 @@ setattr(_on_collection_will_temporarily_close, _HOOK_MARKER, True)
 setattr(_on_collection_did_temporarily_close, _HOOK_MARKER, True)
 
 
+def _get_aqt_addons_module() -> Any:
+    mod = sys.modules.get("aqt.addons")
+    if mod is not None:
+        return mod
+    try:
+        import aqt.addons  # type: ignore
+
+        return aqt.addons
+    except Exception:
+        return None
+
+
+def _current_addon_id() -> Optional[str]:
+    target_mw = mw if mw is not None else getattr(aqt, "mw", None)
+    addon_mgr = getattr(target_mw, "addonManager", None) if target_mw else None
+    addon_from_mod = getattr(addon_mgr, "addon_from_module", None)
+    if callable(addon_from_mod):
+        try:
+            addon_id = addon_from_mod(__name__)
+            if isinstance(addon_id, str) and addon_id:
+                return addon_id
+        except Exception:
+            pass
+    if __package__:
+        return __package__.split(".")[0] or None
+    return None
+
+
+def _was_self_addon_updated(log: Any) -> bool:
+    if not log:
+        return False
+    self_id = _current_addon_id()
+    if not self_id:
+        return False
+    addons_mod = _get_aqt_addons_module()
+    install_ok_cls = getattr(addons_mod, "InstallOk", None) if addons_mod else None
+    try:
+        entries = list(log)
+    except TypeError:
+        return False
+    for entry in entries:
+        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+            continue
+        addon_id, status = entry
+        if str(addon_id) != self_id:
+            continue
+        if isinstance(install_ok_cls, type):
+            if isinstance(status, install_ok_cls):
+                return True
+        elif type(status).__name__ == "InstallOk":
+            return True
+    return False
+
+
+def _is_progress_busy() -> bool:
+    target_mw = mw if mw is not None else getattr(aqt, "mw", None)
+    progress = getattr(target_mw, "progress", None) if target_mw else None
+    busy_fn = getattr(progress, "busy", None)
+    if not callable(busy_fn):
+        return False
+    try:
+        val = busy_fn()
+    except Exception:
+        return False
+    return val is True or (
+        isinstance(val, int) and not isinstance(val, bool) and val > 0
+    )
+
+
+def _has_visible_addon_update_dialog() -> bool:
+    with _lock:
+        tracked = list(_open_addon_update_dialogs.values())
+    for dialog, _state in tracked:
+        try:
+            is_visible_fn = getattr(dialog, "isVisible", None)
+            if callable(is_visible_fn):
+                if is_visible_fn() is True:
+                    return True
+            else:
+                return True
+        except RuntimeError:
+            # Qt C++ wrapper was deleted after dialog closed
+            continue
+        except Exception:
+            return True
+
+    addons_mod = _get_aqt_addons_module()
+    dialog_cls = (
+        getattr(addons_mod, "ChooseAddonsToUpdateDialog", None)
+        if addons_mod is not None
+        else None
+    )
+    if not isinstance(dialog_cls, type):
+        return False
+    try:
+        widgets = QApplication.topLevelWidgets()
+    except Exception:
+        return False
+    if not isinstance(widgets, (list, tuple)):
+        return False
+    for widget in widgets:
+        try:
+            if isinstance(widget, dialog_cls):
+                is_visible_fn = getattr(widget, "isVisible", None)
+                if not callable(is_visible_fn) or is_visible_fn() is True:
+                    return True
+        except RuntimeError:
+            continue
+        except Exception:
+            continue
+    return False
+
+
+def _is_addon_update_blocking() -> bool:
+    with _lock:
+        if _active_startup_addon_checks:
+            return True
+    return _has_visible_addon_update_dialog()
+
+
+def _uninstall_addon_update_hooks() -> None:
+    with _lock:
+        entries = list(_installed_addon_update_hooks)
+        _installed_addon_update_hooks.clear()
+    for owner, attr_name, had_in_dict, orig_raw, wrapper in reversed(entries):
+        try:
+            owner_dict = getattr(owner, "__dict__", None)
+            if owner_dict is not None:
+                current = owner_dict.get(attr_name)
+                if current is not wrapper:
+                    continue
+            if had_in_dict:
+                setattr(owner, attr_name, orig_raw)
+            else:
+                delattr(owner, attr_name)
+        except Exception:
+            pass
+
+
+def _unwrap_hook_target(obj: Any) -> Any:
+    while getattr(obj, _HOOK_MARKER, False) is True and hasattr(obj, _ORIG_ATTR):
+        obj = getattr(obj, _ORIG_ATTR)
+    return obj
+
+
+def _install_addon_update_hooks() -> None:
+    target_mw = mw if mw is not None else getattr(aqt, "mw", None)
+    addons_mod = _get_aqt_addons_module()
+    if target_mw is None or addons_mod is None:
+        return
+
+    raw_check = getattr(target_mw, "check_for_addon_updates", None)
+    raw_prompt = getattr(addons_mod, "prompt_to_update", None)
+    dialog_cls = getattr(addons_mod, "ChooseAddonsToUpdateDialog", None)
+    if not isinstance(dialog_cls, type):
+        return
+    raw_ask = getattr(dialog_cls, "ask", None)
+
+    orig_check = _unwrap_hook_target(raw_check)
+    orig_prompt = _unwrap_hook_target(raw_prompt)
+    orig_ask = _unwrap_hook_target(raw_ask)
+
+    if not isinstance(orig_check, (types.FunctionType, types.MethodType)):
+        return
+    if not isinstance(orig_prompt, (types.FunctionType, types.MethodType)):
+        return
+    if not isinstance(orig_ask, (types.FunctionType, types.MethodType)):
+        return
+
+    if (
+        getattr(raw_check, _HOOK_MARKER, False) is True
+        and getattr(raw_prompt, _HOOK_MARKER, False) is True
+        and getattr(raw_ask, _HOOK_MARKER, False) is True
+    ):
+        return
+
+    def _wrapped_check_for_addon_updates(*args: Any, **kwargs: Any) -> Any:
+        global _next_addon_check_id
+        by_user = bool(args[0]) if args else bool(kwargs.get("by_user", True))
+        if by_user:
+            return orig_check(*args, **kwargs)
+
+        with _lock:
+            _next_addon_check_id += 1
+            check_id = _next_addon_check_id
+            _active_startup_addon_checks.add(check_id)
+            _awaiting_prompt_addon_checks.add(check_id)
+
+        orig_on_done = args[1] if len(args) >= 2 else kwargs.get("on_done")
+        completed = False
+
+        def _wrapped_on_done(log: Any = None) -> None:
+            nonlocal completed
+            if completed:
+                return
+            completed = True
+            with _lock:
+                _active_startup_addon_checks.discard(check_id)
+                _awaiting_prompt_addon_checks.discard(check_id)
+            self_updated = _was_self_addon_updated(log)
+            skip_reason = (
+                "AnkiCollab add-on was updated; restart Anki to apply."
+                if self_updated
+                else None
+            )
+            try:
+                if callable(orig_on_done):
+                    orig_on_done(log)
+            finally:
+                _maybe_dispatch_pending_startup_pull(skip_reason=skip_reason)
+
+        try:
+            if len(args) >= 2:
+                new_args = list(args)
+                new_args[1] = _wrapped_on_done
+                return orig_check(*new_args, **kwargs)
+            new_kwargs = dict(kwargs)
+            new_kwargs["on_done"] = _wrapped_on_done
+            return orig_check(*args, **new_kwargs)
+        except Exception:
+            with _lock:
+                _active_startup_addon_checks.discard(check_id)
+                _awaiting_prompt_addon_checks.discard(check_id)
+            _maybe_dispatch_pending_startup_pull()
+            raise
+
+    def _wrapped_dialog_ask(
+        dialog: Any, on_done: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        state: dict[str, Any] = {
+            "closed": False,
+            "started_download": False,
+            "check_ids": set(),
+        }
+
+        def _on_dialog_closed(*_args: Any) -> None:
+            should_dispatch = False
+            with _lock:
+                if state["closed"]:
+                    return
+                state["closed"] = True
+                _open_addon_update_dialogs.pop(id(dialog), None)
+                if not state["started_download"] and state["check_ids"]:
+                    _active_startup_addon_checks.difference_update(state["check_ids"])
+                    state["check_ids"].clear()
+                    should_dispatch = True
+            if should_dispatch:
+                _maybe_dispatch_pending_startup_pull()
+
+        def _tracked_after_choosing(ids: Any) -> Any:
+            if ids:
+                with _lock:
+                    state["started_download"] = True
+            try:
+                return on_done(ids) if callable(on_done) else None
+            except Exception:
+                with _lock:
+                    state["started_download"] = False
+                raise
+
+        with _lock:
+            _open_addon_update_dialogs[id(dialog)] = (dialog, state)
+            if _prompt_dialog_capture_stack:
+                _prompt_dialog_capture_stack[-1].append((dialog, state))
+
+        for sig_name in ("finished", "destroyed"):
+            sig = getattr(dialog, sig_name, None)
+            connect_fn = getattr(sig, "connect", None)
+            if callable(connect_fn):
+                try:
+                    connect_fn(_on_dialog_closed)
+                except Exception:
+                    pass
+
+        try:
+            wrapped_cb = _tracked_after_choosing if callable(on_done) else on_done
+            return orig_ask(dialog, wrapped_cb, *args, **kwargs)
+        except Exception:
+            _on_dialog_closed()
+            raise
+
+    def _wrapped_prompt_to_update(*args: Any, **kwargs: Any) -> Any:
+        requested_by_user = (
+            bool(args[4])
+            if len(args) >= 5
+            else bool(kwargs.get("requested_by_user", True))
+        )
+        opened_dialogs: list[tuple[Any, dict[str, Any]]] = []
+        with _lock:
+            _prompt_dialog_capture_stack.append(opened_dialogs)
+        try:
+            return orig_prompt(*args, **kwargs)
+        finally:
+            should_dispatch = False
+            with _lock:
+                if (
+                    _prompt_dialog_capture_stack
+                    and _prompt_dialog_capture_stack[-1] is opened_dialogs
+                ):
+                    _prompt_dialog_capture_stack.pop()
+                elif opened_dialogs in _prompt_dialog_capture_stack:
+                    _prompt_dialog_capture_stack.remove(opened_dialogs)
+                if not requested_by_user:
+                    claimed = set(_awaiting_prompt_addon_checks)
+                    _awaiting_prompt_addon_checks.clear()
+                    if claimed:
+                        open_entries = [
+                            (dlg, st)
+                            for dlg, st in opened_dialogs
+                            if not st["closed"] or st["started_download"]
+                        ]
+                        if not open_entries:
+                            _active_startup_addon_checks.difference_update(claimed)
+                            should_dispatch = True
+                        else:
+                            for _dlg, st in open_entries:
+                                if not st["closed"]:
+                                    st["check_ids"].update(claimed)
+            if should_dispatch:
+                _maybe_dispatch_pending_startup_pull()
+
+    setattr(_wrapped_check_for_addon_updates, _HOOK_MARKER, True)
+    setattr(_wrapped_check_for_addon_updates, _ORIG_ATTR, orig_check)
+    setattr(_wrapped_dialog_ask, _HOOK_MARKER, True)
+    setattr(_wrapped_dialog_ask, _ORIG_ATTR, orig_ask)
+    setattr(_wrapped_prompt_to_update, _HOOK_MARKER, True)
+    setattr(_wrapped_prompt_to_update, _ORIG_ATTR, orig_prompt)
+
+    targets = [
+        (
+            target_mw,
+            "check_for_addon_updates",
+            raw_check,
+            _wrapped_check_for_addon_updates,
+        ),
+        (addons_mod, "prompt_to_update", raw_prompt, _wrapped_prompt_to_update),
+        (dialog_cls, "ask", raw_ask, _wrapped_dialog_ask),
+    ]
+    with _lock:
+        tracked_owners = {
+            (id(owner), attr): idx
+            for idx, (owner, attr, *_rest) in enumerate(_installed_addon_update_hooks)
+        }
+        for owner, attr_name, current_val, wrapper in targets:
+            if getattr(current_val, _HOOK_MARKER, False) is True:
+                continue
+            owner_dict = getattr(owner, "__dict__", None)
+            had_in_dict = owner_dict is not None and attr_name in owner_dict
+            orig_raw = owner_dict[attr_name] if had_in_dict else current_val
+            setattr(owner, attr_name, wrapper)
+            record = (owner, attr_name, had_in_dict, orig_raw, wrapper)
+            key = (id(owner), attr_name)
+            if key in tracked_owners:
+                _installed_addon_update_hooks[tracked_owners[key]] = record
+            else:
+                _installed_addon_update_hooks.append(record)
+
+
 def register_hooks() -> None:
     """Register reload-safe persistent hooks tracking sync and collection state."""
     try:
@@ -147,6 +524,7 @@ def register_hooks() -> None:
                 except Exception:
                     pass
             hook_list.append(handler)
+        _install_addon_update_hooks()
     except Exception as exc:
         logger.warning("Failed to register startup sync hooks: %s", exc)
 
@@ -167,12 +545,14 @@ def on_profile_will_close() -> None:
     """Synchronously abort pending startup sync before Anki closes the profile."""
     global _profile_closing, _session_generation, _ankiweb_sync_active
     global _collection_temporarily_closed, _pull_slot_owner
+    global _pending_post_addon_update_pull
     with _lock:
         _profile_closing = True
         _session_generation += 1
         _ankiweb_sync_active = False
         _collection_temporarily_closed = False
         _pull_slot_owner = None
+        _pending_post_addon_update_pull = None
     _detach_pending_sync_hook()
 
 
@@ -381,6 +761,10 @@ def can_apply_startup_updates_now() -> bool:
     if getattr(mw, "state", None) not in ("deckBrowser", "overview"):
         return False
     if _has_active_modal_dialog():
+        return False
+    if _is_addon_update_blocking():
+        return False
+    if _is_progress_busy():
         return False
     return True
 
@@ -656,6 +1040,55 @@ def _start_startup_pull(
         logger.warning("Failed to launch startup auto-sync: %s", exc)
 
 
+def _start_or_defer_startup_pull(
+    expected_gen: int,
+    expected_profile: str,
+    require_ankiweb_clean: bool,
+) -> None:
+    """Start startup pull now, or defer until Anki's add-on update flow finishes."""
+    global _pending_post_addon_update_pull
+    if (
+        not _is_session_current(expected_gen, expected_profile)
+        or not _is_collection_ready()
+    ):
+        return
+    if _is_addon_update_blocking():
+        with _lock:
+            _pending_post_addon_update_pull = (
+                expected_gen,
+                expected_profile,
+                require_ankiweb_clean,
+            )
+        logger.info(
+            "Deferring startup auto-sync while Anki add-on update check/dialog is active"
+        )
+        return
+    _start_startup_pull(
+        expected_gen, expected_profile, require_ankiweb_clean=require_ankiweb_clean
+    )
+
+
+def _maybe_dispatch_pending_startup_pull(*, skip_reason: Optional[str] = None) -> None:
+    """Dispatch deferred startup pull once no Anki add-on update flow is active."""
+    global _pending_post_addon_update_pull
+    with _lock:
+        if _is_addon_update_blocking():
+            return
+        pending = _pending_post_addon_update_pull
+        _pending_post_addon_update_pull = None
+    if pending is None:
+        return
+    if skip_reason:
+        logger.info("Skipping startup auto-sync: %s", skip_reason)
+        return
+    gen, profile_name, require_ankiweb_clean = pending
+    if not _is_session_current(gen, profile_name):
+        return
+    _schedule_on_next_tick(
+        lambda: _start_or_defer_startup_pull(gen, profile_name, require_ankiweb_clean)
+    )
+
+
 def on_profile_opened() -> None:
     """Evaluate startup auto-sync preconditions and schedule check if eligible."""
     global _profile_closing, _collection_temporarily_closed
@@ -724,9 +1157,7 @@ def on_profile_opened() -> None:
                     return
                 _attempted_profiles.add(profile_name)
             _schedule_on_next_tick(
-                lambda: _start_startup_pull(
-                    gen, profile_name, require_ankiweb_clean=True
-                )
+                lambda: _start_or_defer_startup_pull(gen, profile_name, True)
             )
 
         with _lock:
@@ -743,5 +1174,5 @@ def on_profile_opened() -> None:
     with _lock:
         _attempted_profiles.add(profile_name)
     _schedule_on_next_tick(
-        lambda: _start_startup_pull(gen, profile_name, require_ankiweb_clean=False)
+        lambda: _start_or_defer_startup_pull(gen, profile_name, False)
     )

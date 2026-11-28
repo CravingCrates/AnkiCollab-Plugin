@@ -11,51 +11,40 @@ dist_path = os.path.join(base_path, "dist")
 # Common dependencies.
 sys.path.insert(0, dist_path)
 
-arch = platform.machine()
+arch = platform.machine().lower()
 
 if sys.version_info[:2] == (3, 9):
     pyver = "py39"
 elif sys.version_info[:2] >= (3, 13):
     pyver = "py313"
 else:
-    raise RuntimeError(
-        f"Unsupported Python version: "
-        f"{sys.version_info.major}.{sys.version_info.minor}"
-    )
+    pyver = None
 
-if sys.platform.startswith("win"):
-    sys.path.insert(
-        0,
-        os.path.join(base_path, "dist", "windows", pyver),
-    )
+if pyver is not None:
+    platform_dist_path = None
+    if sys.platform.startswith("win"):
+        platform_dist_path = os.path.join(base_path, "dist", "windows", pyver)
+    elif sys.platform.startswith("linux"):
+        if arch in ("x86_64", "amd64", "x64"):
+            platform_dist_path = os.path.join(
+                base_path, "dist", "linux", "x86_64", pyver
+            )
+        elif arch in ("aarch64", "arm64"):
+            platform_dist_path = os.path.join(
+                base_path, "dist", "linux", "aarch64", pyver
+            )
+    elif sys.platform.startswith("darwin"):
+        if arch in ("arm64", "aarch64"):
+            platform_dist_path = os.path.join(
+                base_path, "dist", "macos", "arm64", pyver
+            )
+        elif arch in ("x86_64", "amd64"):
+            platform_dist_path = os.path.join(
+                base_path, "dist", "macos", "x86_64", pyver
+            )
 
-elif sys.platform.startswith("linux"):
-    if arch == "x86_64":
-        sys.path.insert(
-            0,
-            os.path.join(base_path, "dist", "linux", "x86_64", pyver),
-        )
-    elif arch in ("aarch64", "arm64"):
-        sys.path.insert(
-            0,
-            os.path.join(base_path, "dist", "linux", "aarch64", pyver),
-        )
-    else:
-        raise RuntimeError(f"Unsupported Linux architecture: {arch}")
-
-elif sys.platform.startswith("darwin"):
-    if arch == "arm64":
-        sys.path.insert(
-            0,
-            os.path.join(base_path, "dist", "macos", "arm64", pyver),
-        )
-    elif arch == "x86_64":
-        sys.path.insert(
-            0,
-            os.path.join(base_path, "dist", "macos", "x86_64", pyver),
-        )
-    else:
-        raise RuntimeError(f"Unsupported macOS architecture: {arch}")
+    if platform_dist_path and os.path.isdir(platform_dist_path):
+        sys.path.insert(0, platform_dist_path)
 
 from aqt import mw
 from aqt.qt import *

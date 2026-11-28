@@ -1,28 +1,45 @@
-{
-  "backports-tarfile": "1.2.0",
-  "certifi": "2026.7.22",
-  "cffi": "2.0.0",
-  "charset-normalizer": "3.4.9",
-  "cryptography": "47.0.0",
-  "dill": "0.4.1",
-  "idna": "3.18",
-  "importlib-metadata": "8.7.1",
-  "jaraco-classes": "3.4.0",
-  "jaraco-context": "6.1.1",
-  "jaraco-functools": "4.4.0",
-  "jeepney": "0.9.0",
-  "keyring": "25.7.0",
-  "keyrings-alt": "5.0.2",
-  "more-itertools": "10.8.0",
-  "pycparser": "2.23",
-  "pyfunctional": "1.5.0",
-  "pywin32-ctypes": "0.2.3",
-  "pyyaml": "6.0.3",
-  "requests": "2.32.5",
-  "secretstorage": "3.3.3",
-  "sentry-sdk": "2.66.1",
-  "tabulate": "0.9.0",
-  "typing-extensions": "4.16.0",
-  "urllib3": "2.6.3",
-  "zipp": "3.23.1"
-}
+certifi==2026.10.23
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   requests
+    #   sentry-sdk
+charset-normalizer==3.5.2
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   requests
+dill==0.4.1
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   pyfunctional
+idna==3.20
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   requests
+pyfunctional==1.5.0
+    # via -r /tmp/tmphj_4rmra.in
+pyyaml==6.0.3
+    # via -r /tmp/tmphj_4rmra.in
+requests==2.32.5 ; python_full_version < '3.10'
+    # via -r /tmp/tmphj_4rmra.in
+requests==2.34.2 ; python_full_version >= '3.10'
+    # via -r /tmp/tmphj_4rmra.in
+sentry-sdk==2.75.0
+    # via -r /tmp/tmphj_4rmra.in
+tabulate==0.9.0 ; python_full_version < '3.10'
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   pyfunctional
+tabulate==0.10.0 ; python_full_version >= '3.10'
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   pyfunctional
+urllib3==2.6.3 ; python_full_version < '3.10'
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   requests
+    #   sentry-sdk
+urllib3==2.8.0 ; python_full_version >= '3.10'
+    # via
+    #   -r /tmp/tmphj_4rmra.in
+    #   requests
+    #   sentry-sdk

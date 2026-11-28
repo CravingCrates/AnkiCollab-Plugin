@@ -1,31 +1,27 @@
-import os
-from pathlib import Path
-import shutil
-import uuid
-import re
+import asyncio
 import hashlib
+import os
+import platform
+import re
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import threading
+import uuid
+import zlib
+from pathlib import Path
+from typing import Optional
 
 from aqt import mw
-
 
 from .utils import get_logger
 
 logger = get_logger("ankicollab.media_optimizer")
 
-try:
-    from PIL import Image, UnidentifiedImageError  # type: ignore
-
-    # Newer Pillow versions use Resampling enums
-    try:
-        PIL_Resampling = Image.Resampling
-    except AttributeError:
-        # Fallback for older Pillow versions
-        PIL_Resampling = Image
-    OPTIMIZATION_AVAILABLE = True
-except ImportError:
-    logger.warning("Pillow not available - image optimization disabled")
-    OPTIMIZATION_AVAILABLE = False
-    PIL_Resampling = None  # Define it as None if Pillow isn't available
+WEBP_TOOL_TIMEOUT_SECONDS = 30
+_CONVERSION_SEMAPHORE = threading.Semaphore(min(4, os.cpu_count() or 2))
 
 # Configuration
 WEBP_QUALITY = 85
@@ -195,18 +191,446 @@ def sanitize_filename(filename):
     return new_filename
 
 
+def _get_real_qt_image_classes():
+    """Return real (QImage, QImageReader, QImageWriter) classes or (None, None, None)."""
+    try:
+        from aqt.qt import QImage, QImageReader, QImageWriter
+
+        if not (
+            isinstance(QImage, type)
+            and isinstance(QImageReader, type)
+            and isinstance(QImageWriter, type)
+        ):
+            return None, None, None
+        return QImage, QImageReader, QImageWriter
+    except Exception:
+        return None, None, None
+
+
+def _qt_supported_formats(cls) -> set[str]:
+    if cls is None:
+        return set()
+    try:
+        raw = cls.supportedImageFormats()
+        if not isinstance(raw, (list, tuple)):
+            return set()
+        formats = set()
+        for fmt in raw:
+            try:
+                formats.add(bytes(fmt).decode("ascii", "ignore").lower())
+            except Exception:
+                continue
+        return formats
+    except Exception:
+        return set()
+
+
+def _qt_supports_webp() -> bool:
+    _, _, writer_cls = _get_real_qt_image_classes()
+    return "webp" in _qt_supported_formats(writer_cls)
+
+
+def _get_webp_tool_path(tool_name: str) -> Optional[Path]:
+    """Locate vendored cwebp/gif2webp binary for current OS/arch, or fall back to PATH."""
+    webp_root = Path(__file__).resolve().parent / "dist" / "webp"
+    arch = platform.machine().lower()
+
+    rel_subpath: Optional[Path] = None
+    if sys.platform == "win32":
+        rel_subpath = Path("windows") / "x86_64" / f"{tool_name}.exe"
+    elif sys.platform.startswith("linux"):
+        if arch in ("x86_64", "amd64", "x64"):
+            rel_subpath = Path("linux") / "x86_64" / tool_name
+        elif arch in ("aarch64", "arm64"):
+            rel_subpath = Path("linux") / "aarch64" / tool_name
+    elif sys.platform.startswith("darwin"):
+        if arch in ("arm64", "aarch64"):
+            rel_subpath = Path("macos") / "arm64" / tool_name
+        elif arch in ("x86_64", "amd64"):
+            rel_subpath = Path("macos") / "x86_64" / tool_name
+
+    if rel_subpath is not None:
+        candidate = webp_root / rel_subpath
+        if candidate.is_file():
+            if sys.platform != "win32" and not os.access(candidate, os.X_OK):
+                try:
+                    mode = candidate.stat().st_mode
+                    os.chmod(
+                        candidate,
+                        mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+                    )
+                except OSError as exc:
+                    logger.debug(f"Could not set executable bit on {candidate}: {exc}")
+            return candidate
+
+    system_tool = shutil.which(tool_name)
+    if system_tool:
+        return Path(system_tool)
+    return None
+
+
+def _detect_optimization_available() -> bool:
+    return (
+        _get_webp_tool_path("cwebp") is not None
+        or _get_webp_tool_path("gif2webp") is not None
+        or _qt_supports_webp()
+    )
+
+
+OPTIMIZATION_AVAILABLE = _detect_optimization_available()
+if not OPTIMIZATION_AVAILABLE:
+    logger.warning("WebP encoder not available - image optimization disabled")
+
+
 def can_optimize():
-    """Check if optimization/pillow is available"""
-    return OPTIMIZATION_AVAILABLE
+    """Check if WebP optimization backend is available."""
+    return bool(OPTIMIZATION_AVAILABLE)
+
+
+def _sniff_image_format(filepath: Path) -> str:
+    try:
+        with filepath.open("rb") as fh:
+            head = fh.read(12)
+    except OSError:
+        return "OTHER"
+
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "GIF"
+    if head.startswith(b"BM"):
+        return "BMP"
+    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "WEBP"
+    return "OTHER"
+
+
+def _is_valid_webp_file(filepath: Path) -> bool:
+    try:
+        if not filepath.is_file() or filepath.stat().st_size < 12:
+            return False
+        with filepath.open("rb") as fh:
+            head = fh.read(12)
+        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    except OSError:
+        return False
+
+
+def _is_animated_gif(filepath: Path) -> bool:
+    """Return True when the GIF file contains more than one image frame."""
+    _, reader_cls, _ = _get_real_qt_image_classes()
+    if reader_cls is not None:
+        try:
+            reader = reader_cls(str(filepath))
+            if reader.canRead() and reader.imageCount() > 1:
+                return True
+        except Exception:
+            pass
+
+    try:
+        data = filepath.read_bytes()
+    except OSError:
+        return False
+
+    if len(data) < 13 or not data.startswith((b"GIF87a", b"GIF89a")):
+        return False
+
+    pos = 10
+    packed = data[pos]
+    pos += 3
+    if packed & 0x80:
+        gct_size = 3 * (1 << ((packed & 0x07) + 1))
+        pos += gct_size
+
+    def _skip_subblocks(idx: int) -> int:
+        while idx < len(data):
+            block_len = data[idx]
+            idx += 1
+            if block_len == 0:
+                return idx
+            idx += block_len
+        return len(data)
+
+    frames = 0
+    while pos < len(data):
+        introducer = data[pos]
+        pos += 1
+        if introducer == 0x3B:  # Trailer
+            break
+        if introducer == 0x21:  # Extension
+            if pos >= len(data):
+                break
+            pos += 1  # Label
+            pos = _skip_subblocks(pos)
+        elif introducer == 0x2C:  # Image Descriptor
+            if pos + 9 > len(data):
+                break
+            img_packed = data[pos + 8]
+            pos += 9
+            if img_packed & 0x80:
+                pos += 3 * (1 << ((img_packed & 0x07) + 1))
+            if pos >= len(data):
+                break
+            pos += 1  # LZW minimum code size
+            pos = _skip_subblocks(pos)
+            frames += 1
+            if frames > 1:
+                return True
+        else:
+            break
+    return False
+
+
+def _write_rgba_png(png_path: Path, width: int, height: int, rows_rgba: bytes) -> None:
+    """Write a minimal valid 8-bit RGBA PNG using only stdlib struct + zlib."""
+
+    def _chunk(tag: bytes, payload: bytes) -> bytes:
+        crc = zlib.crc32(tag + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", crc)
+
+    stride = width * 4
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)  # Filter type 0 (None)
+        start = y * stride
+        raw.extend(rows_rgba[start : start + stride])
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    idat = zlib.compress(bytes(raw), level=6)
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", ihdr)
+        + _chunk(b"IDAT", idat)
+        + _chunk(b"IEND", b"")
+    )
+    png_path.write_bytes(png_bytes)
+
+
+def _bmp_bytes_to_png(bmp_bytes: bytes, png_path: Path) -> bool:
+    """Decode uncompressed 24-bit BGR / 32-bit BGRA BMP bytes into a PNG file."""
+    if len(bmp_bytes) < 54 or bmp_bytes[:2] != b"BM":
+        return False
+
+    pixel_offset = struct.unpack_from("<I", bmp_bytes, 10)[0]
+    dib_size = struct.unpack_from("<I", bmp_bytes, 14)[0]
+    if dib_size < 40 or len(bmp_bytes) < 14 + dib_size:
+        return False
+
+    width, raw_height = struct.unpack_from("<ii", bmp_bytes, 18)
+    planes, bpp, compression = struct.unpack_from("<HHI", bmp_bytes, 26)
+    if planes != 1 or width <= 0 or raw_height == 0:
+        return False
+    if bpp not in (24, 32) or compression not in (0, 3):
+        return False
+
+    top_down = raw_height < 0
+    height = abs(raw_height)
+    row_stride = ((width * bpp + 31) // 32) * 4
+    required = pixel_offset + row_stride * height
+    if len(bmp_bytes) < required:
+        return False
+
+    rgba = bytearray(width * height * 4)
+    for dst_y in range(height):
+        src_y = dst_y if top_down else (height - 1 - dst_y)
+        src_row = pixel_offset + src_y * row_stride
+        dst_row = dst_y * width * 4
+        if bpp == 24:
+            for x in range(width):
+                s = src_row + x * 3
+                d = dst_row + x * 4
+                rgba[d] = bmp_bytes[s + 2]
+                rgba[d + 1] = bmp_bytes[s + 1]
+                rgba[d + 2] = bmp_bytes[s]
+                rgba[d + 3] = 255
+        else:
+            for x in range(width):
+                s = src_row + x * 4
+                d = dst_row + x * 4
+                rgba[d] = bmp_bytes[s + 2]
+                rgba[d + 1] = bmp_bytes[s + 1]
+                rgba[d + 2] = bmp_bytes[s]
+                rgba[d + 3] = bmp_bytes[s + 3]
+
+    _write_rgba_png(png_path, width, height, bytes(rgba))
+    return True
+
+
+def _bmp_to_temp_png(filepath: Path, png_path: Path) -> bool:
+    """Convert BMP to a temporary PNG via Qt QImage or pure-Python BMP decoder."""
+    qimage_cls, _, _ = _get_real_qt_image_classes()
+    if qimage_cls is not None:
+        try:
+            img = qimage_cls(str(filepath))
+            if not img.isNull() and img.save(str(png_path), "PNG"):
+                return True
+        except Exception as exc:
+            logger.debug(f"Qt BMP->PNG bridge failed for {filepath.name}: {exc}")
+
+    try:
+        return _bmp_bytes_to_png(filepath.read_bytes(), png_path)
+    except OSError:
+        return False
+
+
+def _run_webp_tool(cmd: list[str], timeout: int = WEBP_TOOL_TIMEOUT_SECONDS) -> bool:
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "timeout": timeout,
+        "check": False,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    try:
+        result = subprocess.run(cmd, **kwargs)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning(f"WebP tool execution failed ({cmd[0]}): {exc}")
+        return False
+
+    if result.returncode != 0:
+        err = result.stderr.decode("utf-8", "replace").strip()
+        logger.warning(f"WebP tool returned {result.returncode} for {cmd[0]}: {err}")
+        return False
+    return True
+
+
+def _convert_with_qt(
+    filepath: Path, tmp_out: Path, target_format: str, quality: int
+) -> bool:
+    qimage_cls, _, writer_cls = _get_real_qt_image_classes()
+    if qimage_cls is None or writer_cls is None:
+        return False
+
+    fmt_lower = target_format.lower()
+    if fmt_lower not in _qt_supported_formats(writer_cls):
+        return False
+
+    try:
+        img = qimage_cls(str(filepath))
+        if img.isNull():
+            return False
+
+        if fmt_lower in ("jpg", "jpeg") and img.hasAlphaChannel():
+            try:
+                from aqt.qt import QColor, QPainter
+
+                if isinstance(QColor, type) and isinstance(QPainter, type):
+                    flattened = qimage_cls(img.size(), qimage_cls.Format.Format_RGB32)
+                    flattened.fill(QColor(255, 255, 255))
+                    painter = QPainter(flattened)
+                    painter.drawImage(0, 0, img)
+                    painter.end()
+                    img = flattened
+            except Exception:
+                pass
+
+        writer = writer_cls(str(tmp_out), fmt_lower.encode("ascii"))
+        if quality >= 0:
+            writer.setQuality(quality)
+        return bool(writer.write(img))
+    except Exception as exc:
+        logger.debug(f"Qt conversion failed for {filepath.name}: {exc}")
+        return False
+
+
+def _convert_to_webp_file(
+    filepath: Path, tmp_out: Path, will_change_format: bool
+) -> bool:
+    sniffed = _sniff_image_format(filepath)
+    suffix = filepath.suffix.lower()
+
+    if sniffed == "WEBP":
+        if will_change_format:
+            shutil.copyfile(filepath, tmp_out)
+            return True
+        return False
+
+    if sniffed == "GIF" or suffix == ".gif":
+        gif2webp = _get_webp_tool_path("gif2webp")
+        if gif2webp is not None and _run_webp_tool(
+            [
+                str(gif2webp),
+                "-mixed",
+                "-q",
+                str(WEBP_QUALITY),
+                "-quiet",
+                "-o",
+                str(tmp_out),
+                "--",
+                str(filepath),
+            ]
+        ):
+            return True
+
+        # Never flatten animated GIFs into a static WebP via QImage fallback.
+        if _is_animated_gif(filepath):
+            return False
+        return _convert_with_qt(filepath, tmp_out, "webp", WEBP_QUALITY)
+
+    cwebp = _get_webp_tool_path("cwebp")
+
+    if sniffed == "BMP" or suffix == ".bmp":
+        if sys.platform == "win32" and cwebp is not None:
+            if _run_webp_tool(
+                [
+                    str(cwebp),
+                    "-q",
+                    str(WEBP_QUALITY),
+                    "-quiet",
+                    "-o",
+                    str(tmp_out),
+                    "--",
+                    str(filepath),
+                ]
+            ):
+                return True
+
+        if cwebp is not None:
+            tmp_png = tmp_out.with_name(f".{tmp_out.stem}.bmp2png.png")
+            try:
+                if _bmp_to_temp_png(filepath, tmp_png) and _run_webp_tool(
+                    [
+                        str(cwebp),
+                        "-q",
+                        str(WEBP_QUALITY),
+                        "-quiet",
+                        "-o",
+                        str(tmp_out),
+                        "--",
+                        str(tmp_png),
+                    ]
+                ):
+                    return True
+            finally:
+                tmp_png.unlink(missing_ok=True)
+
+        return _convert_with_qt(filepath, tmp_out, "webp", WEBP_QUALITY)
+
+    if cwebp is not None and _run_webp_tool(
+        [
+            str(cwebp),
+            "-q",
+            str(WEBP_QUALITY),
+            "-quiet",
+            "-o",
+            str(tmp_out),
+            "--",
+            str(filepath),
+        ]
+    ):
+        return True
+
+    return _convert_with_qt(filepath, tmp_out, "webp", WEBP_QUALITY)
 
 
 def optimize_image(filepath, destination=None, convert_to_webp=True):
     """
-    Optimize an image file to reduce size
+    Optimize an image file to reduce size.
 
     Args:
         filepath: Path to the original image
-        destination: Optional destination path (creates one if None)
+        destination: Destination path for optimized output
         convert_to_webp: Whether to convert to WebP format
 
     Returns:
@@ -215,7 +639,7 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
             - bool: True if the intended `destination` file was successfully created and is the returned path, False otherwise.
     """
     if not OPTIMIZATION_AVAILABLE:
-        logger.warning("Optimization skipped: Pillow not available.")
+        logger.warning("Optimization skipped: WebP encoder not available.")
         return Path(filepath), False
 
     filepath = Path(filepath)
@@ -231,7 +655,7 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
 
     if filepath.suffix.lower() not in OPTIMIZABLE_INPUT_EXTENSIONS:
         logger.debug(
-            f"Skipping optimization for file type Pillow likely doesn't handle: {filepath.name}"
+            f"Skipping optimization for unsupported file type: {filepath.name}"
         )
         return filepath, False
 
@@ -241,166 +665,82 @@ def optimize_image(filepath, destination=None, convert_to_webp=True):
         logger.error("Optimize_image called without a destination path.")
         return filepath, False
 
-    # Avoid redundant work if source and destination are identical and no format change is intended
-    # (convert_to_webp=True implies format change unless source is already webp)
     will_change_format = (convert_to_webp and filepath.suffix.lower() != ".webp") or (
-        not convert_to_webp
-        and des_path.suffix.lower()
-        != filepath.suffix.lower()  # Explicit format change goal
+        not convert_to_webp and des_path.suffix.lower() != filepath.suffix.lower()
     )
 
     if des_path == filepath and not will_change_format:
         logger.debug(
             f"Skipping optimization: Destination same as source, and no format change intended for {filepath.name}."
         )
-        # Technically destination exists, but wasn't *created* by this optimization run.
         return filepath, False
 
+    tmp_out: Optional[Path] = None
     try:
-        with Image.open(filepath) as img:
-            original_format = img.format
-            original_mode = img.mode
+        des_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_suffix = ".webp" if convert_to_webp else (des_path.suffix or ".tmp")
+        tmp_out = des_path.parent / (
+            f".{des_path.stem}.{uuid.uuid4().hex[:8]}.tmp{tmp_suffix}"
+        )
 
-            # Convert RGBA to RGB with white background only for formats that don't support transparency
-            # WebP, PNG, and TIFF support transparency, so preserve it when converting to those formats
-            needs_rgb_conversion = (
-                img.mode in ("RGBA", "LA")
-                and not convert_to_webp
-                and des_path.suffix.lower() not in [".png", ".webp", ".tif"]
-            )
-
-            if needs_rgb_conversion:
-                logger.debug(
-                    f"Converting {img.mode} to RGB for {filepath.name} before saving to {des_path.suffix}"
-                )
-                try:
-                    # Create a white background and paste the image onto it
-                    background = Image.new("RGB", img.size, (255, 255, 255))
-                    # Paste using alpha channel as mask if available
-                    alpha_channel = img.getchannel("A")
-                    background.paste(img, mask=alpha_channel)
-                    img = background  # Replace img with the RGB version
-                except Exception as bg_err:
-                    logger.warning(
-                        f"Could not apply alpha mask for {filepath.name}, converting directly to RGB: {bg_err}"
-                    )
-                    img = img.convert("RGB")
-
-            save_options = {}
-            target_format = None
-
-            if convert_to_webp:
-                target_format = "WEBP"
-                save_options["quality"] = WEBP_QUALITY
-                if original_format == "GIF" and getattr(img, "is_animated", False):
-                    try:
-                        save_options["save_all"] = True
-                        img.seek(0)
-                        save_options["duration"] = img.info.get("duration", 100)
-                        save_options["loop"] = img.info.get("loop", 0)
-                        logger.debug(
-                            f"Attempting animated WebP conversion for {filepath.name}"
-                        )
-                    except Exception as anim_err:
-                        logger.warning(
-                            f"Could not fully configure animated WebP save for {filepath.name}: {anim_err}. Saving first frame."
-                        )
-                        if "save_all" in save_options:
-                            del save_options["save_all"]
-                        img.seek(0)  # Ensure first frame is selected
-
-            elif des_path.suffix.lower() in [".jpg", ".jpeg"]:
-                target_format = "JPEG"
-                save_options["quality"] = JPEG_QUALITY
-                save_options["optimize"] = True
-            elif des_path.suffix.lower() == ".png":
-                target_format = "PNG"
-                save_options["optimize"] = True
-                save_options["compress_level"] = PNG_COMPRESSION
-            elif des_path.suffix.lower() == ".gif":
-                target_format = "GIF"
-                if getattr(img, "is_animated", False):
-                    save_options["save_all"] = True
-                    img.seek(0)
-                    save_options["duration"] = img.info.get("duration", 100)
-                    save_options["loop"] = img.info.get("loop", 0)
-            else:
-                target_format = (
-                    Image.registered_extensions().get(des_path.suffix.lower())
-                    or original_format
-                )
-                logger.debug(
-                    f"Using fallback target format '{target_format}' for {des_path.name}"
-                )
-
-            if target_format:
-                des_path.parent.mkdir(parents=True, exist_ok=True)
-                img.save(des_path, format=target_format, **save_options)
-            else:
+        if convert_to_webp:
+            converted = _convert_to_webp_file(filepath, tmp_out, will_change_format)
+            if not converted or not _is_valid_webp_file(tmp_out):
                 logger.warning(
-                    f"No target format determined for saving {filepath.name}. Skipping save."
+                    f"WebP conversion failed for {filepath.name}. Skipping optimization."
                 )
-                # If we didn't save, the destination wasn't created by us.
-                return filepath, False
-
-        if des_path.exists():
-            try:
-                optimized_size = des_path.stat().st_size
-            except OSError as e:
-                logger.error(
-                    f"Could not get stats for destination file {des_path}: {e}"
-                )
-                # Treat as failure if we can't verify the result
-                return filepath, False
-
-            # Determine if the destination file should be used
-            use_destination = (
-                optimized_size < original_size  # Smaller size
-                or will_change_format  # Format is different
-            )
-
-            if use_destination:
-                logger.debug(
-                    f"Optimization successful for {filepath.name}. Using {des_path.name} ({original_size} -> {optimized_size} bytes)"
-                )
-                return des_path, True
-            else:
-                logger.debug(
-                    f"Optimization did not improve {filepath.name} sufficiently ({original_size} -> {optimized_size} bytes). Using original."
-                )
-                if (
-                    filepath != des_path
-                ):  # Remove the generated file if it's not the source
-                    try:
-                        os.unlink(des_path)
-                    except OSError as e:
-                        logger.warning(
-                            f"Could not remove ineffective optimized file {des_path}: {e}"
-                        )
                 return filepath, False
         else:
+            ext = des_path.suffix.lower()
+            if ext in (".jpg", ".jpeg"):
+                fmt, quality = "jpeg", JPEG_QUALITY
+            elif ext == ".png":
+                fmt, quality = "png", max(0, min(100, 100 - PNG_COMPRESSION * 10))
+            else:
+                fmt, quality = ext.lstrip("."), -1
+
+            if not fmt or not _convert_with_qt(filepath, tmp_out, fmt, quality):
+                logger.warning(
+                    f"Image optimization failed for {filepath.name}. Skipping optimization."
+                )
+                return filepath, False
+
+        try:
+            optimized_size = tmp_out.stat().st_size
+        except OSError as e:
             logger.error(
-                f"Destination file {des_path.name} not found after save attempt."
+                f"Could not get stats for temporary destination file {tmp_out}: {e}"
             )
             return filepath, False
 
-    except UnidentifiedImageError:
-        logger.warning(
-            f"Pillow could not identify image file: {filepath.name}. Skipping optimization."
+        if optimized_size <= 0:
+            return filepath, False
+
+        use_destination = optimized_size < original_size or will_change_format
+        if use_destination:
+            os.replace(tmp_out, des_path)
+            tmp_out = None
+            logger.debug(
+                f"Optimization successful for {filepath.name}. Using {des_path.name} ({original_size} -> {optimized_size} bytes)"
+            )
+            return des_path, True
+
+        logger.debug(
+            f"Optimization did not improve {filepath.name} sufficiently ({original_size} -> {optimized_size} bytes). Using original."
         )
         return filepath, False
+
     except Exception as e:
         logger.error(f"Error optimizing {filepath.name}: {str(e)}", exc_info=False)
-        # Clean up potentially partially created destination file
-        if des_path and des_path.exists() and des_path != filepath:
+        return filepath, False
+    finally:
+        if tmp_out is not None and tmp_out.exists():
             try:
-                os.unlink(des_path)
-                logger.debug(f"Cleaned up failed optimization file: {des_path.name}")
+                tmp_out.unlink()
             except OSError as unlink_err:
                 logger.error(
-                    f"Error cleaning up failed optimization file {des_path.name}: {unlink_err}"
+                    f"Error cleaning up temporary optimization file {tmp_out.name}: {unlink_err}"
                 )
-        return filepath, False
 
 
 async def optimize_media_file(filename, filepath_obj):
@@ -450,7 +790,7 @@ async def optimize_media_file(filename, filepath_obj):
     current_filepath_str = str(current_filepath_obj)
 
     if not can_optimize():
-        logger.debug("Optimization skipped: Pillow not available.")
+        logger.debug("Optimization skipped: WebP encoder not available.")
         return str(filepath_obj), filename, False
 
     file_extension = current_filepath_obj.suffix.lower()
@@ -485,10 +825,16 @@ async def optimize_media_file(filename, filepath_obj):
         intended_webp_filename = f"{current_filepath_obj.stem}.webp"
         intended_webp_filepath = current_filepath_obj.with_name(intended_webp_filename)
 
-        final_path_obj, used_webp_destination = optimize_image(
-            current_filepath_obj,
-            destination=intended_webp_filepath,
-            convert_to_webp=True,
+        def _run_bounded_optimize():
+            with _CONVERSION_SEMAPHORE:
+                return optimize_image(
+                    current_filepath_obj,
+                    destination=intended_webp_filepath,
+                    convert_to_webp=True,
+                )
+
+        final_path_obj, used_webp_destination = await asyncio.to_thread(
+            _run_bounded_optimize
         )
 
         final_filepath_str = str(final_path_obj)
